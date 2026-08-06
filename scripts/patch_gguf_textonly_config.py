@@ -36,7 +36,12 @@ PATCH = '''        if is_gguf(original_model):
 
         {marker}
         if is_gguf(original_model) and getattr(config, "vision_config", None) is not None:
-            if not self._gguf_has_mmproj(original_model):
+            # maybe_patch_hf_config_from_gguf() only actually wires up an mmproj
+            # vision tower for Gemma3; for every other architecture the vision
+            # weights are never loaded, so keeping vision_config would build an
+            # empty tower that crashes on the first (profile-run) image.
+            mmproj_supported = config.model_type in ("gemma3", "gemma3_text")
+            if not (mmproj_supported and self._gguf_has_mmproj(original_model)):
                 config.vision_config = None
                 config_dict.pop("vision_config", None)
 
