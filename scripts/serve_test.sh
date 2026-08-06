@@ -23,6 +23,8 @@ if [ -n "$GGUF_QUANT" ]; then
   python scripts/patch_gguf_tensor_mapping.py
   echo "=== Patching vllm Qwen3_5Model to pass quant_config to embed_tokens ==="
   python scripts/patch_vllm_qwen35_embed.py
+  echo "=== Patching vllm-gguf-plugin weight-type loader for fused layers ==="
+  python scripts/patch_gguf_weight_type_loader.py
 fi
 
 echo "=== Ensuring CUDA runtime libs are on the loader path ==="
