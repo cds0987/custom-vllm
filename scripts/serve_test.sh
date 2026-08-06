@@ -10,19 +10,35 @@ echo "=== Installing vllm ==="
 pip install -q vllm requests
 
 echo "=== Ensuring CUDA runtime libs are on the loader path ==="
-pip install -q nvidia-cuda-runtime-cu13 || true
-CUDART_LIB_DIR=$(python - <<'EOF'
+CUDART_PATH=$(find / -xdev -name "libcudart.so.13*" 2>/dev/null | head -n1)
+if [ -z "$CUDART_PATH" ]; then
+  CUDART_PATH=$(find / -name "libcudart.so.13*" 2>/dev/null | head -n1)
+fi
+if [ -z "$CUDART_PATH" ]; then
+  pip install -q nvidia-cuda-runtime-cu13 2>/dev/null || true
+  CUDART_PATH=$(python - <<'EOF'
 import os
 try:
     import nvidia.cuda_runtime
-    print(os.path.join(os.path.dirname(nvidia.cuda_runtime.__file__), "lib"))
-except ImportError:
+    d = os.path.join(os.path.dirname(nvidia.cuda_runtime.__file__), "lib")
+    for f in os.listdir(d):
+        if f.startswith("libcudart.so.13"):
+            print(os.path.join(d, f))
+            break
+except Exception:
     pass
 EOF
 )
-if [ -n "$CUDART_LIB_DIR" ]; then
-  export LD_LIBRARY_PATH="$CUDART_LIB_DIR:$LD_LIBRARY_PATH"
-  echo "Added $CUDART_LIB_DIR to LD_LIBRARY_PATH"
+fi
+if [ -z "$CUDART_PATH" ]; then
+  apt-get -qq update >/dev/null 2>&1 && apt-get -qq install -y cuda-cudart-13-0 >/dev/null 2>&1 || true
+  CUDART_PATH=$(find / -name "libcudart.so.13*" 2>/dev/null | head -n1)
+fi
+if [ -n "$CUDART_PATH" ]; then
+  export LD_LIBRARY_PATH="$(dirname "$CUDART_PATH"):$LD_LIBRARY_PATH"
+  echo "Found $CUDART_PATH, added to LD_LIBRARY_PATH"
+else
+  echo "WARNING: libcudart.so.13 not found anywhere on the filesystem"
 fi
 
 echo "=== Starting vllm serve ($MODEL) ==="
