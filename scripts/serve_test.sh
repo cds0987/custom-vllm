@@ -17,6 +17,8 @@ if [ -n "$GGUF_QUANT" ]; then
   pip install -q vllm-gguf-plugin
   echo "=== Patching vllm-gguf-plugin for qwen3.5 model_type naming mismatch ==="
   python scripts/patch_gguf_plugin.py
+  echo "=== Patching transformers Qwen3_5Config.vocab_size ==="
+  python scripts/patch_transformers_qwen35.py
 fi
 
 echo "=== Ensuring CUDA runtime libs are on the loader path ==="
