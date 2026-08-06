@@ -19,6 +19,8 @@ if [ -n "$GGUF_QUANT" ]; then
   python scripts/patch_gguf_plugin.py
   echo "=== Patching transformers Qwen3_5Config.vocab_size ==="
   python scripts/patch_transformers_qwen35.py
+  echo "=== Patching gguf tensor_mapping.py for qwen3.5 tensor names ==="
+  python scripts/patch_gguf_tensor_mapping.py
 fi
 
 echo "=== Ensuring CUDA runtime libs are on the loader path ==="
