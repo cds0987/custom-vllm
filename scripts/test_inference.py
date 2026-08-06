@@ -1,8 +1,9 @@
+import os
 import time
 import requests
 
 URL = "http://localhost:8000/v1/chat/completions"
-MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
+MODEL = os.environ.get("VLLM_MODEL", "Qwen/Qwen2.5-0.5B-Instruct")
 
 payload = {
     "model": MODEL,

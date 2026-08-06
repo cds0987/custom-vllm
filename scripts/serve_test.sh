@@ -47,22 +47,26 @@ SERVER_PID=$!
 
 echo "=== Waiting for server readiness ==="
 READY=0
-for i in $(seq 1 60); do
+for i in $(seq 1 180); do
   if curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/v1/models | grep -q 200; then
     READY=1
     break
   fi
-  sleep 5
+  if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+    echo "Server process exited early."
+    break
+  fi
+  sleep 10
 done
 
 if [ "$READY" -ne 1 ]; then
   echo "Server failed to start within timeout. Last log lines:"
-  tail -n 100 vllm_server.log
+  tail -n 150 vllm_server.log
   kill "$SERVER_PID" 2>/dev/null || true
   exit 1
 fi
 
 echo "=== Running inference test ==="
-python scripts/test_inference.py
+VLLM_MODEL="$MODEL" python scripts/test_inference.py
 
 kill "$SERVER_PID" 2>/dev/null || true
