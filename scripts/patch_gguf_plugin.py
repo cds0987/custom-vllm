@@ -1,29 +1,56 @@
 """
-vllm-gguf-plugin's build_name_map() matches HF `model_type` strings directly
-against gguf.MODEL_ARCH_NAMES values. Newer Qwen releases use an HF model_type
-with an underscore (e.g. "qwen3_5") while the gguf package's architecture name
-has none (e.g. "qwen35"), so the exact-match lookup fails with
-"Unknown gguf model_type: qwen3_5" even though the architecture is supported.
+Patches for vllm-gguf-plugin to support the Qwen3.5 architecture, which the
+plugin doesn't yet recognize:
 
-This patches the installed plugin to normalize those names, mirroring the
-existing gemma3_text/cohere aliasing already done in the same function.
+1. build_name_map() matches HF `model_type` strings directly against
+   gguf.MODEL_ARCH_NAMES values. Qwen3.5's HF model_type is "qwen3_5" (with
+   underscore) while the gguf package's architecture name has none
+   ("qwen35"), so the exact-match lookup fails with
+   "Unknown gguf model_type: qwen3_5" even though the architecture itself
+   is supported by the gguf package.
+
+2. For multimodal (vision) configs, the plugin reads
+   `config.vision_config.num_hidden_layers`, but Qwen3.5's vision config
+   (Qwen3_5VisionConfig, like other Qwen-VL configs) exposes this as
+   `depth` instead, causing an AttributeError.
+
+Both are patched in place, mirroring the existing gemma3_text/cohere
+aliasing already done in the same function.
 """
 
 import glob
 import sysconfig
 
-PATCH_MARKER = "# --- custom_vllm: qwen3.5 model_type normalization ---"
+MODEL_TYPE_MARKER = "# --- custom_vllm: qwen3.5 model_type normalization ---"
+VISION_LAYERS_MARKER = "# --- custom_vllm: qwen3.5 vision depth fallback ---"
 
-ANCHOR = '        if model_type == "gemma3_text":\n            model_type = "gemma3"\n'
-
-PATCH = (
-    ANCHOR
-    + PATCH_MARKER
+MODEL_TYPE_ANCHOR = (
+    '        if model_type == "gemma3_text":\n            model_type = "gemma3"\n'
+)
+MODEL_TYPE_PATCH = (
+    MODEL_TYPE_ANCHOR
+    + MODEL_TYPE_MARKER
     + "\n"
     + '        if model_type == "qwen3_5":\n'
     + '            model_type = "qwen35"\n'
     + '        if model_type == "qwen3_5_moe":\n'
     + '            model_type = "qwen35moe"\n'
+)
+
+VISION_LAYERS_ANCHOR = (
+    "            vision_name_map = gguf.get_tensor_name_map(\n"
+    "                mm_proj_arch, config.vision_config.num_hidden_layers\n"
+    "            )\n"
+)
+VISION_LAYERS_PATCH = (
+    f"            {VISION_LAYERS_MARKER}\n"
+    "            vision_num_layers = getattr(\n"
+    '                config.vision_config, "num_hidden_layers",\n'
+    '                getattr(config.vision_config, "depth", None),\n'
+    "            )\n"
+    "            vision_name_map = gguf.get_tensor_name_map(\n"
+    "                mm_proj_arch, vision_num_layers\n"
+    "            )\n"
 )
 
 site_packages = sysconfig.get_paths()["purelib"]
@@ -39,12 +66,29 @@ path = matches[0]
 with open(path, encoding="utf-8") as f:
     src = f.read()
 
-if PATCH_MARKER in src:
-    print(f"Already patched: {path}")
-elif ANCHOR not in src:
-    raise SystemExit(f"Anchor not found in {path}; plugin source may have changed")
+changed = False
+
+if MODEL_TYPE_MARKER in src:
+    print("model_type patch already applied")
+elif MODEL_TYPE_ANCHOR not in src:
+    raise SystemExit(f"model_type anchor not found in {path}; plugin source may have changed")
 else:
-    src = src.replace(ANCHOR, PATCH, 1)
+    src = src.replace(MODEL_TYPE_ANCHOR, MODEL_TYPE_PATCH, 1)
+    changed = True
+    print("Applied model_type patch")
+
+if VISION_LAYERS_MARKER in src:
+    print("vision depth patch already applied")
+elif VISION_LAYERS_ANCHOR not in src:
+    raise SystemExit(f"vision layers anchor not found in {path}; plugin source may have changed")
+else:
+    src = src.replace(VISION_LAYERS_ANCHOR, VISION_LAYERS_PATCH, 1)
+    changed = True
+    print("Applied vision depth patch")
+
+if changed:
     with open(path, "w", encoding="utf-8") as f:
         f.write(src)
     print(f"Patched: {path}")
+else:
+    print(f"No changes needed: {path}")
