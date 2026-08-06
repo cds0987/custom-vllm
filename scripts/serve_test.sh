@@ -15,6 +15,8 @@ pip install -q vllm requests
 if [ -n "$GGUF_QUANT" ]; then
   echo "=== Installing vllm-gguf-plugin (GGUF support moved out-of-tree as of vllm 0.26) ==="
   pip install -q vllm-gguf-plugin
+  echo "=== Patching vllm-gguf-plugin for qwen3.5 model_type naming mismatch ==="
+  python scripts/patch_gguf_plugin.py
 fi
 
 echo "=== Ensuring CUDA runtime libs are on the loader path ==="
