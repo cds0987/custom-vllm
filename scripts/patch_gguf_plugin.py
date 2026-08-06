@@ -14,7 +14,15 @@ plugin doesn't yet recognize:
    (Qwen3_5VisionConfig, like other Qwen-VL configs) exposes this as
    `depth` instead, causing an AttributeError.
 
-Both are patched in place, mirroring the existing gemma3_text/cohere
+3. build_name_map() always builds its dummy (meta-device) model via
+   AutoModelForCausalLM.from_config(config, ...), even for multimodal
+   configs. For Qwen3.5, AutoModelForCausalLM resolves the composite
+   (vision+text) Qwen3_5Config to Qwen3_5ForCausalLM, a text-only class
+   that expects a Qwen3_5TextConfig and crashes reading config.vocab_size
+   off the composite config. AutoModelForImageTextToText correctly
+   resolves the same composite config to Qwen3_5ForConditionalGeneration.
+
+All three are patched in place, mirroring the existing gemma3_text/cohere
 aliasing already done in the same function.
 """
 
@@ -85,6 +93,36 @@ else:
     src = src.replace(VISION_LAYERS_ANCHOR, VISION_LAYERS_PATCH, 1)
     changed = True
     print("Applied vision depth patch")
+
+AUTOMODEL_MARKER = "# --- custom_vllm: use AutoModelForImageTextToText for multimodal configs ---"
+AUTOMODEL_ANCHOR = (
+    "        with torch.device(\"meta\"):\n"
+    "            dummy_model = AutoModelForCausalLM.from_config(\n"
+    "                config, trust_remote_code=model_config.trust_remote_code\n"
+    "            )\n"
+)
+AUTOMODEL_PATCH = (
+    "        with torch.device(\"meta\"):\n"
+    f"            {AUTOMODEL_MARKER}\n"
+    "            if is_multimodal:\n"
+    "                from transformers import AutoModelForImageTextToText\n"
+    "                dummy_model = AutoModelForImageTextToText.from_config(\n"
+    "                    config, trust_remote_code=model_config.trust_remote_code\n"
+    "                )\n"
+    "            else:\n"
+    "                dummy_model = AutoModelForCausalLM.from_config(\n"
+    "                    config, trust_remote_code=model_config.trust_remote_code\n"
+    "                )\n"
+)
+
+if AUTOMODEL_MARKER in src:
+    print("AutoModel class-selection patch already applied")
+elif AUTOMODEL_ANCHOR not in src:
+    raise SystemExit(f"AutoModel anchor not found in {path}; plugin source may have changed")
+else:
+    src = src.replace(AUTOMODEL_ANCHOR, AUTOMODEL_PATCH, 1)
+    changed = True
+    print("Applied AutoModel class-selection patch")
 
 if changed:
     with open(path, "w", encoding="utf-8") as f:
