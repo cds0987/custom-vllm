@@ -21,6 +21,8 @@ if [ -n "$GGUF_QUANT" ]; then
   python scripts/patch_transformers_qwen35.py
   echo "=== Patching gguf tensor_mapping.py for qwen3.5 tensor names ==="
   python scripts/patch_gguf_tensor_mapping.py
+  echo "=== Patching vllm Qwen3_5Model to pass quant_config to embed_tokens ==="
+  python scripts/patch_vllm_qwen35_embed.py
 fi
 
 echo "=== Ensuring CUDA runtime libs are on the loader path ==="
