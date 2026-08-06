@@ -2,6 +2,8 @@
 set -e
 
 MODEL="${1:-Qwen/Qwen2.5-0.5B-Instruct}"
+GGUF_FILE="${2:-}"
+TOKENIZER="${3:-}"
 
 echo "=== GPU status ==="
 nvidia-smi
@@ -41,8 +43,23 @@ else
   echo "WARNING: libcudart.so.13 not found anywhere on the filesystem"
 fi
 
-echo "=== Starting vllm serve ($MODEL) ==="
-nohup vllm serve "$MODEL" --port 8000 > vllm_server.log 2>&1 &
+SERVE_TARGET="$MODEL"
+TOKENIZER_ARGS=()
+if [ -n "$GGUF_FILE" ]; then
+  echo "=== Downloading GGUF file $GGUF_FILE from $MODEL ==="
+  pip install -q huggingface_hub
+  SERVE_TARGET=$(python - <<EOF
+from huggingface_hub import hf_hub_download
+print(hf_hub_download(repo_id="$MODEL", filename="$GGUF_FILE"))
+EOF
+)
+  if [ -n "$TOKENIZER" ]; then
+    TOKENIZER_ARGS=(--tokenizer "$TOKENIZER")
+  fi
+fi
+
+echo "=== Starting vllm serve ($SERVE_TARGET) ==="
+nohup vllm serve "$SERVE_TARGET" "${TOKENIZER_ARGS[@]}" --port 8000 > vllm_server.log 2>&1 &
 SERVER_PID=$!
 
 echo "=== Waiting for server readiness ==="
