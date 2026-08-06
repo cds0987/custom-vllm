@@ -2,7 +2,7 @@
 set -e
 
 MODEL="${1:-Qwen/Qwen2.5-0.5B-Instruct}"
-GGUF_FILE="${2:-}"
+GGUF_QUANT="${2:-}"
 TOKENIZER="${3:-}"
 MAX_MODEL_LEN="${4:-4096}"
 GPU_MEM_UTIL="${5:-0.85}"
@@ -12,6 +12,10 @@ nvidia-smi
 
 echo "=== Installing vllm ==="
 pip install -q vllm requests
+if [ -n "$GGUF_QUANT" ]; then
+  echo "=== Installing vllm-gguf-plugin (GGUF support moved out-of-tree as of vllm 0.26) ==="
+  pip install -q vllm-gguf-plugin
+fi
 
 echo "=== Ensuring CUDA runtime libs are on the loader path ==="
 CUDART_PATH=$(find / -xdev -name "libcudart.so.13*" 2>/dev/null | head -n1)
@@ -47,14 +51,8 @@ fi
 
 SERVE_TARGET="$MODEL"
 TOKENIZER_ARGS=()
-if [ -n "$GGUF_FILE" ]; then
-  echo "=== Downloading GGUF file $GGUF_FILE from $MODEL ==="
-  pip install -q huggingface_hub
-  SERVE_TARGET=$(python - <<EOF
-from huggingface_hub import hf_hub_download
-print(hf_hub_download(repo_id="$MODEL", filename="$GGUF_FILE"))
-EOF
-)
+if [ -n "$GGUF_QUANT" ]; then
+  SERVE_TARGET="${MODEL}:${GGUF_QUANT}"
   if [ -n "$TOKENIZER" ]; then
     TOKENIZER_ARGS=(--tokenizer "$TOKENIZER")
   fi
