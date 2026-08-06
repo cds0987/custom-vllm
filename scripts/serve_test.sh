@@ -9,6 +9,22 @@ nvidia-smi
 echo "=== Installing vllm ==="
 pip install -q vllm requests
 
+echo "=== Ensuring CUDA runtime libs are on the loader path ==="
+pip install -q nvidia-cuda-runtime-cu13 || true
+CUDART_LIB_DIR=$(python - <<'EOF'
+import os
+try:
+    import nvidia.cuda_runtime
+    print(os.path.join(os.path.dirname(nvidia.cuda_runtime.__file__), "lib"))
+except ImportError:
+    pass
+EOF
+)
+if [ -n "$CUDART_LIB_DIR" ]; then
+  export LD_LIBRARY_PATH="$CUDART_LIB_DIR:$LD_LIBRARY_PATH"
+  echo "Added $CUDART_LIB_DIR to LD_LIBRARY_PATH"
+fi
+
 echo "=== Starting vllm serve ($MODEL) ==="
 nohup vllm serve "$MODEL" --port 8000 > vllm_server.log 2>&1 &
 SERVER_PID=$!
