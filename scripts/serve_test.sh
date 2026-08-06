@@ -4,6 +4,8 @@ set -e
 MODEL="${1:-Qwen/Qwen2.5-0.5B-Instruct}"
 GGUF_FILE="${2:-}"
 TOKENIZER="${3:-}"
+MAX_MODEL_LEN="${4:-4096}"
+GPU_MEM_UTIL="${5:-0.85}"
 
 echo "=== GPU status ==="
 nvidia-smi
@@ -58,8 +60,12 @@ EOF
   fi
 fi
 
-echo "=== Starting vllm serve ($SERVE_TARGET) ==="
-nohup vllm serve "$SERVE_TARGET" "${TOKENIZER_ARGS[@]}" --port 8000 > vllm_server.log 2>&1 &
+echo "=== Starting vllm serve ($SERVE_TARGET, max-model-len=$MAX_MODEL_LEN, gpu-mem-util=$GPU_MEM_UTIL) ==="
+nohup vllm serve "$SERVE_TARGET" "${TOKENIZER_ARGS[@]}" \
+  --max-model-len "$MAX_MODEL_LEN" \
+  --gpu-memory-utilization "$GPU_MEM_UTIL" \
+  --enforce-eager \
+  --port 8000 > vllm_server.log 2>&1 &
 SERVER_PID=$!
 
 echo "=== Waiting for server readiness ==="
