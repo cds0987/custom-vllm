@@ -10,26 +10,45 @@ whenever code (e.g. vllm-gguf-plugin building a dummy model on the meta
 device to inspect its state_dict) constructs a Qwen3_5ForConditionalGeneration
 from the full composite config instead of config.text_config.
 
-This adds a `vocab_size` property to Qwen3_5Config that forwards to
-config.text_config.vocab_size, matching the delegation pattern used by
-composite configs elsewhere in transformers.
+PreTrainedConfig is a "strict dataclass" (huggingface_hub.dataclasses) that
+type-checks every attribute against its declared type on assignment, and
+`vocab_size: int` is already declared as a real field somewhere up the MRO.
+So a `@property` override doesn't work here (the strict-dataclass __init__
+tries to assign the property object itself as vocab_size's value and fails
+type validation). Instead, this sets `self.vocab_size` to a real int inside
+__post_init__, once text_config has been resolved.
 """
 
 import glob
 import sysconfig
 
-PATCH_MARKER = "# --- custom_vllm: Qwen3_5Config.vocab_size forwarding ---"
+OLD_PROPERTY_MARKER = "# --- custom_vllm: Qwen3_5Config.vocab_size forwarding ---"
+PATCH_MARKER = "# --- custom_vllm: Qwen3_5Config.vocab_size assignment ---"
 
-ANCHOR = "    tie_word_embeddings: bool = False\n"
-
-PATCH = (
-    ANCHOR
-    + "\n"
-    + PATCH_MARKER
+OLD_PROPERTY_BLOCK = (
+    "\n"
+    + OLD_PROPERTY_MARKER
     + "\n"
     + "    @property\n"
     + "    def vocab_size(self):\n"
     + "        return self.text_config.vocab_size\n"
+)
+
+ANCHOR = (
+    "        elif self.text_config is None:\n"
+    '            self.text_config = self.sub_configs["text_config"]()\n'
+    "\n"
+    "        super().__post_init__(**kwargs)\n"
+)
+
+PATCH = (
+    "        elif self.text_config is None:\n"
+    '            self.text_config = self.sub_configs["text_config"]()\n'
+    "\n"
+    f"        {PATCH_MARKER}\n"
+    "        self.vocab_size = self.text_config.vocab_size\n"
+    "\n"
+    "        super().__post_init__(**kwargs)\n"
 )
 
 site_packages = sysconfig.get_paths()["purelib"]
@@ -44,12 +63,17 @@ path = matches[0]
 with open(path, encoding="utf-8") as f:
     src = f.read()
 
+if OLD_PROPERTY_BLOCK in src:
+    src = src.replace(OLD_PROPERTY_BLOCK, "", 1)
+    print("Removed broken property-based patch from a previous run")
+
 if PATCH_MARKER in src:
     print(f"Already patched: {path}")
 elif ANCHOR not in src:
     raise SystemExit(f"Anchor not found in {path}; transformers source may have changed")
 else:
     src = src.replace(ANCHOR, PATCH, 1)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(src)
     print(f"Patched: {path}")
+
+with open(path, "w", encoding="utf-8") as f:
+    f.write(src)
