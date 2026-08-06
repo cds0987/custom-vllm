@@ -22,7 +22,22 @@ plugin doesn't yet recognize:
    off the composite config. AutoModelForImageTextToText correctly
    resolves the same composite config to Qwen3_5ForConditionalGeneration.
 
-All three are patched in place, mirroring the existing gemma3_text/cohere
+4. Suffix stripping only special-cases a trailing "_weight" (no dot) on
+   top of the normal ".weight"/".bias" split. Qwen3.5's SSM dt-bias tensor
+   is named "...linear_attn.dt_bias" (trailing "_bias", no dot), so it falls
+   through unstripped and never matches gguf's tensor template (see
+   patch_gguf_tensor_mapping.py, which adds the matching template for the
+   stripped form). This adds the symmetric "_bias" handling.
+
+5. Text-only GGUF quants of Qwen3.5 (no separate mmproj file loaded) have
+   no vision tensors at all, so the dummy multimodal model's
+   "model.visual.merger.{norm,linear_fc1,linear_fc2}" params can never be
+   mapped — not a bug, just genuinely absent weights. These are added to
+   sideload_params (the same allowlist mechanism already used for MoE
+   expert weights) so they're tolerated as expected-missing instead of
+   raising "Failed to map GGUF parameters".
+
+All are patched in place, mirroring the existing gemma3_text/cohere
 aliasing already done in the same function.
 """
 
@@ -123,6 +138,53 @@ else:
     src = src.replace(AUTOMODEL_ANCHOR, AUTOMODEL_PATCH, 1)
     changed = True
     print("Applied AutoModel class-selection patch")
+
+BIAS_SUFFIX_MARKER = "# --- custom_vllm: qwen3.5 _bias suffix stripping ---"
+BIAS_SUFFIX_ANCHOR = (
+    '                if base_name.endswith("_weight"):\n'
+    "                    base_name = base_name[:-7]\n"
+    '                    suffix = "weight"\n'
+)
+BIAS_SUFFIX_PATCH = (
+    BIAS_SUFFIX_ANCHOR
+    + f"                {BIAS_SUFFIX_MARKER}\n"
+    + '                elif base_name.endswith("_bias"):\n'
+    + "                    base_name = base_name[:-5]\n"
+    + '                    suffix = "bias"\n'
+)
+
+if BIAS_SUFFIX_MARKER in src:
+    print("_bias suffix patch already applied")
+elif BIAS_SUFFIX_ANCHOR not in src:
+    raise SystemExit(f"_bias suffix anchor not found in {path}; plugin source may have changed")
+else:
+    src = src.replace(BIAS_SUFFIX_ANCHOR, BIAS_SUFFIX_PATCH, 1)
+    changed = True
+    print("Applied _bias suffix patch")
+
+SIDELOAD_MARKER = "# --- custom_vllm: qwen3.5 text-only gguf has no vision merger tensors ---"
+SIDELOAD_ANCHOR = "\n        arch = None\n"
+SIDELOAD_PATCH = (
+    "\n"
+    f"        {SIDELOAD_MARKER}\n"
+    '        if is_multimodal and model_type == "qwen35":\n'
+    "            sideload_params.append(\n"
+    "                regex.compile(\n"
+    r'                    r"model\.visual\.merger\.(norm|linear_fc1|linear_fc2)\.(weight|bias)"'
+    "\n"
+    "                )\n"
+    "            )\n"
+    "\n        arch = None\n"
+)
+
+if SIDELOAD_MARKER in src:
+    print("vision sideload patch already applied")
+elif SIDELOAD_ANCHOR not in src:
+    raise SystemExit(f"sideload anchor not found in {path}; plugin source may have changed")
+else:
+    src = src.replace(SIDELOAD_ANCHOR, SIDELOAD_PATCH, 1)
+    changed = True
+    print("Applied vision sideload patch")
 
 if changed:
     with open(path, "w", encoding="utf-8") as f:
