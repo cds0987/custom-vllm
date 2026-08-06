@@ -9,7 +9,8 @@ This patches the installed plugin to normalize those names, mirroring the
 existing gemma3_text/cohere aliasing already done in the same function.
 """
 
-import vllm_gguf_plugin.weights_adapter.default as m
+import glob
+import sysconfig
 
 PATCH_MARKER = "# --- custom_vllm: qwen3.5 model_type normalization ---"
 
@@ -25,7 +26,16 @@ PATCH = (
     + '            model_type = "qwen35moe"\n'
 )
 
-path = m.__file__
+site_packages = sysconfig.get_paths()["purelib"]
+matches = glob.glob(
+    f"{site_packages}/vllm_gguf_plugin/weights_adapter/default.py"
+)
+if not matches:
+    raise SystemExit(
+        "vllm_gguf_plugin/weights_adapter/default.py not found under "
+        f"{site_packages}; is vllm-gguf-plugin installed?"
+    )
+path = matches[0]
 with open(path, encoding="utf-8") as f:
     src = f.read()
 
