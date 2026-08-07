@@ -22,6 +22,26 @@ tensor, so it legitimately has no input_dim/output_dim — routing it through
 the fused-weight path is the bug. _store_gguf_weight_type() already handles the
 sharded case (it writes into param.shard_weight_type[shard_id]), so the fix is
 to use _store() whenever the parameter provides it, shard id or not.
+
+One wrinkle: when a single GGUF tensor feeds several shards of a fused layer,
+vllm hands the loader a *tuple* of shard ids. Storing under the tuple key makes
+every later per-shard lookup miss, and GGUFLinearMethod.apply() silently falls
+back to layer.qweight_type.weight_type for those shards. For Qwen3.5's
+in_proj_qkvz that produced
+
+    shard_weight_type = {3: 12, (0, 1, 2): 13}
+
+i.e. the Q5_K (13) q/k/v shards were all read back as Q4_K (12). Because every
+shard then reported the same type, apply() took its single-type fast path and
+ran one matmul over the zero-padded concatenation, whose rows are as wide as
+the widest shard:
+
+    ValueError: Invalid row width 1760 for quant type 12: must be divisible
+    by 144
+
+(1760 bytes = 2560/256 superblocks x 176 bytes = Q5_K; Q4_K would be 1440.)
+Expanding tuple shard ids into one entry per shard restores the distinct types,
+so apply() takes its mixed-type path and decodes each shard with the right one.
 """
 
 import glob
@@ -40,7 +60,11 @@ PATCH = (
     "    def _gguf_weight_type_loader_v2(param, loaded_weight, loaded_shard_id=None):\n"
     f"        {PATCH_MARKER}\n"
     '        if hasattr(param, "_store"):\n'
-    "            param._store(loaded_weight, shard_id=loaded_shard_id)\n"
+    "            if isinstance(loaded_shard_id, (tuple, list)):\n"
+    "                for _sid in loaded_shard_id:\n"
+    "                    param._store(loaded_weight, shard_id=_sid)\n"
+    "            else:\n"
+    "                param._store(loaded_weight, shard_id=loaded_shard_id)\n"
     "            return\n"
     "        base_loader(param, loaded_weight, loaded_shard_id)\n"
 )
