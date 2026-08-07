@@ -65,6 +65,7 @@ HELPERS = f'''
 {TRANSFORM_MARKER}
 _QWEN35_CFG = None
 _QWEN35_NTRANSFORMED = 0
+_GGUF_UNQUANTIZED = (0, 1)  # GGML F32, F16
 
 
 def _qwen35_untile_v_heads(t, dim, num_k_heads, num_v_per_k, head_dim):
@@ -94,10 +95,8 @@ def _undo_qwen35_gguf_transform(hf_name, weight, cfg):
 
     # Quantised tensors arrive as "<module>.qweight" (plus a "<module>.qweight_type"
     # scalar tag), unquantised ones as "<module>.weight". Match on the module.
-    if hf_name.endswith(".qweight_type"):
-        return weight
     base = hf_name
-    for _suf in (".qweight", ".weight"):
+    for _suf in (".qweight_type", ".qweight", ".weight"):
         if base.endswith(_suf):
             base = base[: -len(_suf)]
             break
@@ -113,6 +112,16 @@ def _undo_qwen35_gguf_transform(hf_name, weight, cfg):
         if not reorder:
             return t
         return _qwen35_untile_v_heads(t, dim, num_k, num_v_per_k, head_dim)
+
+    if hf_name.endswith(".qweight_type"):
+        # out_proj gets re-encoded as Q8_0 below (see there); its dtype tag has
+        # to follow. Everything else keeps whatever the GGUF said.
+        if base.endswith("linear_attn.out_proj") and reorder:
+            from gguf import GGMLQuantizationType
+
+            if int(weight.flatten()[0]) not in _GGUF_UNQUANTIZED:
+                return torch.full_like(weight, int(GGMLQuantizationType.Q8_0))
+        return weight
 
     if base.endswith("linear_attn.A_log"):
         # GGUF holds -exp(A_log); vllm re-applies -exp() at runtime.
@@ -153,7 +162,11 @@ def _undo_qwen35_gguf_transform(hf_name, weight, cfg):
             return untile(weight, 1, head_v)
         # Quantised: unlike every other tensor here the permutation is along
         # the *input* dim, which runs inside the ggml blocks, so it cannot be
-        # done on the packed bytes. Round-trip through the reference codec.
+        # done on the packed bytes. Decode, permute, then re-encode as Q8_0 --
+        # gguf-py can decode every K-quant but only encodes F16/F32/Q8_0
+        # (quantize_blocks raises NotImplementedError for K-quants). Q8_0's
+        # error (~0.2%) sits well under the Q5_K error already in the file
+        # (~2.7%), and costs ~94 MB more than Q5_K across the 24 GDN layers.
         import numpy as np
         from gguf import GGMLQuantizationType
         from gguf.quants import dequantize, quantize
@@ -173,7 +186,9 @@ def _undo_qwen35_gguf_transform(hf_name, weight, cfg):
         raw = weight.cpu().numpy()
         deq = torch.from_numpy(np.ascontiguousarray(dequantize(raw, qtype)))
         deq = untile(deq, 1, head_v)
-        requant = quantize(np.ascontiguousarray(deq.numpy()), qtype)
+        requant = quantize(
+            np.ascontiguousarray(deq.numpy()), GGMLQuantizationType.Q8_0
+        )
         return torch.from_numpy(requant).to(weight.device)
 
     return weight
