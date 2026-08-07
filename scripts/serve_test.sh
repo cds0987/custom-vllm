@@ -109,6 +109,6 @@ if [ "$READY" -ne 1 ]; then
 fi
 
 echo "=== Running inference test ==="
-VLLM_MODEL="$MODEL" python scripts/test_inference.py
+VLLM_MODEL="$SERVE_TARGET" python scripts/test_inference.py
 
-kill "$SERVER_PID" 2>/dev/null || true
+echo "=== Server left running on port 8000 (pid $SERVER_PID) ==="
