@@ -30,6 +30,8 @@ if [ -n "$GGUF_QUANT" ]; then
   python scripts/patch_gguf_conv1d_shape.py
   echo "=== Patching vllm registry to expose text-only Qwen3.5 architectures ==="
   python scripts/patch_vllm_qwen35_registry.py
+  echo "=== Patching vllm-gguf-plugin to drop M-RoPE for text-only GGUF ==="
+  python scripts/patch_gguf_drop_mrope.py
 fi
 
 echo "=== Ensuring CUDA runtime libs are on the loader path ==="
