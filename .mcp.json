@@ -3,7 +3,7 @@
     "colab-mcp": {
       "command": "C:\\Users\\TOMAP\\AppData\\Local\\Programs\\Python\\Python313\\Scripts\\uvx.exe",
       "args": ["git+https://github.com/googlecolab/colab-mcp"],
-      "timeout": 30000
+      "timeout": 1800000
     }
   }
 }
