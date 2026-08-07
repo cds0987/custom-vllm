@@ -92,6 +92,16 @@ def _undo_qwen35_gguf_transform(hf_name, weight, cfg):
             flush=True,
         )
 
+    # Quantised tensors arrive as "<module>.qweight" (plus a "<module>.qweight_type"
+    # scalar tag), unquantised ones as "<module>.weight". Match on the module.
+    if hf_name.endswith(".qweight_type"):
+        return weight
+    base = hf_name
+    for _suf in (".qweight", ".weight"):
+        if base.endswith(_suf):
+            base = base[: -len(_suf)]
+            break
+
     num_k = getattr(cfg, "linear_num_key_heads", 0)
     num_v = getattr(cfg, "linear_num_value_heads", 0)
     head_k = getattr(cfg, "linear_key_head_dim", 0)
@@ -104,15 +114,15 @@ def _undo_qwen35_gguf_transform(hf_name, weight, cfg):
             return t
         return _qwen35_untile_v_heads(t, dim, num_k, num_v_per_k, head_dim)
 
-    if hf_name.endswith("linear_attn.A_log"):
+    if base.endswith("linear_attn.A_log"):
         # GGUF holds -exp(A_log); vllm re-applies -exp() at runtime.
         weight = torch.log(weight.float().neg().clamp_min(1e-30)).to(weight.dtype)
         return untile(weight, 0, 1)
 
-    if hf_name.endswith("linear_attn.dt_bias"):
+    if base.endswith("linear_attn.dt_bias"):
         return untile(weight, 0, 1)
 
-    if hf_name.endswith("linear_attn.conv1d.weight"):
+    if base.endswith("linear_attn.conv1d"):
         if weight.ndim == 3:  # already (C, 1, K)
             weight = weight.squeeze(1)
         if reorder:
@@ -122,7 +132,7 @@ def _undo_qwen35_gguf_transform(hf_name, weight, cfg):
             )
         return weight.unsqueeze(1)
 
-    if hf_name.endswith("linear_attn.in_proj_qkv.weight"):
+    if base.endswith("linear_attn.in_proj_qkv"):
         if reorder:
             qk = head_k * num_k * 2
             weight = torch.cat(
@@ -130,15 +140,13 @@ def _undo_qwen35_gguf_transform(hf_name, weight, cfg):
             )
         return weight
 
-    if hf_name.endswith("linear_attn.in_proj_z.weight"):
+    if base.endswith("linear_attn.in_proj_z"):
         return untile(weight, 0, head_v)
 
-    if hf_name.endswith(
-        ("linear_attn.in_proj_a.weight", "linear_attn.in_proj_b.weight")
-    ):
+    if base.endswith(("linear_attn.in_proj_a", "linear_attn.in_proj_b")):
         return untile(weight, 0, 1)
 
-    if hf_name.endswith("linear_attn.out_proj.weight"):
+    if base.endswith("linear_attn.out_proj"):
         if not reorder:
             return weight
         if weight.dtype != torch.uint8:
