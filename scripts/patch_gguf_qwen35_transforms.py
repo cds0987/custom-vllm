@@ -64,6 +64,7 @@ HELPERS = f'''
 
 {TRANSFORM_MARKER}
 _QWEN35_CFG = None
+_QWEN35_NTRANSFORMED = 0
 
 
 def _qwen35_untile_v_heads(t, dim, num_k_heads, num_v_per_k, head_dim):
@@ -82,6 +83,14 @@ def _qwen35_untile_v_heads(t, dim, num_k_heads, num_v_per_k, head_dim):
 
 def _undo_qwen35_gguf_transform(hf_name, weight, cfg):
     import torch
+
+    global _QWEN35_NTRANSFORMED
+    _QWEN35_NTRANSFORMED += 1
+    if _QWEN35_NTRANSFORMED == 1:
+        print(
+            "[custom_vllm] undoing llama.cpp Qwen3.5 GGUF weight transforms",
+            flush=True,
+        )
 
     num_k = getattr(cfg, "linear_num_key_heads", 0)
     num_v = getattr(cfg, "linear_num_value_heads", 0)
@@ -130,7 +139,34 @@ def _undo_qwen35_gguf_transform(hf_name, weight, cfg):
         return untile(weight, 0, 1)
 
     if hf_name.endswith("linear_attn.out_proj.weight"):
-        return untile(weight, 1, head_v)
+        if not reorder:
+            return weight
+        if weight.dtype != torch.uint8:
+            return untile(weight, 1, head_v)
+        # Quantised: unlike every other tensor here the permutation is along
+        # the *input* dim, which runs inside the ggml blocks, so it cannot be
+        # done on the packed bytes. Round-trip through the reference codec.
+        import numpy as np
+        from gguf import GGMLQuantizationType
+        from gguf.quants import dequantize, quantize
+
+        k = num_v * head_v
+        per_row = weight.shape[1] / (k / 256.0)
+        qtype = {{144: GGMLQuantizationType.Q4_K,
+                  176: GGMLQuantizationType.Q5_K,
+                  210: GGMLQuantizationType.Q6_K}}.get(round(per_row))
+        if qtype is None and abs(weight.shape[1] - k / 32 * 34) < 1:
+            qtype = GGMLQuantizationType.Q8_0
+        if qtype is None:
+            raise ValueError(
+                f"{{hf_name}}: cannot infer ggml type from {{weight.shape[1]}} "
+                f"bytes/row over {{k}} columns"
+            )
+        raw = weight.cpu().numpy()
+        deq = torch.from_numpy(np.ascontiguousarray(dequantize(raw, qtype)))
+        deq = untile(deq, 1, head_v)
+        requant = quantize(np.ascontiguousarray(deq.numpy()), qtype)
+        return torch.from_numpy(requant).to(weight.device)
 
     return weight
 '''
