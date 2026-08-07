@@ -14,13 +14,27 @@ plugin doesn't yet recognize:
    (Qwen3_5VisionConfig, like other Qwen-VL configs) exposes this as
    `depth` instead, causing an AttributeError.
 
-3. build_name_map() always builds its dummy (meta-device) model via
-   AutoModelForCausalLM.from_config(config, ...), even for multimodal
-   configs. For Qwen3.5, AutoModelForCausalLM resolves the composite
-   (vision+text) Qwen3_5Config to Qwen3_5ForCausalLM, a text-only class
-   that expects a Qwen3_5TextConfig and crashes reading config.vocab_size
-   off the composite config. AutoModelForImageTextToText correctly
-   resolves the same composite config to Qwen3_5ForConditionalGeneration.
+3. build_name_map() decides "is this multimodal?" from the config alone
+   (`config.vision_config is not None`) and always builds its dummy
+   (meta-device) model with AutoModelForCausalLM.from_config(config, ...).
+   Both halves are wrong for a text-only GGUF of a multimodal model:
+
+   - vllm resolves the *architecture* (e.g. Qwen3_5ForCausalLM, see
+     patch_vllm_qwen35_registry.py) and builds only the language tower,
+     so the name map must describe that tower. Deriving multimodality
+     from the config instead produces "model.language_model.layers.*"
+     names and loading fails with "There is no module or parameter named
+     'language_model'". is_multimodal is therefore cleared whenever every
+     resolved architecture is a plain ForCausalLM.
+   - passing the composite (vision+text) config to AutoModelForCausalLM
+     resolves to the text-only class, which expects a Qwen3_5TextConfig
+     and crashes reading config.vocab_size. The already-computed
+     `text_config` (config.get_text_config(), identity for non-composite
+     configs) is the right thing to hand it.
+
+   AutoModelForImageTextToText is used for the genuinely multimodal case,
+   where AutoModelForCausalLM would resolve the composite config to the
+   wrong class.
 
 4. Suffix stripping only special-cases a trailing "_weight" (no dot) on
    top of the normal ".weight"/".bias" split. Qwen3.5's SSM dt-bias tensor
@@ -109,7 +123,32 @@ else:
     changed = True
     print("Applied vision depth patch")
 
-AUTOMODEL_MARKER = "# --- custom_vllm: use AutoModelForImageTextToText for multimodal configs ---"
+MULTIMODAL_MARKER = "# --- custom_vllm: only multimodal if vllm actually builds a vision tower ---"
+MULTIMODAL_ANCHOR = (
+    "        is_multimodal = (\n"
+    '            hasattr(config, "vision_config") and config.vision_config is not None\n'
+    "        )\n"
+)
+MULTIMODAL_PATCH = (
+    MULTIMODAL_ANCHOR
+    + f"        {MULTIMODAL_MARKER}\n"
+    "        _archs = getattr(model_config, \"architectures\", None) or []\n"
+    "        if is_multimodal and _archs and all(\n"
+    '            a.endswith("ForCausalLM") for a in _archs\n'
+    "        ):\n"
+    "            is_multimodal = False\n"
+)
+
+if MULTIMODAL_MARKER in src:
+    print("is_multimodal architecture patch already applied")
+elif MULTIMODAL_ANCHOR not in src:
+    raise SystemExit(f"is_multimodal anchor not found in {path}; plugin source may have changed")
+else:
+    src = src.replace(MULTIMODAL_ANCHOR, MULTIMODAL_PATCH, 1)
+    changed = True
+    print("Applied is_multimodal architecture patch")
+
+AUTOMODEL_MARKER = "# --- custom_vllm: pick the AutoModel class vllm's architecture implies ---"
 AUTOMODEL_ANCHOR = (
     "        with torch.device(\"meta\"):\n"
     "            dummy_model = AutoModelForCausalLM.from_config(\n"
@@ -126,7 +165,7 @@ AUTOMODEL_PATCH = (
     "                )\n"
     "            else:\n"
     "                dummy_model = AutoModelForCausalLM.from_config(\n"
-    "                    config, trust_remote_code=model_config.trust_remote_code\n"
+    "                    text_config, trust_remote_code=model_config.trust_remote_code\n"
     "                )\n"
 )
 

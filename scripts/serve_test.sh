@@ -14,7 +14,8 @@ echo "=== Installing vllm ==="
 pip install -q vllm requests
 if [ -n "$GGUF_QUANT" ]; then
   echo "=== Installing vllm-gguf-plugin (GGUF support moved out-of-tree as of vllm 0.26) ==="
-  pip install -q vllm-gguf-plugin
+  # force-reinstall so the in-place patches below always apply to pristine sources
+  pip install -q --force-reinstall --no-deps vllm-gguf-plugin
   echo "=== Patching vllm-gguf-plugin for qwen3.5 model_type naming mismatch ==="
   python scripts/patch_gguf_plugin.py
   echo "=== Patching transformers Qwen3_5Config.vocab_size ==="
