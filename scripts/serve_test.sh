@@ -34,6 +34,8 @@ if [ -n "$GGUF_QUANT" ]; then
   python scripts/patch_gguf_drop_mrope.py
   echo "=== Patching vllm to mark text-only Qwen3.5 as a hybrid model ==="
   python scripts/patch_vllm_qwen35_hybrid.py
+  echo "=== Patching vllm-gguf-plugin trailing-dot bug for bare parameters (A_log) ==="
+  python scripts/patch_gguf_empty_suffix.py
   echo "=== Patching vllm-gguf-plugin to undo llama.cpp's Qwen3.5 weight transforms ==="
   python scripts/patch_gguf_qwen35_transforms.py
 fi
