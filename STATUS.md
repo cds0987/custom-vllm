@@ -125,10 +125,18 @@ việc đáng làm nhất tiếp theo.
 | fp16 + fp8 KV | 10.950 | 1.15 QPS, 300s sạch, 0 lỗi, TTFT p50 2s |
 | **GGUF hybrid + fp8 KV, bỏ fp32 SSM** | **11.211,6** | **TEST R 2026-08-08: caching off, tag fix, 325 req/500 prompt distinct, quality 3/3** |
 
-**Champion hiện tại (TEST R):** GGUF Q4_K_M + `CUSTOM_VLLM_GGUF_HYBRID=1` +
-`--kv-cache-dtype fp8_e4m3 --no-enable-prefix-caching`, KHÔNG mang
-`--mamba-ssm-cache-dtype float32` (TEST 0b: bỏ cờ = +6.9% decode, sạch 3/3;
-TRT-LLM đúng hướng, biên độ ~7% chứ không ~20%). 4-bit trên VRAM giờ VƯỢT
+**Champion hiện tại (TEST 8d, 2026-08-09):** GGUF Q4_K_M +
+`CUSTOM_VLLM_GGUF_HYBRID=1` + `CUSTOM_VLLM_GGUF_TRITON_MID=1` (dispatch
+3 đường: M nhỏ → CUDA mmvq của llama.cpp, M trung → Triton mmq, M>=1024 →
+dequant+cuBLAS) + `--kv-cache-dtype fp8_e4m3 --no-enable-prefix-caching`,
+KHÔNG mang `--mamba-ssm-cache-dtype float32` (TEST 0b: bỏ cờ = +6.9%
+decode, sạch 3/3; TRT-LLM đúng hướng, biên độ ~7% chứ không ~20%).
+YÊU CẦU: plugin build từ sdist với TORCH_CUDA_ARCH_LIST=8.9 (setup_env.sh
+tự làm) — wheel PyPI lệch ABI torch nên _C_gguf không load và mọi thứ rơi
+về Triton (TEST 8 phát hiện; đó là lý do mọi số GGUF cũ đều là Triton).
+Số: decode 130/254/482/856 @conc1/4/16/32 (3.9× conc1 so champion cũ),
+prefill 10.527,9 tok/s @1.0 QPS, TTFT p50 4.91s, quality 3/3. Bài mở:
+crossover mmvq_safe ở conc4 (CUDA mmq thuần đạt 330 vs 254 — còn headroom). 4-bit trên VRAM giờ VƯỢT
 kỷ lục fp16 cũ — lưu ý so sánh chéo cấu hình: 10.950 cũ là fp16 safetensors,
 11.211,6 mới là GGUF hybrid; fp16 + bỏ-fp32-SSM chưa đo lại (có thể còn cao
 hơn nữa — bài mở). 1.0 QPS là biên an toàn (10.496, chưa bão hoà, TTFT p50
