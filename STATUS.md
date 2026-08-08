@@ -67,15 +67,50 @@ backend FlashInfer, cascade attention, TurboQuant KV, chỉnh `--block-size`,
 chỉnh `--mamba-cache-dtype` (state của gated-delta-net là O(1) theo request,
 ~25 MB, bị KV attention 512 MB/request ở 16k áp đảo).
 
-## Trên L4 (sm89) thì khác hẳn
+## Kết quả L4 (sm89) — vòng lặp tối ưu đã đóng
 
-Toàn bộ danh sách trên **sống lại**: fp8 KV cache chạy được, bfloat16 được,
-FlashAttention 2 được, FlashInfer được, kernel Marlin cho AWQ/GPTQ đúng sân,
-VRAM 24 GB thay vì 15 GB. Ba hướng chính cho L4:
-1. `--kv-cache-dtype fp8_e4m3` / `fp8_e5m2` — giảm nửa KV
-2. FlashAttention 2 thay TRITON_ATTN
-3. Chuyển mã GGUF → AWQ/GPTQ rồi chạy Marlin — con đường duy nhất vượt fp16
-   mà vẫn giữ 4-bit cả trên đĩa lẫn trong VRAM
+L4 tự chọn FlashAttention 2 (T4 kẹt TRITON_ATTN). fp8 KV cache chạy được,
+miễn phí về tốc độ, +79% sức chứa (1.36M → 2.44M token) — nhưng loại trừ
+lẫn nhau với FA2 (bật fp8 KV thì rơi về FlashInfer, vẫn tốt trên sm89).
+
+**Phát hiện trung tâm — chọn kernel theo pha, không có đường thắng tuyệt đối:**
+
+| workload | thắng | số liệu |
+|---|---|---|
+| decode (prompt ngắn) | Triton fused | 872 vs 674 tok/s @conc32 (1.3×) |
+| prefill (prompt 12k) | dequant+cuBLAS | 8.580 vs 3.500 tổng tok/s (2.5×) |
+| prefill, trần tuyệt đối | fp16 thuần | 10.950 vs 8.580 (+27%) |
+
+Trên T4, dequant thắng decode 15-17×; trên L4 nó THUA decode 1.2-1.3×.
+Kernel Triton fused không chậm bẩm sinh — chúng bệnh trên sm75 (T4→L4
+nhanh lên 36× trong khi phần cứng chỉ hơn ~2×). Khuyến nghị:
+sm75 → `CUSTOM_VLLM_GGUF_DEQUANT=1`; sm89+ → decode để mặc định,
+workload prefill-nặng thì bật. Patch lai route theo `x.shape[0]` là
+việc đáng làm nhất tiếp theo.
+
+**Điểm gãy concurrency (prompt ngắn, GGUF fused):** đỉnh 1.922 tok/s
+@conc 384; 512 đi ngang. fp16 @conc 32 là 1.227.
+
+**Kết quả phục vụ prompt dài (12k token, LongAlign, open-loop Poisson):**
+
+| cấu hình | trần bền | ghi chú |
+|---|---|---|
+| GGUF fused | ~3.500 tổng tok/s | bão hoà ngay 0.3 QPS |
+| GGUF dequant | ~8.580 | 0.83 QPS, TTFT p95 10.4s |
+| **fp16 + fp8 KV** | **10.950** | **1.15 QPS, 300s sạch, 0 lỗi, TTFT p50 2s** |
+
+Cấu hình thắng: `Qwen/Qwen3.5-2B --max-num-seqs 384 --kv-cache-dtype fp8_e4m3
+--max-model-len 16384 --max-num-batched-tokens 16384`, chạy 1.0 QPS cho biên
+an toàn (9.653 tok/s), 1.15 QPS là mép (10.950). GPU 100% suốt — trần compute
+vật lý, không phải cấu hình. So T4: 0.09 QPS → 1.15 QPS, hơn 12×.
+
+**Bẫy benchmark đã mắc và rút lại:** burst 15-request ở 8 QPS hiện 10.8K
+tok/s nhưng là hàng đợi đang phình — bài 240s cùng mức cho TTFT 69s và
+1.351 request rơi. Với hệ bão hoà, con số bền là ACHIEVED, không phải
+offered; chỉ bài duration dài mới phân biệt được phục vụ thật với ảo giác.
+
+Hướng còn mở: chuyển mã GGUF → AWQ/GPTQ chạy Marlin — con đường duy nhất
+vượt fp16 mà vẫn giữ 4-bit cả trên đĩa lẫn trong VRAM.
 
 ## Công cụ đo
 
