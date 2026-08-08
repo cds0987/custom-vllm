@@ -110,7 +110,40 @@ tok/s nhưng là hàng đợi đang phình — bài 240s cùng mức cho TTFT 69
 offered; chỉ bài duration dài mới phân biệt được phục vụ thật với ảo giác.
 
 Hướng còn mở: chuyển mã GGUF → AWQ/GPTQ chạy Marlin — con đường duy nhất
-vượt fp16 mà vẫn giữ 4-bit cả trên đĩa lẫn trong VRAM.
+vượt fp16 mà vẫn giữ 4-bit cả trên đĩa lẫn trong VRAM. Nghiên cứu xong
+(cần dequant + requant RTN/GPTQ, `gptq_marlin_repack` không ăn trực tiếp
+block GGUF, ước ~1-2 ngày code), chưa dựng.
+
+## Bảng định dạng GGUF trên L4 (decode, kernel fused, conc 32)
+
+| format | tok/s | weights | chất lượng spot-check |
+|---|---|---|---|
+| Q4_0 | 1158 | 1.69 GiB | PASS (sơ đồ thô, chưa stress-test) |
+| UD-Q4_K_XL | 904 | 1.88 GiB | PASS sạch |
+| Q4_K_M | 872 | 1.82 GiB | PASS sạch — chuẩn bảo thủ |
+| Q8_0 | 839 | 2.90 GiB | PASS |
+| IQ4_XS | 822 | 1.63 GiB | SOFT-FAIL: bịa "Hội An là thủ đô" |
+| UD-Q2_K_XL | 805 | 1.26 GiB | PASS — 2-bit vẫn đứng vững |
+| Q5_K_M | 708 | 2.05 GiB | PASS |
+| Q6_K | 704 | 2.28 GiB | PASS |
+| BF16 GGUF | — | hỏng | bug #16 tái hiện y hệt trên sm89 |
+
+Hai bài học của bảng:
+1. Tốc độ không đơn điệu theo bit — chi phí giải mã layout quyết định ngang
+   số bit (Q4_0 phẳng thắng, Q6_K block 210 byte lệch chuẩn thua cả Q8_0).
+2. Chất lượng không đơn điệu theo bit — SƠ ĐỒ quan trọng hơn bit: 2-bit trộn
+   khéo (UD giữ layer nhạy cảm) thắng 4-bit trộn vụng (IQ4_XS ảo giác).
+
+## Khuyến nghị chọn cấu hình theo workload (L4)
+
+- Chat ngắn / latency thấp: Q4_K_M, DEQUANT unset, fp8_e4m3 KV.
+  Điểm vận hành 128-256 user (mỗi user 7-12 tok/s), trần 1.922 @conc384.
+- Cần decode 4-bit nhanh nhất: Q4_0 (1158) — nhớ chưa stress-test chất lượng.
+- Long-context 4-bit: Q4_K_M + DEQUANT=1 — ca duy nhất bật dequant. ~8.580 tok/s.
+- Long-context cần vượt 10K: fp16 safetensors + fp8 KV — 10.950 bền 300s.
+- Tránh: BF16 GGUF (hỏng), IQ4_XS (rủi ro ảo giác), UD-Q2_K_XL chỉ khi
+  VRAM cực hạn hẹp.
+- Thắng miễn phí mọi nơi trên L4: fp8_e4m3 KV cache.
 
 ## Công cụ đo
 
