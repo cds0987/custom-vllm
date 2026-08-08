@@ -86,6 +86,12 @@ backend FlashInfer, cascade attention, TurboQuant KV, chỉnh `--block-size`,
 chỉnh `--mamba-cache-dtype` (state của gated-delta-net là O(1) theo request,
 ~25 MB, bị KV attention 512 MB/request ở 16k áp đảo).
 
+**KV dưới 8-bit: ngõ cụt trên MỌI GPU Ada, ba nguồn độc lập đồng quy
+(2026-08-09):** TRT-LLM (FP4 KV = Blackwell-only, int4 KV không tồn tại),
+turboquant-vllm (TQ4 tự đo trên RTX 4090/sm89: decode chậm hơn SDPA 8-9×,
+TPOT +201%, chính tác giả kết luận "architectural mismatch"), CUTLASS
+(int2b_t chỉ là khai báo kiểu, không kernel nào dùng). fp8 KV là sàn cuối.
+
 ## Kết quả L4 (sm89) — vòng lặp tối ưu đã đóng
 
 L4 tự chọn FlashAttention 2 (T4 kẹt TRITON_ATTN). fp8 KV cache chạy được,
