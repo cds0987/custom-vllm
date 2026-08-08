@@ -11,7 +11,35 @@ echo "=== Installing vllm-gguf-plugin (GGUF moved out-of-tree as of vllm 0.26) =
 # once for the dependencies (gguf, ...), then package-only so the in-place
 # patches below always apply to pristine sources
 pip install -q vllm-gguf-plugin
-pip install -q --force-reinstall --no-deps vllm-gguf-plugin
+
+echo "=== Rebuilding plugin from sdist so _C_gguf matches this torch ABI ==="
+# The prebuilt wheel's _C_gguf.abi3.so was compiled against a different torch
+# ABI (ImportError: undefined symbol torch_exception_get_what_without_backtrace
+# on torch 2.11.0+cu128), silently dropping every GGUF matmul to the Triton
+# fallback — which has no GEMV path and cost 3.9x at conc1 (TEST 8). Building
+# the sdist locally against the installed torch fixes the import. Fall back to
+# the wheel if the build fails so the environment still comes up.
+SDIST_URL=$(python - <<'EOF'
+import json, urllib.request
+d = json.load(urllib.request.urlopen("https://pypi.org/pypi/vllm-gguf-plugin/json"))
+print(next(u["url"] for u in d["urls"] if u["packagetype"] == "sdist"))
+EOF
+)
+SDIST_OK=0
+curl -sL "$SDIST_URL" -o /tmp/vllm_gguf_plugin_sdist.tar.gz && SDIST_OK=1
+if [ "$SDIST_OK" = "1" ] && TORCH_CUDA_ARCH_LIST="8.9" pip install -q --no-build-isolation --force-reinstall --no-deps /tmp/vllm_gguf_plugin_sdist.tar.gz; then
+  echo "Built plugin from sdist (sm_89)"
+else
+  echo "WARNING: sdist build failed; falling back to prebuilt wheel (Triton-only kernels)"
+  pip install -q --force-reinstall --no-deps vllm-gguf-plugin
+fi
+python - <<'EOF'
+try:
+    from vllm_gguf_plugin import _C_gguf  # noqa: F401
+    print("_C_gguf import OK — CUDA kernels active")
+except ImportError as e:
+    print(f"_C_gguf NOT available ({e}); Triton fallback in use")
+EOF
 
 for s in \
   patch_gguf_plugin \
@@ -30,7 +58,8 @@ for s in \
   patch_fla_ada_shmem \
   patch_gguf_override_signature \
   patch_gguf_repack_q6k \
-  patch_gguf_dequant_buffer
+  patch_gguf_dequant_buffer \
+  patch_gguf_threeway_dispatch
 do
   echo "=== $s ==="
   python "scripts/$s.py"
