@@ -134,6 +134,39 @@ Hai bài học của bảng:
 2. Chất lượng không đơn điệu theo bit — SƠ ĐỒ quan trọng hơn bit: 2-bit trộn
    khéo (UD giữ layer nhạy cảm) thắng 4-bit trộn vụng (IQ4_XS ảo giác).
 
+## Patch lai kernel-dispatch — ĐÃ ĐO, ăn cả hai đầu
+
+`scripts/patch_gguf_hybrid_dispatch.py` (`CUSTOM_VLLM_GGUF_HYBRID=1`,
+ngưỡng `x.shape[0] >= 1024`): decode đi fused, prefill đi dequant+cuBLAS.
+Đo trên L4, Q4_K_M:
+
+| | fused | dequant | **hybrid** |
+|---|---|---|---|
+| decode conc32 | 872 | 674 | **852** (giữ 98%) |
+| long-ctx tổng tok/s | ~3.500 | ~8.580 | **~8.858** |
+| ITL p95 long-ctx | — | — | **0.036–0.089 s** |
+
+Một cờ duy nhất thay cho khuyến nghị "bật/tắt DEQUANT theo workload".
+Quality gate PASS (greedy 3 lần "Hà Nội", degen=0 cả 45 request).
+
+## Cô lập chat khỏi prefill tài liệu — hai instance thắng, MPS chưa
+
+MPS SM-pinning KHÔNG hoạt động với vLLM hiện tại: `CUDA_MPS_*` tới
+APIServer nhưng không truyền vào EngineCore (spawn multiprocessing) —
+muốn dùng phải patch worker-bootstrap của vLLM.
+
+Fallback đã đo — hai instance thường (mỗi cái gpu-mem-util 0.40,
+driver time-slicing) so với một instance trộn lẫn, phía chat khi phía
+tài liệu chịu tải:
+
+| | 1 instance trộn | 2 instance |
+|---|---|---|
+| TTFT max | 1.985 s | **0.327 s** (6×) |
+| ITL max | 1.257 s | **0.083 s** (15×) |
+
+Khuyến nghị production: tách chat/tài liệu ra hai instance trên cùng
+card — rẻ (weights 2B chỉ 1.8 GiB×2), không cần MPS, đuôi trễ sập 6–15×.
+
 ## Khuyến nghị chọn cấu hình theo workload (L4)
 
 - Chat ngắn / latency thấp: Q4_K_M, DEQUANT unset, fp8_e4m3 KV.
