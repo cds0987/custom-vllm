@@ -114,6 +114,28 @@ vượt fp16 mà vẫn giữ 4-bit cả trên đĩa lẫn trong VRAM. Nghiên c�
 (cần dequant + requant RTN/GPTQ, `gptq_marlin_repack` không ăn trực tiếp
 block GGUF, ước ~1-2 ngày code), chưa dựng.
 
+## Kiểm chứng scale 9B trên L4 (unsloth/Qwen3.5-9B-GGUF:Q4_K_M, hybrid)
+
+| chỉ số | 2B | 9B đo được | dự đoán |
+|---|---|---|---|
+| weights đĩa / VRAM | 1.82 GiB | 5.29 / 8.5 GiB | 6–8 |
+| decode conc32 | 852 | **268** | 294 theo byte-ratio (lệch 9%) ✓ |
+| KV (fp8) | 2.44M tok | 437K tok (~36 phiên 12k) | — |
+| long-ctx tổng | 8.858 | **≥1.068** (floor, chưa chạy duration ở mép) | 1.900–2.200 ✗ |
+
+Hai bài học:
+1. **Decode scale theo BYTE weights thật, không theo số tham số.** Q4_K_M 9B
+   chỉ nặng 2.9× bản 2B (không phải 4.5×) vì tỷ trọng embedding giảm khi
+   model lớn — dùng đúng proxy thì định luật bandwidth khớp trong 9%.
+2. **Prefill scale kém hơn tuyến tính theo FLOPs** — 1.068–1.600 so với
+   dự đoán ~2.000. Nghi phạm: hiệu suất kernel ở tensor lớn; và điểm đo
+   sạch duy nhất (0.1 QPS) có thể chưa chạm trần thật. Cần một bài
+   duration ở mép 0.15–0.2 QPS trước khi chốt số production.
+
+Ước tính production 9B/L4 (sửa lại từ số đo): ~5–8 tài liệu 12k/phút,
+chat ~32 user × 8 tok/s. Quality gate PASS (lưu ý model reasoning cần
+max_tokens ≥300 mới thấy câu trả lời sau chuỗi suy nghĩ).
+
 ## Bảng định dạng GGUF trên L4 (decode, kernel fused, conc 32)
 
 | format | tok/s | weights | chất lượng spot-check |
