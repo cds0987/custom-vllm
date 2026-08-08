@@ -56,6 +56,10 @@ Quy luật quan sát được: `ITL p95 ≈ max_num_batched_tokens / prefill_tok
    chết với `OSError: [Errno 98] Address already in use` còn benchmark thì âm thầm
    bắn vào server **cũ**. Dùng `pkill -9 -f "vllm serve"; pkill -9 -f VLLM::EngineCore`.
 2. `pgrep -fc "bench_serving.py"` khớp cả chính câu lệnh chạy nó. Dùng `"[b]ench_serving"`.
+   EngineCore mồ côi có thể thoát lưới `pkill -f` (lệch title/argv) — khi đó
+   `kill -9 <pid>` đích danh theo nvidia-smi. Trên Colab, `subprocess.run(
+   capture_output=True)` với script bash có background job sẽ TREO vô hạn
+   (con thừa kế pipe) — dùng `subprocess.Popen` không chặn.
 3. Trước mỗi sweep phải kiểm tra hai điều: `non-default args` trong log server có đúng
    cờ đang thử, và `vllm:time_to_first_token_seconds_count` trên `/metrics` bằng 0.
 4. Runtime Colab bị recycle khoảng mỗi giờ. Dựng lại bằng `setup_env.sh`, đừng than.
@@ -67,10 +71,13 @@ Quy luật quan sát được: `ITL p95 ≈ max_num_batched_tokens / prefill_tok
    Đã sửa: bench_serving gắn tag `[req N]` duy nhất vào ĐẦU mỗi prompt,
    bench_load chuyển `(#i)` lên đầu. Quy tắc: server benchmark luôn dựng với
    `--no-enable-prefix-caching`; báo cáo phải ghi rõ caching ON/OFF và số prompt
-   distinct so với tổng request. **Mọi số long-context đo trước fix này (kể cả
-   champion 10.950 tok/s) mang dấu hỏi cho tới khi tái kiểm với caching off** —
-   mức độ thổi phồng phụ thuộc bao nhiêu request vượt ngưỡng 500 ở từng level.
-   Test câu ngoài dataset bằng cách "kéo dài 1 câu" cũng vô hiệu vì cùng lý do.
+   distinct so với tổng request. Test câu ngoài dataset bằng cách "kéo dài
+   1 câu" cũng vô hiệu vì cùng lý do.
+   **Tái kiểm 2026-08-08 (TEST R): điểm champion KHÔNG bị thổi phồng** — ở
+   1.0-1.15 QPS × 300s mỗi lượt chỉ bắn 279-325 request < 500 prompt, lỗi
+   chưa từng kích hoạt tại điểm đó; đo lại với caching off + tag fix cho
+   11.211,6 tok/s (cao hơn nhờ gộp chiến thắng TEST 0b). Các mức QPS cao
+   (>500 request/lượt) trước fix vẫn không đáng tin.
 
 ## Ngõ cụt trên T4 (sm75) — đừng phí giờ GPU
 
@@ -109,17 +116,40 @@ việc đáng làm nhất tiếp theo.
 |---|---|---|
 | GGUF fused | ~3.500 tổng tok/s | bão hoà ngay 0.3 QPS |
 | GGUF dequant | ~8.580 | 0.83 QPS, TTFT p95 10.4s |
-| **fp16 + fp8 KV** | **10.950** | **1.15 QPS, 300s sạch, 0 lỗi, TTFT p50 2s** |
+| fp16 + fp8 KV | 10.950 | 1.15 QPS, 300s sạch, 0 lỗi, TTFT p50 2s |
+| **GGUF hybrid + fp8 KV, bỏ fp32 SSM** | **11.211,6** | **TEST R 2026-08-08: caching off, tag fix, 325 req/500 prompt distinct, quality 3/3** |
 
-Cấu hình thắng: `Qwen/Qwen3.5-2B --max-num-seqs 384 --kv-cache-dtype fp8_e4m3
---max-model-len 16384 --max-num-batched-tokens 16384`, chạy 1.0 QPS cho biên
-an toàn (9.653 tok/s), 1.15 QPS là mép (10.950). GPU 100% suốt — trần compute
-vật lý, không phải cấu hình. So T4: 0.09 QPS → 1.15 QPS, hơn 12×.
+**Champion hiện tại (TEST R):** GGUF Q4_K_M + `CUSTOM_VLLM_GGUF_HYBRID=1` +
+`--kv-cache-dtype fp8_e4m3 --no-enable-prefix-caching`, KHÔNG mang
+`--mamba-ssm-cache-dtype float32` (TEST 0b: bỏ cờ = +6.9% decode, sạch 3/3;
+TRT-LLM đúng hướng, biên độ ~7% chứ không ~20%). 4-bit trên VRAM giờ VƯỢT
+kỷ lục fp16 cũ — lưu ý so sánh chéo cấu hình: 10.950 cũ là fp16 safetensors,
+11.211,6 mới là GGUF hybrid; fp16 + bỏ-fp32-SSM chưa đo lại (có thể còn cao
+hơn nữa — bài mở). 1.0 QPS là biên an toàn (10.496, chưa bão hoà, TTFT p50
+5s); 1.15 QPS là mép bão hoà (TTFT p50 13.4s). GPU 100% suốt — trần compute
+vật lý. So T4: 0.09 QPS → 1.15 QPS, hơn 12×.
 
 **Bẫy benchmark đã mắc và rút lại:** burst 15-request ở 8 QPS hiện 10.8K
 tok/s nhưng là hàng đợi đang phình — bài 240s cùng mức cho TTFT 69s và
 1.351 request rơi. Với hệ bão hoà, con số bền là ACHIEVED, không phải
 offered; chỉ bài duration dài mới phân biệt được phục vụ thật với ảo giác.
+
+**fp8 W8A8 đã được cứu (test 1b, 2026-08-08):** `--quantization fp8_per_tensor`
+với ignore=`["in_proj_ba"]` (tối thiểu, theo ModelOpt) HOẶC
+`["linear_attn","lm_head"]` (bảo thủ, theo unsloth) — cả hai sạch 3/3 hai câu
+dò, decode 1524-1526 tok/s @conc32 = 99.5% fp8 thô (1534), gấp ~1.8× GGUF
+hybrid. Toàn bộ độ nhạy fp8 của Qwen3.5 nằm ở đường GDN (`in_proj_ba`);
+khuyến nghị dùng danh sách tối thiểu. Lưu ý: `--quantization fp8` KHÔNG nhận
+`--quantization-config` — phải dùng `fp8_per_tensor` (online, calibration-free).
+Long-context của fp8 chưa phân thắng bại với champion (quét rate đang chạy).
+
+**AWQ-Marlin xác nhận trên sm89 (test 2):** QuantTrio/Qwen3.5-4B-AWQ serve
+sạch sau patch chữ ký (`patch_gguf_override_signature.py`), log chọn
+`MarlinLinearKernel` tự động. Decode 757 tok/s @conc32 cho model 4B — per-byte
+THẮNG rõ Triton GGUF fused (2B được 852). Tín hiệu mạnh cho bài GPTQ 2B
+transcode: nếu chất lượng sống sót nhiễu RTN, decode 2B qua Marlin có thể
+vượt xa 852. Quality PASS (model reasoning, trả lời trong chain-of-thought,
+cần >200 token).
 
 Hướng còn mở: chuyển mã GGUF → AWQ/GPTQ chạy Marlin — con đường duy nhất
 vượt fp16 mà vẫn giữ 4-bit cả trên đĩa lẫn trong VRAM. Nghiên cứu xong
