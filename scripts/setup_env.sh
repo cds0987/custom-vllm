@@ -24,7 +24,8 @@ for s in \
   patch_gguf_drop_mrope \
   patch_vllm_qwen35_hybrid \
   patch_gguf_empty_suffix \
-  patch_gguf_qwen35_transforms
+  patch_gguf_qwen35_transforms \
+  patch_gguf_prefer_dequant
 do
   echo "=== $s ==="
   python "scripts/$s.py"
