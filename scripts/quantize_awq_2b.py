@@ -76,9 +76,9 @@ import os
 from datasets import load_dataset
 from transformers import AutoTokenizer
 
+from llmcompressor import oneshot
 from llmcompressor.modifiers.quantization import QuantizationModifier
 from llmcompressor.modifiers.transform.awq import AWQModifier
-from llmcompressor.transformers import oneshot
 
 MODEL_ID = "Qwen/Qwen3.5-2B"
 NUM_CALIBRATION_SAMPLES = 256
