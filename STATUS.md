@@ -136,6 +136,31 @@ Hai bài học:
 chat ~32 user × 8 tok/s. Quality gate PASS (lưu ý model reasoning cần
 max_tokens ≥300 mới thấy câu trả lời sau chuỗi suy nghĩ).
 
+## Profile kernel trên L4 (torch.profiler, eager, 2B — % CUDA time)
+
+| bucket | GGUF decode | GGUF prefill | fp16 decode |
+|---|---|---|---|
+| matmul/GEMM | **86.6%** | **47.9%** | **77.6%** |
+| norm/elementwise | 6.6% | 30.9% (eager, chưa fusion) | 7.6% |
+| GDN/fla | 4.7% | 2.1% | 11.7% |
+| attention | 0.4% | 8.7% | 0.6% |
+| tổng CUDA ms (cùng workload) | 2161 | 2865 | **1570** |
+
+Ba kết luận:
+1. **GDN không phải nút thắt** (2–12%) — bác giả thuyết đồng thuận của cả
+   9 nhánh nghiên cứu đọc-code. Kernel GDN viết tốt; patch Ada shmem vì
+   thế chỉ đáng vài phần nghìn tổng, đã hạ cấp.
+2. **Kernel GGUF fused tốn NHIỀU CUDA time hơn fp16 làm cùng việc**
+   (1871 vs 1219 ms GEMM): 4-bit hiện chỉ thắng ở kinh tế băng thông
+   (1.82 vs 4.25 GiB), thua ở hiệu suất compute. Marlin là mảnh ghép
+   đúng: int4 với kernel tensor-core — ăn cả hai đầu.
+3. **q6_k_gemm_kernel một mình chiếm 34.3% decode** — Q4_K_M là scheme
+   trộn, vài tensor giữ Q6_K, và kernel Q6_K chậm nhất họ (khớp format
+   sweep: model Q6_K 704 < Q8_0 839 dù nhẹ hơn). Sinh ra patch repack
+   Q6_K→Q8_0 lúc nạp.
+Lưu ý đo: key_averages() đếm trùng custom op (op cha báo self-time =
+tổng kernel con) — phải lọc hàng thuần-GPU; đối soát 2161/2160 ms khớp.
+
 ## Bảng định dạng GGUF trên L4 (decode, kernel fused, conc 32)
 
 | format | tok/s | weights | chất lượng spot-check |
