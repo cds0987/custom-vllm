@@ -29,7 +29,8 @@ for s in \
   patch_gguf_hybrid_dispatch \
   patch_fla_ada_shmem \
   patch_gguf_override_signature \
-  patch_gguf_repack_q6k
+  patch_gguf_repack_q6k \
+  patch_gguf_dequant_buffer
 do
   echo "=== $s ==="
   python "scripts/$s.py"
