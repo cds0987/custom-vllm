@@ -23,10 +23,25 @@ regardless of how much work it carried.
 
 Dequantising into a scratch buffer and calling cuBLAS keeps the weights 4-bit
 in VRAM (only the transient buffer is fp16), so it trades a little bandwidth
-per step for a well-optimised GEMM. Whether that wins depends on the shape mix,
-hence the env switch rather than an unconditional change:
+per step for a well-optimised GEMM.
 
-    CUSTOM_VLLM_GGUF_DEQUANT=1 vllm serve ...
+That trade is entirely hardware-dependent, which is why this is an env switch
+and not an unconditional change. Same model, same flags, tok/s at concurrency
+1 / 4 / 16 / 32:
+
+                        fused Triton          dequant + cuBLAS
+    T4   (sm75)     0.92 /  3.4 /  12 /  21    13.7 / 52.4 / 193 / 340
+    L4   (sm89)    33.7  / 131  / 489  / 872   25.6 / 96.7 / 362 / 674
+
+The fused kernels are not slow in general — they are pathological on sm75.
+Going from T4 to L4 speeds them up ~36x while raw hardware only accounts for
+about 2x. On sm89 they beat dequant+cuBLAS outright by 1.2-1.3x, so enabling
+this flag there costs you 20-25%.
+
+    sm75 (T4, Turing)            CUSTOM_VLLM_GGUF_DEQUANT=1 vllm serve ...
+    sm89+ (L4, Ada, RTX 40xx)    leave unset
+
+Anything between those two points is unmeasured; check before assuming.
 """
 
 import glob
