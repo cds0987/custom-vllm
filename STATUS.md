@@ -238,6 +238,38 @@ Hai bài học:
 chat ~32 user × 8 tok/s. Quality gate PASS (lưu ý model reasoning cần
 max_tokens ≥300 mới thấy câu trả lời sau chuỗi suy nghĩ).
 
+## Thang bit thấp 9B (TEST 9, 2026-08-09) — Q4_K_M là SÀN, dưới nữa mất cả hai
+
+Chạy trên champion 3 đường (CUDA _C_gguf active), cổng 5 câu dò + control:
+
+| bậc | đĩa | decode conc32 | KV (16k) | phán quyết cuối |
+|---|---|---|---|---|
+| Q4_K_M | 5.68GB | **274.3** | 435K tok | **PASS sạch — sàn 9B** |
+| UD-Q3_K_XL | 5.05GB | 235.7 | — | FAIL (còn chút mơ hồ, xem dưới) |
+| Q3_K_M | 4.67GB | (bỏ đo) | — | FAIL thật (địa lý non-term, control pass câu này) |
+| UD-Q2_K_XL | 4.12GB | 219.1 | 588K tok | FAIL thật (bộ 5-biến-thể IF: 1/5 vs control 4/5) |
+| UD-IQ2_M | 3.65GB | 166.5 | — | FAIL thật (Nguyễn Du + địa lý non-term) |
+
+Ba định luật rút được:
+1. **Dưới Q4_K_M không mua được gì trên stack này**: decode GIẢM đơn điệu
+   khi bit giảm (274→236→219→167) — layout/kernel thắng byte count; IMATRIX
+   còn tệ hơn vì chỉ route mmvq/dequant (mất lane Triton-mid). Động cơ duy
+   nhất của 2-bit là KV headroom (588K vs 435K) — không đủ bù chất lượng.
+2. **Chữ ký lỗi bit-thấp của model reasoning là NON-TERMINATION, không phải
+   sai fact**: kiến thức + số học sống tới tận 2-bit; thứ chết đầu tiên là
+   khả năng CHỐT đáp án sau chuỗi suy luận (lặp tự-kiểm-chứng, tự-sửa-đổi
+   bất tận). Cổng chất lượng cho family này bắt buộc phải chứa probe
+   termination/format-ràng-buộc, không chỉ câu hỏi kiến thức.
+3. **Mọi câu dò phải control-validate ở full precision trước khi làm cổng**:
+   câu "kể 3 trái cây" sập vòng lặp NGAY Ở BF16 (điểm hút thoái hoá của
+   base model) — suýt tạo án oan cho cả thang. Giao thức chuẩn từ nay:
+   5 biến thể/probe + control bf16, bậc chỉ FAIL nếu kém RÕ RỆT so control.
+Mơ hồ còn lại: UD-Q3_K_XL rớt duy nhất câu trái cây (câu đã bị vô hiệu) —
+chưa re-grade bằng bộ 5-biến-thể vì đã đủ trả lời câu hỏi chiến dịch;
+nếu cần 3-bit thì chạy lại bộ 5-biến-thể trước khi dùng.
+Khuyến nghị production 9B: **ở lại Q4_K_M**. Đường "9B nhỏ hơn nữa" chuyển
+sang AWQ/GPTQ mixed-precision (giữ lớp nhạy bit cao có kiểm soát).
+
 ## Profile kernel trên L4 (torch.profiler, eager, 2B — % CUDA time)
 
 | bucket | GGUF decode | GGUF prefill | fp16 decode |
