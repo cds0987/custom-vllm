@@ -461,7 +461,15 @@ def run_rate_level(rate_qps: float, prompt_cycle, max_tokens: int, duration_s: f
                 )
             continue
 
-        prompt = next(prompt_cycle)
+        # Unique front-tag per request: vLLM 0.26 enables automatic prefix
+        # caching by default, and once a run exceeds the number of distinct
+        # dataset prompts the cycle repeats verbatim prompts — their prefill
+        # is then served from cache nearly for free and total tok/s is
+        # inflated. A unique FIRST token breaks the block-aligned prefix
+        # match for every request, so measured prefill is real compute even
+        # when the server has caching on. (Belt and suspenders: benchmark
+        # servers should also be launched with --no-enable-prefix-caching.)
+        prompt = f"[req {n_dispatched}] {next(prompt_cycle)}"
         th = threading.Thread(
             target=run_one_request,
             args=(n_dispatched, prompt, max_tokens, t_arrival_mono, wall_offset, gate, results, results_lock),

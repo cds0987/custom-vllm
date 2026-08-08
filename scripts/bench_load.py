@@ -29,8 +29,11 @@ def one(i: int) -> tuple[float, int]:
         URL,
         json={
             "model": MODEL,
-            # vary the prompt so prefix caching can't serve everything from cache
-            "messages": [{"role": "user", "content": f"{PROMPT} (#{i})"}],
+            # vary the prompt so prefix caching can't serve everything from
+            # cache — the tag must go at the FRONT: vLLM's automatic prefix
+            # caching matches leading token blocks, so a trailing "(#i)" still
+            # lets the whole shared prefix hit cache
+            "messages": [{"role": "user", "content": f"(#{i}) {PROMPT}"}],
             "max_tokens": MAX_TOKENS,
             "temperature": 0.7,
         },

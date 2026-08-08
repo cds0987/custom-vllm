@@ -59,6 +59,18 @@ Quy luật quan sát được: `ITL p95 ≈ max_num_batched_tokens / prefill_tok
 3. Trước mỗi sweep phải kiểm tra hai điều: `non-default args` trong log server có đúng
    cờ đang thử, và `vllm:time_to_first_token_seconds_count` trên `/metrics` bằng 0.
 4. Runtime Colab bị recycle khoảng mỗi giờ. Dựng lại bằng `setup_env.sh`, đừng than.
+5. **Prefix caching thổi phồng số prefill** (user chỉ ra 2026-08-08). vLLM 0.26 bật
+   automatic prefix caching MẶC ĐỊNH. `bench_serving.py` cycle qua 500 prompt
+   LongAlign; lượt đo nào vượt 500 request là lặp nguyên văn prompt cũ → prefill
+   ăn cache gần như miễn phí → tổng tok/s ảo. Còn thêm hậu tố `(#i)` vào CUỐI
+   prompt (bench_load cũ) không chống được gì vì cache khớp theo TIỀN TỐ block.
+   Đã sửa: bench_serving gắn tag `[req N]` duy nhất vào ĐẦU mỗi prompt,
+   bench_load chuyển `(#i)` lên đầu. Quy tắc: server benchmark luôn dựng với
+   `--no-enable-prefix-caching`; báo cáo phải ghi rõ caching ON/OFF và số prompt
+   distinct so với tổng request. **Mọi số long-context đo trước fix này (kể cả
+   champion 10.950 tok/s) mang dấu hỏi cho tới khi tái kiểm với caching off** —
+   mức độ thổi phồng phụ thuộc bao nhiêu request vượt ngưỡng 500 ở từng level.
+   Test câu ngoài dataset bằng cách "kéo dài 1 câu" cũng vô hiệu vì cùng lý do.
 
 ## Ngõ cụt trên T4 (sm75) — đừng phí giờ GPU
 
