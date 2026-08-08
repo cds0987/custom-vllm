@@ -112,7 +112,24 @@ offered; chỉ bài duration dài mới phân biệt được phục vụ thật
 Hướng còn mở: chuyển mã GGUF → AWQ/GPTQ chạy Marlin — con đường duy nhất
 vượt fp16 mà vẫn giữ 4-bit cả trên đĩa lẫn trong VRAM. Nghiên cứu xong
 (cần dequant + requant RTN/GPTQ, `gptq_marlin_repack` không ăn trực tiếp
-block GGUF, ước ~1-2 ngày code), chưa dựng.
+block GGUF, ước ~1-2 ngày code).
+
+**Cập nhật:** `scripts/transcode_gguf_to_gptq.py` đã dựng xong và pass dry-run
+CPU-only trên `unsloth/Qwen3.5-2B-GGUF:Q4_K_M` (không đụng Colab/GPU — máy dev
+này không có GPU). RTN W4 group128 sym vào đúng layout GPTQ vllm cần
+(qweight/qzeros/scales/g_idx), quantise q/k/v/o_proj, gate/up/down_proj, và
+5 phép chiếu tuyến tính GDN (in_proj_qkv/z/a/b, out_proj — xác nhận từ
+`qwen_gdn_linear_attn.py` rằng vllm đã có sẵn đường GPTQ/AWQ cho các layer
+này); conv1d/A_log/dt_bias/norm/embedding giữ fp16 đúng theo research trước.
+Sai số RTN đo trên tensor thật ~10-13% L1 (cao hơn dải K-quant gốc 0.4-7%,
+vì min/max scale RTN nhạy outlier hơn K-quant per-superblock; đã thêm clip-
+ratio grid search tự-hiệu-chỉnh trên chính tensor, không cần calibration
+data, giảm được ~2 điểm %). Đã tìm thấy sẵn AWQ 4-bit cho 4B/9B trên Hub
+(QuantTrio, cyankiwi, mssfj) — không có bản 2B nào, transcode 2B của ta vẫn
+là checkpoint 4-bit-trên-Marlin duy nhất cho size này. Việc còn lại cần GPU
+L4 thật: serve + `bench_load`/`bench_serving`/quality gate, xem transcode
+này có lọt vào khoảng 8.6K–10.95K tok/s hay không — xem docstring của script
+để có runbook đầy đủ.
 
 ## Kiểm chứng scale 9B trên L4 (unsloth/Qwen3.5-9B-GGUF:Q4_K_M, hybrid)
 

@@ -917,7 +917,16 @@ def verify(out_dir: Path, reader, cfg, quantized_modules, fp16_kept, skipped_mis
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    # NOTE: deliberately NOT passing the module docstring as `description` --
+    # it contains Vietnamese text (the quality-gate prompt from the runbook)
+    # which crashes argparse's --help on a cp1252 Windows console
+    # (UnicodeEncodeError). Read the module docstring in the source instead;
+    # `--help` gets a short ASCII summary.
+    ap = argparse.ArgumentParser(
+        description="Transcode a Qwen3.5 GGUF into a GPTQ checkpoint vLLM serves via "
+        "gptq_marlin. See this file's module docstring for the full design writeup and "
+        "L4 validation runbook."
+    )
     ap.add_argument("src", help="repo:quant, e.g. unsloth/Qwen3.5-2B-GGUF:Q4_K_M")
     ap.add_argument("out_dir", help="output directory for the GPTQ checkpoint")
     ap.add_argument("--base-repo", default=None, help="HF repo to pull config.json/tokenizer from, e.g. unsloth/Qwen3.5-2B")
