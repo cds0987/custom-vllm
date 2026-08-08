@@ -74,6 +74,50 @@ if that patch has not run yet), the latter because it patches a different
 file (quantization/linear.py) and has no ordering interaction, but grouping
 every load-time GGUF patch after the runtime-dispatch ones keeps the list's
 "static rewrite, then runtime flags" shape.
+
+Embedding/lm_head exclusion (post L4 crash fix):
+An L4 run with CUSTOM_VLLM_GGUF_REPACK=1 crashed at engine-core init inside
+the torch.compile'd embedding op, vocal_embeds.py:_apply_gguf_embedding's
+"assert hidden_size == qweight.shape[1] // type_size * block_size". Both the
+embedding consumer (quantization/vocal_embeds.py) and the linear consumer
+(quantization/linear.py) read weight_type from the exact same place --
+layer.qweight_type.weight_type, populated uniformly by
+_store_gguf_weight_type() in quantization/params.py -- and
+weight_utils.py's gguf_quant_weights_iterator_multi is a plain generator
+that always yields a tensor's ".qweight_type" row immediately before its
+".qweight" row with no possibility of interleaving from another tensor, so
+the "tag before data" ordering this hook (and qwen35's) relies on is sound
+in general. Re-encoding one tensor's bytes in isolation was also verified
+byte-consistent (Q6_K -> dequant -> Q8_0 requantize preserves element
+count exactly). None of that, however, guarantees the embedding/tied-lm_head
+tensor's tag and data stay paired through every consumer that can touch it
+outside this hook's own bookkeeping -- and embedding is the one tensor class
+with anything else in play (weight tying, vocab-embedding-specific load
+path in params.py's _gguf_embedding_weight_loader). The embedding op is also
+the only consumer that self-checks its shape (the assert above); the linear
+path's _fused_mul_mat_gguf (linear.py) recomputes its dequant width from the
+very same (qweight.shape[1], type_size) pair with no cross-check against the
+real hidden size at all -- so an equivalent tag/data desync on an ordinary
+Q6_K linear tensor would not raise this assert; it would either blow up
+later with an unrelated matmul-shape RuntimeError in `x @ weight.T`, or, if
+the miscalculated width happened to coincide, silently compute garbage. And
+because engine-core crashes on the very first embedding op before any
+decoder linear layer's matmul is ever exercised, this run is not evidence
+either way about whether linear tensors hit the same class of problem.
+
+Given that, and since matmul speed is the entire point of this repack and
+embeddings/lm_head gain nothing from it (embedding is a gather, not a
+matmul; a tied lm_head is never repacked as a distinct tensor since it
+shares the embedding module instead of loading its own qweight/qweight_type
+pair -- see GGUFEmbeddingMethod.tie_weights), the fix removes token
+embedding and (untied) lm_head tensors from repack scope entirely by name,
+both by GGUF-native name (token_embd.weight / output.weight, when
+gguf_to_hf_name_map is None and transform_weight sees raw GGUF names) and by
+the HF-mapped name vllm_gguf_plugin's default adapter normally hands
+transform_weight (model.embed_tokens.weight / lm_head.weight). This closes
+the crash regardless of the exact mechanism behind the embedding-specific
+desync, without touching any plugin source directly (this script only ever
+edits its own generated PATCH/HELPERS text).
 """
 
 import glob
@@ -105,6 +149,17 @@ import os as _custom_vllm_repack_os
 
 _CUSTOM_VLLM_REPACK_NAME_TO_TYPE = {{"q5_k": 13, "q6_k": 14}}  # GGMLQuantizationType
 
+# Token-embedding / lm_head tensors never benefit from a matmul-oriented
+# repack (embedding is a gather, not a matmul) and are excluded from repack
+# scope entirely -- see module docstring "Embedding/lm_head exclusion" for
+# why. Matches both raw GGUF tensor names (token_embd.weight / output.weight)
+# and the HF-mapped names transform_weight normally receives
+# (model.embed_tokens.weight / lm_head.weight), by checking the last
+# dot-separated component of the module base name.
+_CUSTOM_VLLM_REPACK_SKIP_BASENAMES = frozenset(
+    {{"embed_tokens", "token_embd", "lm_head", "output"}}
+)
+
 
 def _custom_vllm_gguf_repack_types():
     raw = _custom_vllm_repack_os.environ.get("CUSTOM_VLLM_GGUF_REPACK", "")
@@ -133,6 +188,11 @@ def _custom_vllm_gguf_repack_base(hf_name):
     return base
 
 
+def _custom_vllm_gguf_repack_is_excluded(base):
+    tail = base.rsplit(".", 1)[-1]
+    return tail in _CUSTOM_VLLM_REPACK_SKIP_BASENAMES
+
+
 def _custom_vllm_gguf_repack(hf_name, weight):
     """Re-encode a Q6_K/Q5_K tensor to Q8_0, tag row then data row.
 
@@ -145,6 +205,10 @@ def _custom_vllm_gguf_repack(hf_name, weight):
 
     if hf_name.endswith(".qweight_type"):
         base = _custom_vllm_gguf_repack_base(hf_name)
+        if _custom_vllm_gguf_repack_is_excluded(base):
+            # Embedding / lm_head: never repacked, see module docstring.
+            _CUSTOM_VLLM_REPACK_ORIG_TYPE.pop(base, None)
+            return weight
         raw_type = int(weight.flatten()[0])
         if raw_type in _CUSTOM_VLLM_GGUF_REPACK_TYPES:
             _CUSTOM_VLLM_REPACK_ORIG_TYPE[base] = raw_type
