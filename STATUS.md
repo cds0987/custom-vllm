@@ -125,7 +125,36 @@ việc đáng làm nhất tiếp theo.
 | fp16 + fp8 KV | 10.950 | 1.15 QPS, 300s sạch, 0 lỗi, TTFT p50 2s |
 | **GGUF hybrid + fp8 KV, bỏ fp32 SSM** | **11.211,6** | **TEST R 2026-08-08: caching off, tag fix, 325 req/500 prompt distinct, quality 3/3** |
 
-**Champion hiện tại (TEST 8d, 2026-08-09):** GGUF Q4_K_M +
+**CHAMPION TOÀN DỰ ÁN 2B (TEST 10, 2026-08-09): AWQ W4A16 tự tạo + Marlin.**
+Quantize bằng `scripts/quantize_awq_2b.py` (llm-compressor, AWQModifier +
+W4A16, ignore lm_head + linear_attn, calibration ultrachat 256 mẫu), sửa
+checkpoint bằng `scripts/fix_qwen35_hf_checkpoint.py` (strip prefix
+`model.language_model.` + bỏ mrope_section — HF Qwen3.5 nào không-GGUF cũng
+cần), serve thường với fp8 KV. Thắng hoặc hoà MỌI trục so GGUF champion:
+- decode conc32: **1859 tok/s** (2.17× GGUF 856, 1.22× fp8-B 1524)
+- long-ctx prefill: 10.637 vs 10.528 (+1%)
+- **TTFT p50: 2.59s vs 4.91s (−47%, tốt nhất mọi cấu hình từng đo)**
+- SWE-bench ppl: 3.724 vs 3.558, ratio 1.047 → PASS (<1.10)
+- 5 câu dò: parity mọi chế độ (kiểm bằng control kép — xem mục phương pháp)
+Checkpoint 3.1GB nằm Colab-local, rebuild sau recycle bằng script trên.
+GGUF ba-đường vẫn là lựa chọn khi bắt buộc format GGUF (llama.cpp interop).
+
+**Ba phát hiện probe-validity (2026-08-09) — quy tắc chấm cổng chất lượng:**
+1. Câu "kể 3 trái cây" sập loop NGAY Ở BF16 9B — điểm hút của base model.
+2. 2B dưới thinking-mode loop trên Nguyễn Du/địa lý ở MỌI precision.
+3. 2B chế-độ-thẳng ảo giác tự tin câu recall đa-fact ở MỌI format quant
+   (AWQ bịa "Núi Phú Quốc", GGUF bịa "Núi Bà Đen" — cùng bệnh khác triệu chứng).
+→ Quy tắc: model nhỏ chấm theo CONTROL cùng-chế-độ cùng-gốc, không chấm
+thang đúng/sai tuyệt đối; mọi probe mới phải control-validate trước khi
+thành cổng. Giao thức chuẩn: 5 biến thể/probe + control full-precision.
+
+**TEST 11a (sweep max-num-batched-tokens, long-ctx 16K):** 16384 và 8192
+hoà throughput/TTFT nhưng 8192 cho ITL p95 tốt gấp đôi (0.73 vs 1.41) —
+đề xuất mặc định mới 8192. 2048 = điểm trade-off ITL (TTFT tệ, bão hoà nhẹ).
+512 SẬP ở 16k context (2.437 tok/s, 185/279 chết) — bài học: chunk scale
+theo context/prefill_rate, khuyến nghị 512 thời T4 không mang sang L4 16k.
+
+**Champion GGUF (TEST 8d, 2026-08-09):** GGUF Q4_K_M +
 `CUSTOM_VLLM_GGUF_HYBRID=1` + `CUSTOM_VLLM_GGUF_TRITON_MID=1` (dispatch
 3 đường: M nhỏ → CUDA mmvq của llama.cpp, M trung → Triton mmq, M>=1024 →
 dequant+cuBLAS) + `--kv-cache-dtype fp8_e4m3 --no-enable-prefix-caching`,
