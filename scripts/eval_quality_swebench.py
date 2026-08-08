@@ -51,6 +51,26 @@ older server builds), this script fails loudly with a clear error rather
 than silently reporting all-zero NLL — a quality gate that can go quiet on
 its own precondition is worse than no gate.
 
+MEMORY WARNING (learned on a 23GB L4 with a 9B model, 2026-08-09):
+`prompt_logprobs` makes vLLM materialize a full-vocab log-softmax for EVERY
+prompt position — ~150K vocab x prompt_len in fp32, >1GB per 2k-token
+prompt, ON TOP of normal serving state, and an OOM here kills the whole
+engine, not just the request. vLLM computes it per prefill chunk, so the
+peak scales with `--max-num-batched-tokens`, not total prompt length. Rules
+for running this eval against a tight-VRAM server:
+  1. Use a DEDICATED eval server: --max-num-batched-tokens 512 (bounds the
+     logprob materialization per step), --max-num-seqs 8-16 (this eval only
+     sends --concurrency 4 requests anyway; serving-scale seq slots waste
+     the VRAM the logprobs need), gpu-memory-utilization <= 0.85.
+  2. Keep --token-budget modest (default 512): the issue text is only
+     conditioning context — the gate is RELATIVE (baseline vs candidate on
+     byte-identical prompts), so a shorter prefix loses nothing as long as
+     both sides use the same budget. The patch region is what's scored.
+  3. Baseline and candidate MUST use the same --token-budget and
+     --num-instances (the cache key enforces prompt identity; compare
+     refuses nothing on its own — check the `boundary_method` and
+     instance counts in both JSONs match before trusting a ratio).
+
 Usage:
     VLLM_MODEL=repo:QUANT python scripts/eval_quality_swebench.py run --num-instances 100 --output out/quality_q4_k_m.json
     python scripts/eval_quality_swebench.py compare out/quality_fp16.json out/quality_q4_k_m.json
@@ -490,7 +510,7 @@ def main():
 
     run_ap = sub.add_parser("run", help="score gold patches against a live server")
     run_ap.add_argument("--num-instances", type=int, default=100, help="SWE-bench_Lite instances to load/score")
-    run_ap.add_argument("--token-budget", type=int, default=2048, help="truncate problem_statement to this many tokens")
+    run_ap.add_argument("--token-budget", type=int, default=512, help="truncate problem_statement to this many tokens (keep small: prompt_logprobs memory scales with prompt length — see module docstring)")
     run_ap.add_argument("--max-patch-tokens", type=int, default=1024, help="skip instances whose gold patch exceeds this many tokens")
     run_ap.add_argument("--tokenizer", default=None, help="tokenizer name for exact token counting (needs `transformers`); default: char-count estimate (~4 chars/token)")
     run_ap.add_argument(
