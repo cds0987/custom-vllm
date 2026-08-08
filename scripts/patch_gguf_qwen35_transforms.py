@@ -66,6 +66,7 @@ HELPERS = f'''
 _QWEN35_CFG = None
 _QWEN35_NTRANSFORMED = 0
 _GGUF_UNQUANTIZED = (0, 1)  # GGML F32, F16
+_QWEN35_WTYPE = {{}}  # module base name -> ggml type, from its qweight_type tag
 
 
 def _qwen35_untile_v_heads(t, dim, num_k_heads, num_v_per_k, head_dim):
@@ -114,12 +115,16 @@ def _undo_qwen35_gguf_transform(hf_name, weight, cfg):
         return _qwen35_untile_v_heads(t, dim, num_k, num_v_per_k, head_dim)
 
     if hf_name.endswith(".qweight_type"):
-        # out_proj gets re-encoded as Q8_0 below (see there); its dtype tag has
-        # to follow. Everything else keeps whatever the GGUF said.
+        # The dtype tag always arrives just before its module's qweight, so
+        # remember it: the ggml type cannot be recovered from the packed bytes
+        # (Q4_0 and Q4_K are both 144 bytes per 256 weights, and the IQ types
+        # collide with each other too).
+        _QWEN35_WTYPE[base] = int(weight.flatten()[0])
+        # out_proj gets re-encoded as Q8_0 below (see there); its tag must follow.
         if base.endswith("linear_attn.out_proj") and reorder:
             from gguf import GGMLQuantizationType
 
-            if int(weight.flatten()[0]) not in _GGUF_UNQUANTIZED:
+            if _QWEN35_WTYPE[base] not in _GGUF_UNQUANTIZED:
                 return torch.full_like(weight, int(GGMLQuantizationType.Q8_0))
         return weight
 
@@ -171,18 +176,13 @@ def _undo_qwen35_gguf_transform(hf_name, weight, cfg):
         from gguf import GGMLQuantizationType
         from gguf.quants import dequantize, quantize
 
-        k = num_v * head_v
-        per_row = weight.shape[1] / (k / 256.0)
-        qtype = {{144: GGMLQuantizationType.Q4_K,
-                  176: GGMLQuantizationType.Q5_K,
-                  210: GGMLQuantizationType.Q6_K}}.get(round(per_row))
-        if qtype is None and abs(weight.shape[1] - k / 32 * 34) < 1:
-            qtype = GGMLQuantizationType.Q8_0
-        if qtype is None:
+        raw_type = _QWEN35_WTYPE.get(base)
+        if raw_type is None:
             raise ValueError(
-                f"{{hf_name}}: cannot infer ggml type from {{weight.shape[1]}} "
-                f"bytes/row over {{k}} columns"
+                f"{{hf_name}}: qweight arrived before its qweight_type tag, so "
+                "the ggml type is unknown"
             )
+        qtype = GGMLQuantizationType(raw_type)
         raw = weight.cpu().numpy()
         deq = torch.from_numpy(np.ascontiguousarray(dequantize(raw, qtype)))
         deq = untile(deq, 1, head_v)
