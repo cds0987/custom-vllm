@@ -26,7 +26,8 @@ for s in \
   patch_gguf_empty_suffix \
   patch_gguf_qwen35_transforms \
   patch_gguf_prefer_dequant \
-  patch_gguf_hybrid_dispatch
+  patch_gguf_hybrid_dispatch \
+  patch_fla_ada_shmem
 do
   echo "=== $s ==="
   python "scripts/$s.py"
