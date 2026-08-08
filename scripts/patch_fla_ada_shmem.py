@@ -69,7 +69,19 @@ def check_shared_mem(arch: str = "none", tensor_idx: int = 0) -> bool:
 site_packages = sysconfig.get_paths()["purelib"]
 matches = glob.glob(f"{site_packages}/vllm/model_executor/layers/fla/ops/utils.py")
 if not matches:
-    raise SystemExit(f"vllm fla/ops/utils.py not found under {site_packages}")
+    # Not every vllm build ships this file (it was added for the fla/GDN
+    # kernels and its path has moved across versions). Absence here just
+    # means this opt-in unlock has nothing to patch on this build -- that is
+    # not an error, so skip cleanly instead of aborting the rest of
+    # setup_env.sh (which runs under `set -e`). Contrast with the
+    # anchor-mismatch case below: if the file DOES exist but the anchor
+    # text is gone, the source really did change underneath us and that
+    # stays fatal.
+    print(
+        f"vllm fla/ops/utils.py not found under {site_packages} -- "
+        "skipping (patch not applicable on this vllm build)"
+    )
+    raise SystemExit(0)
 path = matches[0]
 
 with open(path, encoding="utf-8") as f:

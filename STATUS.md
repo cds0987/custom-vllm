@@ -157,6 +157,35 @@ khuyến nghị dùng danh sách tối thiểu. Lưu ý: `--quantization fp8` KH
 `--quantization-config` — phải dùng `fp8_per_tensor` (online, calibration-free).
 Long-context của fp8 chưa phân thắng bại với champion (quét rate đang chạy).
 
+**`CUSTOM_VLLM_GGUF_REPACK=1` — ngõ cụt, khoá cứng lại (2026-08-09):** repack
+Q6_K→Q8_0 lúc nạp (nhắm q6_k_gemm_kernel, 34.3% CUDA time decode — xem mục
+"Profile kernel trên L4" bên dưới) crash trên L4 khi chồng lên ba-đường
+champion (`HYBRID=1`+`TRITON_MID=1`): `RuntimeError: mat1 and mat2 shapes
+cannot be multiplied (16384x6144 and 7936x2048)` ở bước warmup đầu tiên
+(prefill). Đã root-cause bằng số học độc lập với plugin: `down_proj` của
+Qwen3.5-2B (hidden=2048, intermediate=6144) là đúng tensor Q6_K theo quy ước
+Q4_K_M của llama.cpp. Repack đúng byte cho K=6144 dạng Q8_0 (6144÷32×34 =
+6528 byte), nhưng đọc lại 6528 byte đó bằng layout Q6_K (÷210×256) ra đúng
+**7936** — khớp chính xác cạnh mat2 trong lỗi. Đây là bằng chứng dữ liệu
+(qweight bytes) đã repack đúng nhưng TAG (`qweight_type`) tại điểm tiêu thụ
+matmul vẫn đọc kiểu gốc Q6_K — desync tag/data, cùng họ với bug embedding đã
+vá trước đó (docstring `patch_gguf_repack_q6k.py`, mục "Embedding/lm_head
+exclusion"). Không dò ra được đúng dòng gây desync bằng đọc tĩnh mã plugin
+(nghi ba điểm trong `quantization/params.py`/`linear.py`: vật liệu hoá lại
+`GGUFWeightTypeParameter`, `apply()` đọc type từ hai thuộc tính khác nhau
+tuỳ có shard hay không, và `_create_padded_weight_param` có thể thay hẳn
+Parameter `qweight` mà không đụng `qweight_type`) — máy dev này không có GPU
+nên không dò runtime được (xem mục "Cập nhật" ở trên). Vì desync có thể xảy
+ra ở BẤT KỲ nơi nào đọc `qweight_type` (kể cả kernel CUDA/Triton mmq/mmvq mà
+patch này nhắm tới tăng tốc — chúng không tự kiểm tra shape như nhánh dequant
+nên có thể âm thầm tính sai thay vì crash), quyết định: khoá cứng
+`CUSTOM_VLLM_GGUF_REPACK` — biến này giờ luôn raise `RuntimeError` rõ ràng
+lúc khởi động plugin, bất kể có bật `HYBRID`/`DEQUANT` hay không. Xem
+`scripts/patch_gguf_repack_q6k.py` mục docstring "HARD GUARD" để có toàn bộ
+phép tính và điều kiện cần để mở khoá lại (audit từng nơi đọc `qweight_type`
+hoặc thêm assertion xác nhận byte width khớp `GGML_QUANT_SIZES[qweight_type]`
+tại mọi điểm tiêu thụ, chạy thật trên GPU để xác nhận không bao giờ kích hoạt).
+
 **AWQ-Marlin xác nhận trên sm89 (test 2):** QuantTrio/Qwen3.5-4B-AWQ serve
 sạch sau patch chữ ký (`patch_gguf_override_signature.py`), log chọn
 `MarlinLinearKernel` tự động. Decode 757 tok/s @conc32 cho model 4B — per-byte

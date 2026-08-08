@@ -118,6 +118,83 @@ transform_weight (model.embed_tokens.weight / lm_head.weight). This closes
 the crash regardless of the exact mechanism behind the embedding-specific
 desync, without touching any plugin source directly (this script only ever
 edits its own generated PATCH/HELPERS text).
+
+HARD GUARD -- L4 linear-layer crash, same desync family, repack disabled at
+runtime (2026-08-09):
+An L4 run with CUSTOM_VLLM_GGUF_REPACK=1 stacked on top of the three-way
+champion config (CUSTOM_VLLM_GGUF_HYBRID=1 + CUSTOM_VLLM_GGUF_TRITON_MID=1,
+_C_gguf CUDA extension active) got past the embedding fix above -- model
+load succeeded -- and then crashed during warmup, first prefill step:
+
+    RuntimeError: mat1 and mat2 shapes cannot be multiplied
+    (16384x6144 and 7936x2048)
+
+16384 = the prefill chunk's row count (x.shape[0], well over the hybrid
+dispatch's 1024-row threshold, so this went through the dequant+cuBLAS
+branch shared by patch_gguf_hybrid_dispatch.py / patch_gguf_prefer_dequant.py
+and the plugin's own stock DEQUANT_TYPES branch -- all three compute
+`shape = (qweight.shape[0], qweight.shape[1] // type_size * block_size)`
+from `gguf.GGML_QUANT_SIZES[qweight_type]`). 2048 is Qwen3.5-2B's
+hidden_size; 6144 is its intermediate_size (confirmed from
+transcode_gguf_to_gptq.py's own worked example, `blk.0.ffn_gate.weight,
+ne=[2048,6144]`), so mat1 (x) is the correct (16384, 6144) activation
+entering a down_proj matmul -- and down_proj is exactly llama.cpp's
+Q4_K_M convention for an always-Q6_K tensor (alongside attn.wv), i.e.
+exactly this patch's target. mat2 being (7936, 2048) means the dequant
+branch decided down_proj's dequantised weight had K=7936, not 6144 --
+proof follows from GGML_QUANT_SIZES arithmetic done independently of any
+plugin internals:
+
+    Q8_0:  block_size=32,  type_size=34   (gguf-py GGML_QUANT_SIZES[8])
+    Q6_K:  block_size=256, type_size=210  (gguf-py GGML_QUANT_SIZES[14])
+
+    correct repacked bytes for K=6144 in Q8_0: 6144 // 32 * 34 = 6528
+    those 6528 bytes misread with Q6_K's (block_size, type_size):
+        6528 // 210 * 256 = 7936          <-- exactly the crash's mat2 K
+
+That is not a rounding coincidence; it is the unique arithmetic signature
+of "the qweight BYTES were correctly repacked to Q8_0 width for K=6144,
+but the qweight_type TAG consumed at the matmul call site still reads
+Q6_K (14) instead of the rewritten Q8_0 (8)" -- a tag/data desync in the
+same family as the embedding one above, now hit on an ordinary linear
+layer instead of the embedding gather.
+
+Where exactly the tag goes stale could not be pinned to one line by static
+reading of the plugin alone. `_custom_vllm_gguf_repack()`'s own
+bookkeeping (tag row records original type + rewrites to 8, data row pops
+the record and re-encodes to match) is self-consistent for a standalone,
+unsharded module like down_proj, and vllm_gguf_plugin's own generator
+(`gguf_quant_weights_iterator_multi`) guarantees a tensor's ".qweight_type"
+row is always yielded immediately before its ".qweight" row with no
+interleaving -- so the desync has to be happening downstream, inside
+vLLM/plugin machinery this repo does not vendor: GGUFWeightTypeParameter's
+materialization in quantization/params.py copies `weight_type` forward
+from an "uninitialized" parameter to a real one
+(`_materialize_gguf_weight_type_parameter`), `apply()` in
+quantization/linear.py reads it from two different attributes depending on
+whether the layer is sharded (`layer.qweight_type.weight_type` vs.
+`.shard_weight_type[idx]`), and separately `_create_padded_weight_param`
+can swap `layer.qweight` for a brand-new padded Parameter object without
+touching `qweight_type` at all. Any of those is a plausible point for a
+byte-for-byte-correct repack to end up paired with a stale type integer,
+and confirming which one requires tracing an actual GPU run step by step
+-- this dev environment has no GPU (see STATUS.md), so that tracing cannot
+be done and verified here.
+
+Per this script's own logic, "never let it produce silent garbage" beats
+"ship an unverified fix that only looks right": if the crash above -- a
+loud shape error -- is possible at all, the same class of desync feeding
+a shape that happens to still be *mm-compatible* would silently produce
+wrong numbers instead, on any consumer that reads qweight_type (dequant,
+but also the CUDA/Triton mmq/mmvq kernels this repack exists to speed up
+in the first place -- they take qweight_type as a plain integer argument
+too, with no shape self-check to catch a desync the way `x @ weight.T`
+did here). So the guard below is unconditional, not just "when hybrid/
+dequant is also on": CUSTOM_VLLM_GGUF_REPACK now refuses to run at all,
+everywhere, until each qweight_type consumer above is audited or an
+assertion is added at every consumer site that qweight's byte width
+matches GGML_QUANT_SIZES[qweight_type] for the type actually observed
+there, and that assertion is confirmed to never fire under GPU load.
 """
 
 import glob
@@ -176,6 +253,47 @@ def _custom_vllm_gguf_repack_types():
 
 
 _CUSTOM_VLLM_GGUF_REPACK_TYPES = _custom_vllm_gguf_repack_types()
+
+if _CUSTOM_VLLM_GGUF_REPACK_TYPES:
+    # {PATCH_MARKER}
+    # HARD GUARD -- see module docstring "HARD GUARD" section for the full
+    # root-cause arithmetic. Confirmed on L4 (Qwen3.5-2B, three-way champion
+    # dispatch: CUSTOM_VLLM_GGUF_HYBRID=1 + CUSTOM_VLLM_GGUF_TRITON_MID=1):
+    # down_proj's qweight bytes get correctly repacked to Q8_0 width for
+    # K=6144 (6528 bytes), but the qweight_type consumed at the matmul call
+    # site still reads Q6_K -- 6528 // 210 * 256 == 7936, exactly the
+    # crashing "mat1 and mat2 shapes cannot be multiplied (16384x6144 and
+    # 7936x2048)" error. That is a tag/data desync between the repacked
+    # qweight bytes and whichever copy of qweight_type a given consumer
+    # reads, and it is not provably confined to the dequant+cuBLAS path
+    # that happened to crash loudly: the CUDA/Triton mmq/mmvq kernels this
+    # repack exists to speed up also take qweight_type as a plain integer
+    # with no shape self-check, so the same desync there would silently
+    # compute wrong numbers instead of raising. Refusing to run rather than
+    # risk that. Do not remove this guard without auditing every
+    # qweight_type consumer (vllm_gguf_plugin's quantization/params.py
+    # GGUFWeightTypeParameter materialization and quantization/linear.py's
+    # apply()/_fused_mul_mat_gguf) under real GPU load, or without adding
+    # -- and confirming never fires -- an assertion at each consumer that
+    # qweight's byte width matches GGML_QUANT_SIZES[qweight_type] for the
+    # type actually observed there.
+    raise RuntimeError(
+        "CUSTOM_VLLM_GGUF_REPACK is disabled: it is confirmed incompatible "
+        "with the current plugin/patch stack. Repacking a K-quant tensor "
+        "to Q8_0 rewrites its on-disk byte width, and at least one "
+        "consumer of layer.qweight_type.weight_type observes the "
+        "ORIGINAL (pre-repack) type instead of the rewritten one -- "
+        "reproduced on L4 as 'RuntimeError: mat1 and mat2 shapes cannot "
+        "be multiplied (16384x6144 and 7936x2048)' during warmup, where "
+        "7936 is exactly what you get by taking the correctly-repacked "
+        "Q8_0 byte width for K=6144 (6528 bytes) and misinterpreting it "
+        "with Q6_K's block layout (6528 // 210 * 256 == 7936). See "
+        "scripts/patch_gguf_repack_q6k.py's module docstring, 'HARD "
+        "GUARD' section, for the full arithmetic and the audit required "
+        "before re-enabling this flag. Unset CUSTOM_VLLM_GGUF_REPACK to "
+        "continue."
+    )
+
 _CUSTOM_VLLM_REPACK_ORIG_TYPE = {{}}  # module base name -> original ggml type,
                                        # only for modules whose tag we rewrote
 
