@@ -14,9 +14,30 @@ profile + the GGUF format-sweep quality table): not every Linear in this
 architecture is equally forgiving of 4-bit noise, and finer groups buy back
 precision at a small size cost. This recipe differentiates:
 
-  group_gdn:     GDN's in_proj_a / in_proj_b -- int8, group_size=128
-  group_default: every other Linear          -- int4, group_size=32 (finer
-                  than RedHatAI's 128, more scale granularity per weight)
+  group_gdn:     GDN's four input projections (in_proj_a, in_proj_b,
+                 in_proj_qkv, in_proj_z) -- int8, group_size=128
+  group_default: every other Linear -- int4, group_size=32 (finer than
+                 RedHatAI's 128, more scale granularity per weight)
+
+NOTE (found empirically, not part of the original design): a first attempt
+scoped group_gdn to ONLY in_proj_a/in_proj_b (matching the task spec's
+literal wording) and crashed inside AWQModifier's grid search with
+`RuntimeError: The size of tensor a (32) must match the size of tensor b
+(128) at non-singleton dimension 1`. Root cause, confirmed against the AWQ
+mappings TEST 10 already recorded in recipe.yaml for the 2B checkpoint:
+AWQModifier's auto-resolved mapping smooths all FOUR of a GDN layer's input
+projections (in_proj_qkv, in_proj_z, in_proj_b, in_proj_a) jointly under one
+`smooth_layer: input_layernorm` / `balance_layers: [...]` group, because
+they all read the same input_layernorm output. The grid search that picks
+the shared smoothing scale fake-quantizes every balance_layer with each
+trial scale to measure reconstruction error -- which requires every
+balance_layer in the group to share one quantization scheme. Ours didn't:
+in_proj_a/b were group_gdn (g128) while in_proj_qkv/z fell through to
+group_default (g32), so the fake-quantize step tried to apply a g128 scale
+tensor to a g32-shaped weight chunk mid grid-search. Splitting a
+jointly-smoothed AWQ mapping across two different quantization group_sizes
+is a structural conflict, not a config typo -- the fix widens group_gdn to
+cover all four co-smoothed tensors instead of trying to isolate two of them.
 
 Two things this recipe explicitly does NOT change from the 2B script
 (scripts/quantize_awq_2b.py), verified against Qwen/Qwen3.5-9B's actual
@@ -25,19 +46,15 @@ model.safetensors.index.json before writing this docstring (never assumed):
   - GDN naming is confirmed HF-side as
     model.language_model.layers.N.linear_attn.in_proj_a.weight /
     ...in_proj_b.weight (separate tensors, matching the 2B checkpoint's
-    layout) -- hence the group_gdn regex `re:.*linear_attn\\.in_proj_[ab]$`.
-    in_proj_qkv and in_proj_z are separate tensors too but are NOT part of
-    this group -- they fall through to group_default like every other
-    Linear, same as the 2B recipe's blanket int4 treatment of everything
-    outside its `re:.*linear_attn.*` exclusion. (The 2B script excluded ALL
-    of linear_attn.* from quantization entirely, staying fp16, because its
-    goal was avoiding the fused in_proj_qkvz/in_proj_ba layout mismatch
-    entirely. This script takes the differentiated approach instead:
-    in_proj_a/b get their own int8 group rather than being skipped, and
-    in_proj_qkv/in_proj_z quantize under the same int4 default as everything
-    else. Verify PPL wasn't in fact traded away by this widening of scope --
-    that's exactly the swebench-ppl gate at the bottom of the runbook this
-    script's docstring points to.)
+    layout) -- hence the group_gdn regex now covers all four sibling
+    tensors, `re:.*linear_attn\\.in_proj_(a|b|qkv|z)$`, per the note above.
+    This is a wider net than the 2B script's `re:.*linear_attn.*` exclusion
+    (which kept ALL of linear_attn fp16, avoiding the fused
+    in_proj_qkvz/in_proj_ba layout question entirely) -- here all four input
+    projections DO get quantized, at int8 rather than being skipped. Verify
+    PPL wasn't in fact traded away by this widening of scope -- that's
+    exactly the swebench-ppl gate at the bottom of the runbook this script's
+    docstring points to.)
   - The checkpoint has a substantial vision tower: 333 of Qwen/Qwen3.5-9B's
     775 safetensors keys are model.visual.* (confirmed via the same index.json
     read -- Qwen/Qwen3.5-2B carries one too, 297/632 keys, and the 2B AWQ
@@ -116,11 +133,14 @@ def tokenize(sample):
 ds = ds.map(tokenize, remove_columns=ds.column_names)
 
 # Dict insertion order = resolution priority: group_gdn's specific regex is
-# checked before group_default's blanket "Linear" catch-all, so in_proj_a/b
-# land in the int8 group and everything else Linear falls through to int4.
+# checked before group_default's blanket "Linear" catch-all, so all four
+# in_proj_* land in the int8 group and everything else Linear falls through
+# to int4. Must cover all four siblings (a/b/qkv/z), not just a/b -- see the
+# module docstring's NOTE for why splitting AWQ's jointly-smoothed group
+# across two quantization group_sizes crashes the scale grid search.
 config_groups = {
     "group_gdn": QuantizationScheme(
-        targets=[r"re:.*linear_attn\.in_proj_[ab]$"],
+        targets=[r"re:.*linear_attn\.in_proj_(a|b|qkv|z)$"],
         weights=QuantizationArgs(
             num_bits=8,
             group_size=128,
