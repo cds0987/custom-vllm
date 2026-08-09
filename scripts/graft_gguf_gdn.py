@@ -296,40 +296,33 @@ class GraftConfigError(GraftError):
 # ==========================================================================
 
 
+# TASK K4: gguf2marlin.py now needs this exact same V-head untile math for
+# its own generic GDN transcode path (A_log/dt_bias/conv1d/out_proj too,
+# not just these four in_proj_* tensors), so the implementation moved
+# there and is now the single shared copy -- this script already imports
+# gguf2marlin.py as `g2m` (see above, for quantize_symmetric_group/
+# pack_rows), so these are thin delegating wrappers rather than an
+# independent copy of the same math. (The reverse import direction isn't
+# possible: gguf2marlin.py can't import this file back, that would be a
+# real circular import since this script loads gguf2marlin.py via
+# importlib at module scope.) Kept under their original names/signatures
+# here since test_graft_gguf_gdn.py calls them directly.
 def untile_v_heads(t: np.ndarray, dim: int, num_k_heads: int, num_v_per_k: int, head_dim: int) -> np.ndarray:
-    """Inverse of llama.cpp's grouped -> tiled V-head permutation -- exact
-    numpy port of patch_gguf_qwen35_transforms.py's `_qwen35_untile_v_heads`
-    (same reshape/transpose, torch.permute -> np.transpose)."""
-    shape = list(t.shape)
-    if dim < 0:
-        dim += len(shape)
-    new_shape = shape[:dim] + [num_v_per_k, num_k_heads, head_dim] + shape[dim + 1:]
-    t2 = t.reshape(new_shape)
-    perm = list(range(len(new_shape)))
-    perm[dim], perm[dim + 1] = perm[dim + 1], perm[dim]
-    return np.ascontiguousarray(t2.transpose(perm)).reshape(shape)
+    """Inverse of llama.cpp's grouped -> tiled V-head permutation. See
+    gguf2marlin.py's `qwen35_untile_v_heads` (this delegates to it)."""
+    return g2m.qwen35_untile_v_heads(t, dim, num_k_heads, num_v_per_k, head_dim)
 
 
 def untile_module(suffix: str, w: np.ndarray, *, reorder: bool, num_k: int, num_v_per_k: int,
                    head_k: int, head_v: int) -> np.ndarray:
     """Undo the tile transform for one of the four GDN in_proj_* tensors,
     given as a (out_features, in_features) HF-orientation array (see
-    `dequant_ggml_tensor` for why that orientation is guaranteed). Mirrors
-    patch_gguf_qwen35_transforms.py's `_undo_qwen35_gguf_transform` branches
-    for in_proj_qkv/in_proj_z/in_proj_a/in_proj_b exactly; A_log/dt_bias/
-    conv1d/out_proj are out of scope for this script."""
-    if not reorder:
-        return w
-    if suffix == "in_proj_qkv":
-        qk = head_k * num_k * 2
-        return np.concatenate(
-            [w[:qk], untile_v_heads(w[qk:], 0, num_k, num_v_per_k, head_v)], axis=0
-        )
-    if suffix == "in_proj_z":
-        return untile_v_heads(w, 0, num_k, num_v_per_k, head_v)
-    if suffix in ("in_proj_b", "in_proj_a"):
-        return untile_v_heads(w, 0, num_k, num_v_per_k, 1)
-    raise GraftError(f"untile_module: unknown GDN suffix {suffix!r}")
+    `dequant_ggml_tensor` for why that orientation is guaranteed). See
+    gguf2marlin.py's `qwen35_untile_module` (this delegates to it); A_log/
+    dt_bias/conv1d/out_proj remain out of scope for this script (it only
+    grafts the four in_proj_* input projections, see the module docstring)."""
+    return g2m.qwen35_untile_module(suffix, w, reorder=reorder, num_k=num_k, num_v_per_k=num_v_per_k,
+                                     head_k=head_k, head_v=head_v)
 
 
 # ==========================================================================

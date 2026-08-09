@@ -359,30 +359,33 @@ LIMITATIONS (be honest)
   config (attention heads, rope, activation, hybrid-layer metadata, ...)
   -- without it, the emitted config.json is NOT sufficient to serve any
   non-trivial architecture and this script says so loudly at the end.
-- STILL OUTSTANDING (not part of TASK K3's scope -- naming only): no
-  llama.cpp-side VALUE/layout transforms are undone for Qwen3.5's GDN
-  tensors -- see scripts/patch_gguf_qwen35_transforms.py's docstring:
-  A_log is stored as -exp(A_log), linear_attn.norm's siblings are stored
-  as 1+weight (linear_attn.norm itself is excluded -- plain RMSNorm),
-  conv1d is squeezed (C,1,K)->(C,K), and V-head-carrying tensors
-  (in_proj_qkv's V-rows, in_proj_z, in_proj_a, in_proj_b, and per that
-  same docstring also A_log/dt_bias/conv1d's V-channels and out_proj's
-  columns) are stored in llama.cpp's "tiled" head order rather than HF's
-  "grouped" order whenever num_k_heads != num_v_heads. gguf2marlin.py
-  copies these tensors' raw dequantized VALUES through unchanged -- only
-  their NAMES are now correct (see the LIMITATIONS entry above). A
-  checkpoint built by this script for a real Qwen3.5 GGUF (any size with
-  grouped-value GDN heads, i.e. num_v_per_k > 1) will therefore now LOAD
-  without a naming crash but almost certainly still generate garbage,
-  exactly as scripts/patch_gguf_qwen35_transforms.py's own docstring
-  describes happening to the live vllm_gguf_plugin path before that patch
-  existed. scripts/transcode_gguf_to_gptq.py DOES implement all of these
-  inversions (see its `_undo_qwen35_gguf_transform`) and remains the
-  correct tool for a from-scratch Qwen3.5 GDN checkpoint; porting the same
-  inversions into gguf2marlin.py's generic pipeline is unresolved --
-  flag this explicitly before trusting a gguf2marlin.py-produced Qwen3.5
-  checkpoint's *generation quality* (as opposed to "does it load") on a
-  GGUF with grouped-value GDN heads.
+- TASK K4 UPDATE: the "STILL OUTSTANDING" gap this section previously
+  flagged (Qwen3.5 GDN tensor NAMES were fixed by TASK K3 but their
+  VALUES/layout were still exactly as llama.cpp wrote them) is now closed
+  for the three transforms that actually corrupt generation on a
+  grouped-value-head GDN model: A_log's -exp(A_log) encoding (inverted
+  with log(-x)), the V-head "tiled" vs HF "grouped" row/column order
+  (undone with `qwen35_untile_v_heads`/`qwen35_untile_module`, the same
+  implementation graft_gguf_gdn.py verified against a real Qwen3.5-9B GGUF
+  during TASK M-exec), and conv1d's (C,1,K)->(C,K) squeeze (reversed by
+  re-adding the middle axis). This requires --hf-config to carry the real
+  linear_num_key_heads/linear_num_value_heads/linear_key_head_dim/
+  linear_value_head_dim fields; gguf2marlin.py now REFUSES to transcode a
+  Qwen3.5/Qwen3.5-MoE GGUF (raises SystemExit before touching any tensor)
+  if those are missing, rather than silently emitting a checkpoint whose
+  GDN layers are still wrong. See qwen35_undo_gdn_transform's docstring for
+  the exact per-tensor math and scripts/patch_gguf_qwen35_transforms.py's
+  module docstring for the llama.cpp-side source of truth these invert.
+  STILL NOT covered (a separate, pre-existing gap, not part of TASK K4's
+  scope): llama.cpp's OTHER Qwen3.5-specific transform -- every
+  zero-centred RMSNorm.weight in the model (not just GDN's) is stored as
+  "1 + weight" (Qwen3_5RMSNorm computes x * (1 + w); linear_attn.norm
+  itself is the one exception, it's a plain RMSNorm with no transform).
+  gguf2marlin.py does not undo this for input_layernorm/
+  post_attention_layernorm/model.norm/etc., so a Qwen3.5 checkpoint this
+  script produces will still have every norm off by a constant +1 bias
+  until that gap is closed too -- flag this before trusting generation
+  quality end-to-end, not just the GDN mixer's own output.
 - Tensors this script's generic name-mapper cannot resolve to a
   "model."-style HF name (any architecture other than Qwen3.5's own GDN
   tensors, which are now hardcoded -- see above) are written under a
@@ -875,6 +878,176 @@ def qwen35_gdn_override_name(raw_ggml_name: str) -> str | None:
     return f"model.layers.{bid}." + _QWEN35_GDN_RAW_TAIL_TO_HF_SUFFIX[tail]
 
 
+# --------------------------------------------------------------------------
+# TASK K4 FIX -- undo llama.cpp's Qwen3.5 GDN VALUE/LAYOUT transforms.
+#
+# TASK K3 (above) only fixed tensor NAMES: a GGUF Qwen3.5 GDN checkpoint
+# would load without a "no module named ..." crash, but every GDN mixer's
+# VALUES were still exactly as llama.cpp wrote them -- not what HF/vLLM's
+# Qwen3.5 modeling code expects -- so the model generated garbage on any
+# GGUF with grouped-value heads (linear_num_value_heads != linear_num_key_
+# heads). This section undoes those transforms, ported from
+# scripts/patch_gguf_qwen35_transforms.py's `_undo_qwen35_gguf_transform`
+# (the module docstring there is the source of truth for what llama.cpp's
+# converter did; not re-derived here) and, for the V-head reorder
+# specifically, from scripts/graft_gguf_gdn.py's `untile_v_heads`/
+# `untile_module` -- verified correct on a real Qwen3.5-9B GGUF during TASK
+# M-exec ("untiled truth" comparison test). Rather than re-typing that
+# math a third time, `qwen35_untile_v_heads`/`qwen35_untile_module` below
+# are now the ONE shared implementation: graft_gguf_gdn.py already imports
+# this file as `g2m` (for quantize_symmetric_group/pack_rows), so its own
+# untile_v_heads/untile_module were changed to thin delegating wrappers
+# around these (see graft_gguf_gdn.py) instead of keeping an independent
+# copy. The reverse (this file importing graft_gguf_gdn.py) is not
+# possible -- that would be a real circular import, since graft_gguf_gdn.py
+# loads this file via importlib at its own module scope.
+#
+# Three transforms, exactly as scripts/patch_gguf_qwen35_transforms.py's
+# module docstring documents:
+#   1. A_log is stored as -exp(A_log) (llama.cpp folds vLLM's runtime -exp()
+#      into the GGUF value) -> invert with log(-x).
+#   2. V-head-carrying tensors (in_proj_qkv's V-rows, in_proj_z, in_proj_a,
+#      in_proj_b, out_proj's input columns, and A_log/dt_bias/conv1d's
+#      V-channel slice) are stored in llama.cpp's "tiled" order rather than
+#      HF's "grouped" order whenever num_v_per_k = linear_num_value_heads /
+#      linear_num_key_heads > 1 -> undo with qwen35_untile_v_heads.
+#   3. conv1d is squeezed from HF's (channels, 1, kernel) to GGUF's on-disk
+#      (channels, kernel) -> undo by re-adding the middle axis.
+#
+# NOT covered here (out of scope for this task, still a real gap -- see
+# LIMITATIONS): the separate "1 + weight" transform llama.cpp applies to
+# every OTHER zero-centred RMSNorm.weight in the model (Qwen3_5RMSNorm does
+# x * (1 + w); linear_attn.norm itself is excluded, it's a plain RMSNorm
+# with no transform at all -- confirmed via patch_gguf_qwen35_transforms.py,
+# and hence no branch for "norm" appears below either). That bug affects
+# every Qwen3.5 layer's input_layernorm/post_attention_layernorm/model.norm,
+# not specifically the GDN grouped-V-head case this task targets, and
+# gguf2marlin.py still does not undo it.
+# --------------------------------------------------------------------------
+
+
+def qwen35_untile_v_heads(t: np.ndarray, dim: int, num_k_heads: int, num_v_per_k: int, head_dim: int) -> np.ndarray:
+    """Inverse of llama.cpp's grouped -> tiled V-head permutation. Exact
+    port of patch_gguf_qwen35_transforms.py's `_qwen35_untile_v_heads`
+    (torch.permute there -> np.transpose here, same reshape/swap math) --
+    this is now the single shared implementation graft_gguf_gdn.py's
+    `untile_v_heads` delegates to as well."""
+    shape = list(t.shape)
+    if dim < 0:
+        dim += len(shape)
+    # tiled layout is [v0_k0..v0_k{K-1}, v1_k0, ...]; read it back as
+    # (num_v_per_k, num_k_heads, head_dim) and swap to restore grouping.
+    new_shape = shape[:dim] + [num_v_per_k, num_k_heads, head_dim] + shape[dim + 1:]
+    t2 = t.reshape(new_shape)
+    perm = list(range(len(new_shape)))
+    perm[dim], perm[dim + 1] = perm[dim + 1], perm[dim]
+    return np.ascontiguousarray(t2.transpose(perm)).reshape(shape)
+
+
+def qwen35_untile_module(suffix: str, w: np.ndarray, *, reorder: bool, num_k: int, num_v_per_k: int,
+                          head_k: int, head_v: int) -> np.ndarray:
+    """Undo the tile transform for one of the four GDN in_proj_* tensors,
+    given as a (out_features, in_features) HF-orientation array. Exact
+    port of patch_gguf_qwen35_transforms.py's `_undo_qwen35_gguf_transform`
+    branches for in_proj_qkv/in_proj_z/in_proj_a/in_proj_b -- same
+    signature as graft_gguf_gdn.py's `untile_module` (which now delegates
+    here instead of keeping its own copy)."""
+    if not reorder:
+        return w
+    if suffix == "in_proj_qkv":
+        qk = head_k * num_k * 2
+        return np.concatenate(
+            [w[:qk], qwen35_untile_v_heads(w[qk:], 0, num_k, num_v_per_k, head_v)], axis=0
+        )
+    if suffix == "in_proj_z":
+        return qwen35_untile_v_heads(w, 0, num_k, num_v_per_k, head_v)
+    if suffix in ("in_proj_b", "in_proj_a"):
+        return qwen35_untile_v_heads(w, 0, num_k, num_v_per_k, 1)
+    raise ValueError(f"qwen35_untile_module: unknown GDN suffix {suffix!r}")
+
+
+# GDN tails that must stay fp16 pass-through, never quantized (A_log/
+# dt_bias are 1-D and already excluded by the `is_2d` check elsewhere, but
+# conv1d is 2-D on disk -- see qwen35_undo_gdn_transform's docstring -- and
+# would otherwise look like an ordinary quantizable Linear weight to the
+# generic classifier).
+_QWEN35_GDN_FP16_ONLY_TAILS = frozenset({"A_log", "dt_bias", "conv1d"})
+
+_QWEN35_GDN_TAIL_RE = re.compile(
+    r"linear_attn\.(A_log|dt_bias|conv1d|in_proj_qkv|in_proj_z|in_proj_a|in_proj_b|out_proj)$"
+)
+
+
+def qwen35_gdn_tail(hf_base: str) -> str | None:
+    """The GDN role suffix (e.g. "A_log", "in_proj_qkv") for an hf_base
+    that names one of the 8 value/layout-transformed GDN tensors, or None
+    for anything else (including "linear_attn.norm", which needs neither
+    transform -- see the module-level comment above)."""
+    m = _QWEN35_GDN_TAIL_RE.search(hf_base)
+    return m.group(1) if m else None
+
+
+def qwen35_undo_gdn_transform(tail: str, w: np.ndarray, gdn: dict) -> np.ndarray:
+    """Undo llama.cpp's Qwen3.5 GGUF value/layout transform for one GDN
+    tensor's dequantized fp32 (or fp32-castable) value, already in HF
+    orientation:
+      - 1-D (A_log, dt_bias): shape (features,).
+      - 2-D Linear weight (in_proj_*, out_proj): shape (out_features,
+        in_features) -- gguf2marlin's `gguf_dequantize(...)` / raw `t.data`
+        both already hand back this orientation (see graft_gguf_gdn.py's
+        `dequant_ggml_tensor` docstring, cross-checked against
+        gguf_reader.py directly).
+      - conv1d: shape (channels, kernel_size) -- GGUF's on-disk 2-D shape;
+        the caller re-adds the squeezed HF (channels, 1, kernel_size) axis
+        AFTER calling this (kept out of here so this function's contract
+        stays "same shape in, same shape out" for every tail).
+
+    `gdn` is {"num_k", "num_v_per_k", "head_k", "head_v", "reorder"} as
+    built from --hf-config in main(). The four in_proj_* tails delegate to
+    `qwen35_untile_module` (shared with graft_gguf_gdn.py); A_log/dt_bias/
+    conv1d/out_proj are ported directly from patch_gguf_qwen35_transforms.
+    py's `_undo_qwen35_gguf_transform` (its own quantized-tensor special
+    case for out_proj -- decode/permute/re-encode packed ggml bytes as
+    Q8_0 -- does not apply here: gguf2marlin.py always dequantizes to float
+    before this function runs, so out_proj's column permutation is just
+    another plain untile call, see DECISION 2 in the module docstring)."""
+    reorder = gdn["reorder"]
+    num_k, num_v_per_k = gdn["num_k"], gdn["num_v_per_k"]
+    head_k, head_v = gdn["head_k"], gdn["head_v"]
+
+    if tail in ("in_proj_qkv", "in_proj_z", "in_proj_a", "in_proj_b"):
+        return qwen35_untile_module(tail, w, reorder=reorder, num_k=num_k, num_v_per_k=num_v_per_k,
+                                     head_k=head_k, head_v=head_v)
+
+    def untile(t, dim, head_dim):
+        if not reorder:
+            return t
+        return qwen35_untile_v_heads(t, dim, num_k, num_v_per_k, head_dim)
+
+    if tail == "A_log":
+        # GGUF holds -exp(A_log); vLLM re-applies -exp() at runtime, so the
+        # HF-semantics value is log(-stored_value). Compute in float64 for
+        # headroom (A_log is often near-zero / small negative), cast back.
+        inverted = np.log(np.clip(-w.astype(np.float64), 1e-30, None))
+        return untile(inverted.astype(w.dtype), 0, 1)
+
+    if tail == "dt_bias":
+        return untile(w, 0, 1)
+
+    if tail == "conv1d":
+        if not reorder:
+            return w
+        qk = head_k * num_k * 2
+        return np.concatenate([w[:qk], untile(w[qk:], 0, head_v)], axis=0)
+
+    if tail == "out_proj":
+        # out_proj's V-heads sit on the INPUT axis (columns) in HF
+        # (out_features, in_features) orientation.
+        return untile(w, 1, head_v)
+
+    return w
+
+
 # EXACT tail-suffixes of the single most common modern HF decoder naming
 # convention (Llama/Qwen/Qwen2/Qwen3/Mistral/Gemma/Phi/StableLM/...).
 # Picking "shortest candidate" alone is NOT a reliable proxy for "the
@@ -1035,6 +1208,56 @@ def main():
     print(f"[gguf2marlin] architecture={arch_str!r} n_blocks={n_blocks} "
           f"({len(ggml_to_hf)} known tensor purposes)", file=sys.stderr)
 
+    # ---- --hf-config: parsed here (once), BEFORE any tensor work, because
+    # Qwen3.5 GDN's value/layout transform (below) needs its head-shape
+    # fields to run at all, and that transform must happen before pass 3
+    # quantizes anything. The config.json-building code near the end of
+    # main() reuses `raw_cfg`/`hf_text_cfg` instead of re-reading the file.
+    raw_cfg: dict | None = None
+    hf_text_cfg: dict = {}
+    if args.hf_config:
+        raw_cfg = json.loads(Path(args.hf_config).read_text(encoding="utf-8"))
+        hf_text_cfg = raw_cfg.get("text_config", raw_cfg)
+
+    # ---- TASK K4: Qwen3.5 GDN value/layout transform parameters -----------
+    # See qwen35_undo_gdn_transform's docstring above for what these drive.
+    # Refuses (loudly, not a guess) rather than silently skipping the
+    # transform when the architecture needs it but the real head-shape
+    # config wasn't supplied -- see this file's LIMITATIONS section.
+    qwen35_gdn: dict | None = None
+    if arch_enum in _QWEN35_ARCHES:
+        head_fields = ("linear_num_key_heads", "linear_num_value_heads",
+                       "linear_key_head_dim", "linear_value_head_dim")
+        missing = [f for f in head_fields if hf_text_cfg.get(f) is None]
+        if missing:
+            raise SystemExit(
+                f"[gguf2marlin] REFUSING to transcode: architecture {arch_str!r} is "
+                "Qwen3.5's gated-delta-net mixer. Its GGUF tensors carry llama.cpp-"
+                "side value/layout transforms (A_log stored as -exp(A_log), V-head-"
+                "carrying tensors stored in a 'tiled' rather than HF's 'grouped' "
+                "order, conv1d squeezed) that MUST be undone before quantizing, or "
+                "the checkpoint loads cleanly and then generates garbage -- see "
+                "scripts/patch_gguf_qwen35_transforms.py's module docstring. "
+                "Undoing them needs the real head-shape config fields "
+                f"{missing} from --hf-config "
+                f"({'not given' if not args.hf_config else args.hf_config!r}) "
+                "(checked both the config root and its 'text_config'). Refusing to "
+                "guess these -- pass --hf-config pointing at the model's real "
+                "upstream config.json."
+            )
+        num_k = int(hf_text_cfg["linear_num_key_heads"])
+        num_v = int(hf_text_cfg["linear_num_value_heads"])
+        head_k = int(hf_text_cfg["linear_key_head_dim"])
+        head_v = int(hf_text_cfg["linear_value_head_dim"])
+        reorder = num_k > 0 and num_v > 0 and num_k != num_v
+        qwen35_gdn = {
+            "num_k": num_k, "num_v": num_v, "head_k": head_k, "head_v": head_v,
+            "reorder": reorder, "num_v_per_k": (num_v // num_k) if num_k else 1,
+        }
+        print(f"[gguf2marlin] Qwen3.5 GDN head shape: num_k={num_k} num_v={num_v} "
+              f"head_k={head_k} head_v={head_v} reorder={reorder} "
+              f"(undoing llama.cpp's V-head/A_log/conv1d transforms)", file=sys.stderr)
+
     # ---- pass 1: classify every tensor (cheap -- no dequant yet) ----------
     records = []  # dict(hf_base, suffix, ggml_name, tensor, would_quantize, scheme, mapped)
     for t in reader.tensors:
@@ -1046,6 +1269,7 @@ def main():
         )
         if override_name is not None:
             hf_base, suffix = split_ggml_name(override_name)
+            base = t.name  # ggml_name is purely informational here (see below)
             mapped = True
         else:
             base, suffix = split_ggml_name(t.name)
@@ -1054,6 +1278,12 @@ def main():
             if not mapped:
                 hf_base = f"unmapped.{base}"
         is_always_fp16 = any(hf_base.endswith(s) for s in ALWAYS_FP16_HF_SUFFIXES)
+        # TASK K4: A_log/dt_bias/conv1d are pass-through fp16 tensors, never
+        # quantized (conv1d is 2-D on disk and would otherwise look like an
+        # ordinary Linear weight to classify_target_bits -- see
+        # _QWEN35_GDN_FP16_ONLY_TAILS's docstring above).
+        qwen35_tail = qwen35_gdn_tail(hf_base) if qwen35_gdn is not None else None
+        is_always_fp16 = is_always_fp16 or (qwen35_tail in _QWEN35_GDN_FP16_ONLY_TAILS)
         is_2d = len(t.shape) == 2
         gtype_ = gguf.GGMLQuantizationType(t.tensor_type)
         scheme = (
@@ -1065,6 +1295,7 @@ def main():
         records.append({
             "hf_base": hf_base, "suffix": suffix, "ggml_name": base,
             "tensor": t, "would_quantize": would_quantize, "scheme": scheme, "mapped": mapped,
+            "qwen35_tail": qwen35_tail,
         })
 
     # ---- pass 2: merge-pair scheme-consistency fixups ----------------------
@@ -1088,13 +1319,25 @@ def main():
 
         if quantize_this:
             out_features, in_features = int(t.shape[-1]), int(t.shape[0])
-            if gtype == gguf.GGMLQuantizationType.Q4_0 and group_size == 32 and bits == 4:
+            # TASK K4: a GDN tensor whose V-heads need untiling can't take
+            # the bit-exact Q4_0 fast path below -- that path packs straight
+            # from the raw ggml bytes, but the untile permutation has to run
+            # on FLOAT values before requantizing (same tradeoff
+            # graft_gguf_gdn.py and patch_gguf_qwen35_transforms.py's own
+            # out_proj special case accept). When reorder is False (no
+            # grouped V-heads, e.g. num_v_per_k==1) the transform is a
+            # no-op and the fast path stays valid.
+            qwen35_tail = r["qwen35_tail"]
+            needs_float_detour = qwen35_tail is not None and qwen35_gdn["reorder"]
+            if gtype == gguf.GGMLQuantizationType.Q4_0 and group_size == 32 and bits == 4 and not needs_float_detour:
                 q_biased, scales = unpack_q4_0_exact(t.data, out_features, in_features)
                 qweight = pack_rows(q_biased.astype(np.int32), 4, in_features, out_features)
                 w_ref = dequant_gptq_for_verification(qweight, scales, in_features, out_features, group_size, bits=4)
                 w_pre = np.ascontiguousarray(gguf_dequantize(t.data, gtype), dtype=np.float32).T
             else:
                 w_pre_out_in = np.ascontiguousarray(gguf_dequantize(t.data, gtype), dtype=np.float32)
+                if qwen35_tail is not None:
+                    w_pre_out_in = qwen35_undo_gdn_transform(qwen35_tail, w_pre_out_in, qwen35_gdn)
                 w_pre = w_pre_out_in.T  # (K, N)
                 qweight, scales, w_ref = quantize_symmetric_group(w_pre, group_size, bits=bits)
 
@@ -1118,6 +1361,19 @@ def main():
                 arr = np.ascontiguousarray(t.data, dtype=np.float32)
             else:
                 arr = np.ascontiguousarray(gguf_dequantize(t.data, gtype), dtype=np.float32)
+            # TASK K4: the value/layout transform applies regardless of
+            # whether this particular tensor ends up quantized -- A_log/
+            # dt_bias/conv1d NEVER reach the quantize_this branch (forced
+            # fp16 above), and in_proj_*/out_proj can land here too (e.g.
+            # source block type isn't Q4_0/Q4_1/Q4_K, or the merge-pair
+            # fixup forced fp16) while still carrying the same tiled values.
+            qwen35_tail = r["qwen35_tail"]
+            if qwen35_tail is not None:
+                arr = qwen35_undo_gdn_transform(qwen35_tail, arr, qwen35_gdn)
+                if qwen35_tail == "conv1d":
+                    # GGUF's on-disk (channels, kernel) -> HF's nn.Conv1d
+                    # (channels, 1, kernel) -- re-add the squeezed axis.
+                    arr = arr[:, None, :]
             out_tensors[hf_name] = torch.from_numpy(arr.astype(np.float16))
             fp16_kept.append(hf_base)
 
@@ -1131,10 +1387,12 @@ def main():
     save_file(out_tensors, out_dir / "model.safetensors", metadata={"format": "pt"})
 
     # ---- config.json --------------------------------------------------------
+    # raw_cfg/hf_text_cfg were already parsed above (before pass 1) so the
+    # Qwen3.5 GDN transform could use them -- reused here rather than
+    # re-reading args.hf_config a second time.
     cfg = {}
     if args.hf_config:
-        raw_cfg = json.loads(Path(args.hf_config).read_text(encoding="utf-8"))
-        cfg = raw_cfg.get("text_config", raw_cfg)
+        cfg = hf_text_cfg
         # Minimal sanity check (Bug C in this repo's auto-marlin hook, see
         # scripts/patch_gguf_auto_marlin.py's module docstring): a caller
         # passing --hf-config is asserting "this is the REAL upstream

@@ -586,8 +586,22 @@ def test_qwen35_generic_mapping_partial():
         writer.write_tensors_to_file()
         writer.close()
 
+        # TASK K4: gguf2marlin.py now REFUSES to transcode a Qwen3.5 GGUF
+        # without --hf-config's GDN head-shape fields (see
+        # test_qwen35_gdn_missing_config_refuses below) -- this test only
+        # cares about NAME mapping, so num_k==num_v (reorder=False) keeps
+        # the new value/layout transform a no-op regardless of this toy
+        # tensor's arbitrary (non-head-shaped) dimensions.
+        hf_cfg_path = tmp / "hf_config.json"
+        hf_cfg_path.write_text(json.dumps({
+            "model_type": "qwen3_5",
+            "linear_num_key_heads": 1, "linear_num_value_heads": 1,
+            "linear_key_head_dim": 1, "linear_value_head_dim": 1,
+        }), encoding="utf-8")
+
         result = subprocess.run(
-            [sys.executable, str(GGUF2MARLIN_PATH), str(gguf_path), str(out_dir), "--group-size", "32"],
+            [sys.executable, str(GGUF2MARLIN_PATH), str(gguf_path), str(out_dir),
+             "--group-size", "32", "--hf-config", str(hf_cfg_path)],
             capture_output=True, text=True,
         )
         print(result.stdout[-1500:])
@@ -660,8 +674,21 @@ def test_qwen35_gdn_full_tensor_set():
         writer.write_tensors_to_file()
         writer.close()
 
+        # TASK K4: refuses without the GDN head-shape config now (see
+        # test_qwen35_gdn_missing_config_refuses) -- num_k==num_v keeps the
+        # value/layout transform a no-op so this NAME-mapping test's
+        # arbitrary tensor shapes stay valid (value semantics are covered
+        # separately by test_qwen35_gdn_value_transforms).
+        hf_cfg_path = tmp / "hf_config.json"
+        hf_cfg_path.write_text(json.dumps({
+            "model_type": "qwen3_5",
+            "linear_num_key_heads": 1, "linear_num_value_heads": 1,
+            "linear_key_head_dim": 1, "linear_value_head_dim": 1,
+        }), encoding="utf-8")
+
         result = subprocess.run(
-            [sys.executable, str(GGUF2MARLIN_PATH), str(gguf_path), str(out_dir), "--group-size", "32"],
+            [sys.executable, str(GGUF2MARLIN_PATH), str(gguf_path), str(out_dir),
+             "--group-size", "32", "--hf-config", str(hf_cfg_path)],
             capture_output=True, text=True,
         )
         print(result.stdout[-2000:])
@@ -672,6 +699,17 @@ def test_qwen35_gdn_full_tensor_set():
 
         with safe_open(out_dir / "model.safetensors", framework="pt") as f:
             keys = set(f.keys())
+            conv1d_shape = f.get_slice("model.layers.0.linear_attn.conv1d.weight").get_shape()
+
+        # TASK K4: conv1d is a pass-through fp16 tensor now (never
+        # quantized, see _QWEN35_GDN_FP16_ONLY_TAILS), even though this
+        # fixture deliberately adds it as Q4_0 (quantizable-looking).
+        check("conv1d NOT quantized (no .qweight sibling)",
+              "model.layers.0.linear_attn.conv1d.qweight" not in keys, str(sorted(keys)))
+        check("conv1d.weight kept as a plain (fp16) tensor",
+              "model.layers.0.linear_attn.conv1d.weight" in keys, str(sorted(keys)))
+        check("conv1d.weight is 3-D (channels, 1, kernel) -- HF's nn.Conv1d shape",
+              len(conv1d_shape) == 3 and conv1d_shape[1] == 1, str(conv1d_shape))
 
         expected_linear_attn_bases = [
             "model.layers.0.linear_attn.in_proj_qkv",
@@ -713,6 +751,277 @@ def test_qwen35_gdn_full_tensor_set():
               not stray, str(stray))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ==========================================================================
+# TASK K4: Qwen3.5 GDN VALUE/LAYOUT transforms -- refuse-without-config, and
+# a ground-truth round trip proving the transform is actually correct (not
+# just "runs without crashing"), same strategy test_graft_gguf_gdn.py uses:
+# build HF "truth" weights, apply the FORWARD transform (tile + -exp(x) +
+# squeeze) independently to fabricate an llama.cpp-shaped GGUF, run the
+# real transcoder, and compare its output back against the truth.
+# ==========================================================================
+
+
+def tile_v_heads_test(t: np.ndarray, dim: int, num_k_heads: int, num_v_per_k: int, head_dim: int) -> np.ndarray:
+    """Forward "grouped -> tiled" transform -- the mathematical inverse of
+    g2m.qwen35_untile_v_heads, written independently here (different
+    reshape axis order) rather than by calling the module under test. Same
+    approach as test_graft_gguf_gdn.py's own `tile_v_heads_test`."""
+    shape = list(t.shape)
+    if dim < 0:
+        dim += len(shape)
+    new_shape = shape[:dim] + [num_k_heads, num_v_per_k, head_dim] + shape[dim + 1:]
+    t2 = t.reshape(new_shape)
+    perm = list(range(len(new_shape)))
+    perm[dim], perm[dim + 1] = perm[dim + 1], perm[dim]
+    return np.ascontiguousarray(t2.transpose(perm)).reshape(shape)
+
+
+def _qwen35_gdn_hf_config(tmp: Path, num_k: int, num_v: int, head_k: int, head_v: int) -> Path:
+    path = tmp / "hf_config.json"
+    path.write_text(json.dumps({
+        "model_type": "qwen3_5",
+        "linear_num_key_heads": num_k, "linear_num_value_heads": num_v,
+        "linear_key_head_dim": head_k, "linear_value_head_dim": head_v,
+    }), encoding="utf-8")
+    return path
+
+
+def test_qwen35_gdn_missing_config_refuses():
+    """TASK K4: without --hf-config's real GDN head-shape fields,
+    gguf2marlin.py must REFUSE to transcode a Qwen3.5 GGUF rather than
+    silently emit a checkpoint whose GDN values/layout are still exactly
+    as llama.cpp wrote them (loads, then generates garbage on any model
+    with grouped-value heads -- the exact bug this task closes)."""
+    print("\n-- Qwen3.5 GDN: refuses to transcode without real head-shape config --")
+    tmp = Path(tempfile.mkdtemp(prefix="gguf2marlin_qwen35_refuse_"))
+    try:
+        gguf_path = tmp / "toy.gguf"
+        out_dir = tmp / "out"
+        writer = gguf.GGUFWriter(str(gguf_path), "qwen35")
+        writer.add_block_count(1)
+        writer.add_tensor("token_embd.weight", np.zeros((8, 32), dtype=np.float32))
+        # out_features=8 (a multiple of GPTQ's int4 pack_factor=8, see
+        # make_symmetric_qzeros) so the "full config succeeds" sanity case
+        # below actually reaches a real quantize call, not an unrelated
+        # shape-packing assertion.
+        a_w = np.random.default_rng(1).normal(0, 0.05, size=(8, 32)).astype(np.float32)
+        writer.add_tensor("blk.0.ssm_alpha.weight", gguf_quantize(a_w, gguf.GGMLQuantizationType.Q4_0),
+                           raw_dtype=gguf.GGMLQuantizationType.Q4_0)
+        writer.write_header_to_file()
+        writer.write_kv_data_to_file()
+        writer.write_tensors_to_file()
+        writer.close()
+
+        # (a) no --hf-config at all.
+        result_none = subprocess.run(
+            [sys.executable, str(GGUF2MARLIN_PATH), str(gguf_path), str(out_dir), "--group-size", "32"],
+            capture_output=True, text=True,
+        )
+        check("no --hf-config at all -> nonzero exit", result_none.returncode != 0)
+        check("refusal message names the missing head-shape fields",
+              "linear_num_key_heads" in result_none.stderr and "REFUSING" in result_none.stderr,
+              result_none.stderr[-1000:])
+        # out_dir itself is created early (mkdir(parents=True, exist_ok=True),
+        # before the refuse check runs) -- what matters is that no actual
+        # checkpoint output landed in it.
+        check("nothing written on refusal", not (out_dir / "model.safetensors").exists())
+
+        # (b) --hf-config given, but missing the GDN head-shape fields.
+        bare_cfg = tmp / "bare_config.json"
+        bare_cfg.write_text(json.dumps({"model_type": "qwen3_5"}), encoding="utf-8")
+        result_bare = subprocess.run(
+            [sys.executable, str(GGUF2MARLIN_PATH), str(gguf_path), str(out_dir),
+             "--group-size", "32", "--hf-config", str(bare_cfg)],
+            capture_output=True, text=True,
+        )
+        check("--hf-config without GDN fields -> nonzero exit", result_bare.returncode != 0)
+        check("refusal message names the missing head-shape fields (bare config case)",
+              "linear_num_key_heads" in result_bare.stderr and "REFUSING" in result_bare.stderr,
+              result_bare.stderr[-1000:])
+        check("nothing written on refusal (bare config case)", not (out_dir / "model.safetensors").exists())
+
+        # (c) full config -> succeeds (sanity: the refusal isn't unconditional).
+        full_cfg = _qwen35_gdn_hf_config(tmp, num_k=1, num_v=1, head_k=1, head_v=1)
+        result_ok = subprocess.run(
+            [sys.executable, str(GGUF2MARLIN_PATH), str(gguf_path), str(out_dir),
+             "--group-size", "32", "--hf-config", str(full_cfg)],
+            capture_output=True, text=True,
+        )
+        check("full GDN head-shape config -> exits 0", result_ok.returncode == 0, result_ok.stderr[-1000:])
+
+        # (d) non-Qwen3.5 architecture is never gated by this refusal at all.
+        llama_path = tmp / "llama.gguf"
+        build_test_gguf(llama_path, arch="llama")
+        result_llama = subprocess.run(
+            [sys.executable, str(GGUF2MARLIN_PATH), str(llama_path), str(tmp / "out_llama"), "--group-size", "32"],
+            capture_output=True, text=True,
+        )
+        check("non-Qwen3.5 arch (llama) never refused for missing GDN config",
+              result_llama.returncode == 0, result_llama.stderr[-1000:])
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _build_qwen35_gdn_ground_truth(rng, num_k, num_v, head_k, head_v, hidden):
+    """HF-orientation ground-truth values for one GDN layer's transformed
+    tensors, in the same shapes vLLM's Qwen3_5 modeling code expects."""
+    num_v_per_k = num_v // num_k
+    qk_dim = 2 * num_k * head_k
+    v_dim = num_v * head_v
+    return {
+        "in_proj_qkv": rng.normal(0, 0.05, size=(qk_dim + v_dim, hidden)).astype(np.float32),
+        "in_proj_z": rng.normal(0, 0.05, size=(v_dim, hidden)).astype(np.float32),
+        "in_proj_b": rng.normal(0, 0.05, size=(num_v, hidden)).astype(np.float32),
+        "in_proj_a": rng.normal(0, 0.05, size=(num_v, hidden)).astype(np.float32),
+        "out_proj": rng.normal(0, 0.05, size=(hidden, v_dim)).astype(np.float32),
+        # A_log: real Qwen3.5 checkpoints keep this small and negative
+        # (log of a decay rate) -- representative range, not zeros, so the
+        # -exp()/log(-x) round trip is actually exercised numerically.
+        "A_log": rng.uniform(-3.0, -0.1, size=(num_v,)).astype(np.float32),
+        "dt_bias": rng.normal(0, 0.3, size=(num_v,)).astype(np.float32),
+        # conv1d: GGUF's on-disk SQUEEZED shape (channels, kernel) -- see
+        # qwen35_undo_gdn_transform's docstring; qk_dim+v_dim channels.
+        "conv1d": rng.normal(0, 0.1, size=(qk_dim + v_dim, 4)).astype(np.float32),
+    }, qk_dim, v_dim
+
+
+def _tile_qwen35_gdn_for_gguf(true, num_k, num_v_per_k, head_v, qk_dim):
+    """Forward llama.cpp-side transform (tile_v_heads_test + -exp + squeeze,
+    which conv1d already is) -- the exact inverse of what gguf2marlin.py's
+    qwen35_undo_gdn_transform must undo. Returns ggml-canonical-name ->
+    raw array to write into the fixture GGUF."""
+    return {
+        "attn_qkv": np.concatenate(
+            [true["in_proj_qkv"][:qk_dim],
+             tile_v_heads_test(true["in_proj_qkv"][qk_dim:], 0, num_k, num_v_per_k, head_v)], axis=0),
+        "attn_gate": tile_v_heads_test(true["in_proj_z"], 0, num_k, num_v_per_k, head_v),
+        "ssm_beta": tile_v_heads_test(true["in_proj_b"], 0, num_k, num_v_per_k, 1),
+        "ssm_alpha": tile_v_heads_test(true["in_proj_a"], 0, num_k, num_v_per_k, 1),
+        "ssm_out": tile_v_heads_test(true["out_proj"], 1, num_k, num_v_per_k, head_v),
+        "ssm_a": tile_v_heads_test(-np.exp(true["A_log"]), 0, num_k, num_v_per_k, 1),
+        "ssm_dt.bias": tile_v_heads_test(true["dt_bias"], 0, num_k, num_v_per_k, 1),
+        "ssm_conv1d": np.concatenate(
+            [true["conv1d"][:qk_dim],
+             tile_v_heads_test(true["conv1d"][qk_dim:], 0, num_k, num_v_per_k, head_v)], axis=0),
+    }
+
+
+def _run_qwen35_gdn_value_transform_case(num_k, num_v, head_k, head_v, hidden, *, label, seed):
+    """Shared body for the reorder (num_v_per_k>1) and no-reorder
+    (num_v_per_k==1) cases below."""
+    print(f"\n-- Qwen3.5 GDN value/layout transform: {label} --")
+    num_v_per_k = num_v // num_k
+    tmp = Path(tempfile.mkdtemp(prefix=f"gguf2marlin_qwen35_valxform_{label}_"))
+    try:
+        rng = np.random.default_rng(seed)
+        true, qk_dim, v_dim = _build_qwen35_gdn_ground_truth(rng, num_k, num_v, head_k, head_v, hidden)
+        stored = _tile_qwen35_gdn_for_gguf(true, num_k, num_v_per_k, head_v, qk_dim)
+
+        gguf_path = tmp / "toy.gguf"
+        out_dir = tmp / "out"
+        writer = gguf.GGUFWriter(str(gguf_path), "qwen35")
+        writer.add_block_count(1)
+        writer.add_tensor("token_embd.weight", np.zeros((8, hidden), dtype=np.float32))
+        # F32, unquantized -- isolates the transform math from int4/int8
+        # RTN quantization noise (that's already covered by DECISION 2's
+        # own error-budget tests); the fp16-passthrough branch's only loss
+        # is the final float32->float16 cast, ~1e-3 relative.
+        # ssm_a (A_log) and ssm_dt.bias are BARE ggml names (no ".weight"
+        # suffix at all -- see _QWEN35_GDN_RAW_TAIL_TO_HF_SUFFIX's comment
+        # in gguf2marlin.py); every other GDN tensor here is a real Linear
+        # .weight.
+        _bare_ggml_names = {"ssm_a", "ssm_dt.bias"}
+        for suffix, arr in stored.items():
+            ggml_name = f"blk.0.{suffix}" if suffix in _bare_ggml_names else f"blk.0.{suffix}.weight"
+            writer.add_tensor(ggml_name, arr.astype(np.float32))
+        writer.write_header_to_file()
+        writer.write_kv_data_to_file()
+        writer.write_tensors_to_file()
+        writer.close()
+
+        hf_cfg_path = _qwen35_gdn_hf_config(tmp, num_k, num_v, head_k, head_v)
+        result = subprocess.run(
+            [sys.executable, str(GGUF2MARLIN_PATH), str(gguf_path), str(out_dir),
+             "--group-size", "32", "--hf-config", str(hf_cfg_path)],
+            capture_output=True, text=True,
+        )
+        print(result.stdout[-1500:])
+        print(result.stderr[-1500:])
+        check(f"[{label}] CLI exits 0", result.returncode == 0, result.stderr[-1500:])
+        if result.returncode != 0:
+            return
+
+        with safe_open(out_dir / "model.safetensors", framework="numpy") as f:
+            out = {
+                "in_proj_qkv": f.get_tensor("model.layers.0.linear_attn.in_proj_qkv.weight"),
+                "in_proj_z": f.get_tensor("model.layers.0.linear_attn.in_proj_z.weight"),
+                "in_proj_b": f.get_tensor("model.layers.0.linear_attn.in_proj_b.weight"),
+                "in_proj_a": f.get_tensor("model.layers.0.linear_attn.in_proj_a.weight"),
+                "out_proj": f.get_tensor("model.layers.0.linear_attn.out_proj.weight"),
+                "A_log": f.get_tensor("model.layers.0.linear_attn.A_log"),
+                "dt_bias": f.get_tensor("model.layers.0.linear_attn.dt_bias"),
+                "conv1d": f.get_tensor("model.layers.0.linear_attn.conv1d.weight"),
+            }
+
+        check(f"[{label}] conv1d is 3-D (channels, 1, kernel)",
+              out["conv1d"].ndim == 3 and out["conv1d"].shape[1] == 1, str(out["conv1d"].shape))
+        conv1d_squeezed = out["conv1d"][:, 0, :]
+
+        for name in ("in_proj_qkv", "in_proj_z", "in_proj_b", "in_proj_a", "out_proj", "dt_bias"):
+            diff = float(np.abs(out[name].astype(np.float64) - true[name].astype(np.float64)).max())
+            check(f"[{label}] {name} matches HF ground truth (fp16 round-trip, max diff)",
+                  diff < 2e-3, f"max diff={diff}")
+        diff_conv1d = float(np.abs(conv1d_squeezed.astype(np.float64) - true["conv1d"].astype(np.float64)).max())
+        check(f"[{label}] conv1d matches HF ground truth (fp16 round-trip, max diff)",
+              diff_conv1d < 2e-3, f"max diff={diff_conv1d}")
+
+        # A_log: the -exp()/log(-x) round trip specifically -- task's own
+        # ~1e-3 fp16 target.
+        diff_alog = float(np.abs(out["A_log"].astype(np.float64) - true["A_log"].astype(np.float64)).max())
+        check(f"[{label}] A_log matches HF ground truth within ~1e-3 (fp16 round-trip)",
+              diff_alog < 2e-3, f"max diff={diff_alog}")
+
+        if num_v_per_k > 1:
+            # Discriminating power: the STILL-TILED stored value (what a
+            # transcoder that forgot to untile would emit) must NOT match
+            # the ground truth -- proves this test would actually catch a
+            # regression that skips the untile step, not just "it ran".
+            still_tiled_diff = float(np.abs(
+                stored["attn_gate"].astype(np.float64) - true["in_proj_z"].astype(np.float64)
+            ).max())
+            check(f"[{label}] discriminating power: still-tiled in_proj_z does NOT match ground truth "
+                  "(proves the untile step is actually needed/tested)",
+                  still_tiled_diff > 0.05, f"still-tiled max diff={still_tiled_diff}")
+            check(f"[{label}] discriminating power: transcoder output DOES differ from the raw tiled value",
+                  float(np.abs(out["in_proj_z"].astype(np.float64) - stored["attn_gate"].astype(np.float64)).max()) > 0.05)
+        else:
+            # num_v_per_k == 1: the tile transform is a documented no-op --
+            # stored value IS the ground truth already (only A_log's -exp
+            # inversion is non-trivial in this case).
+            check(f"[{label}] num_v_per_k==1: in_proj_z untile was a correct no-op (stored == truth)",
+                  np.allclose(stored["attn_gate"], true["in_proj_z"], atol=1e-6))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_qwen35_gdn_value_transforms_reorder():
+    """TASK K4 main acceptance test: grouped-value heads (num_v_per_k=2).
+    Ground truth -> forward-tiled fixture -> real transcoder -> compare."""
+    _run_qwen35_gdn_value_transform_case(
+        num_k=2, num_v=4, head_k=8, head_v=8, hidden=16, label="reorder", seed=13
+    )
+
+
+def test_qwen35_gdn_value_transforms_no_reorder():
+    """TASK K4: num_v_per_k==1 (linear_num_key_heads == linear_num_value_
+    heads) must still run correctly -- the tile transform degenerates to a
+    no-op, but A_log's -exp()/log(-x) inversion is unconditional and must
+    still be applied."""
+    _run_qwen35_gdn_value_transform_case(
+        num_k=4, num_v=4, head_k=8, head_v=8, hidden=16, label="no_reorder", seed=29
+    )
 
 
 def test_hf_config_overlay_and_model_type_sanity_check():
@@ -882,6 +1191,9 @@ def main():
     test_merge_pair_fixup_logic()
     test_qwen35_generic_mapping_partial()
     test_qwen35_gdn_full_tensor_set()
+    test_qwen35_gdn_missing_config_refuses()
+    test_qwen35_gdn_value_transforms_reorder()
+    test_qwen35_gdn_value_transforms_no_reorder()
     test_hf_config_overlay_and_model_type_sanity_check()
     test_hf_config_missing_architectures_infers_causal_lm()
 
