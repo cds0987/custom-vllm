@@ -551,6 +551,20 @@ Cú pháp (đọc từ factory.py + cpu/spec.py, đã smoke sạch trên 9B W4A1
   caching (phiên idle/finished resume qua prefix cache), không phải cách chạy
   thêm phiên live. Mamba-state offload thật sự thì chưa ai ship.
 
+## A/B attention backend (2026-08-10): KHÔNG CÓ trận đấu — FlashInfer là lựa chọn hợp lệ duy nhất
+
+- vLLM 0.26 bỏ env `VLLM_ATTENTION_BACKEND` (log "Unknown ... variable",
+  âm thầm bỏ qua — bẫy: hai lượt "A/B" đầu thực chất cùng một backend).
+  Thay bằng cờ CLI `--attention-backend` (xem `vllm serve --help=AttentionConfig`).
+- `--attention-backend FLASH_ATTN` + fp8_e4m3 KV → ValueError
+  "kv_cache_dtype not supported" ngay lúc start: FLASH_ATTN không tương
+  thích fp8 KV trong build này. Auto-selection xưa nay chỉ chào
+  ['FLASHINFER', 'TRITON_ATTN'] là vì vậy.
+- Kết luận: với config production (fp8 KV), FLASHINFER không chỉ thắng mà
+  là lựa chọn duy nhất — mặc định hiện tại đã đúng, đóng mục này. Số
+  FLASHINFER trên config mnbt1088: conc1 29,71 / conc32 567,5 / p95@0,3
+  2,6-2,7s — khớp mọi số đã đo từ trước (vì luôn là backend này).
+
 ## Khuyến nghị chọn cấu hình theo workload (L4)
 
 - Chat ngắn / latency thấp: Q4_K_M, DEQUANT unset, fp8_e4m3 KV.
