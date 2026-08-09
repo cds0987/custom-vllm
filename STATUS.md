@@ -430,6 +430,29 @@ Kết luận: front-load system-prompt/skills một lần cho pool phiên biến
 từ prefill-bound thành decode/cache-bound — TTFT warm ~1,4s bất kể context nền
 30-60K. Đây là pattern production hợp lệ trên L4. Không có bug upstream để báo.
 
+## TASK G (2026-08-09): GPTQ nén cả GDN — NHANH NHẤT chiến dịch, chất lượng WARN
+
+Chuỗi: quantize_gptq_9b.py --quantize-gdn (in_proj_qkv+z int4 g32,
+in_proj_b+a int8 g128 — mỗi cặp merge đồng nhất scheme) → fix checkpoint
+(922/923 keys) → serve với patch_vllm_gdn_quant_load (anchor đã sửa 777c084).
+
+- Quantize chỉ **13 phút** (không phải 90-120 dự kiến). Checkpoint **7,5GB**
+  (không phải 5,5-6 — cặp b/a nằm int8). Đã xóa base bf16 19GB lấy chỗ.
+- **Loader patch chạy thật**: log "Using MarlinLinearKernel for
+  CompressedTensorsWNA16" trên cả shard GDN, không RuntimeError/Assert.
+  Lần đầu tiên checkpoint Qwen3.5 nén-toàn-phần (cả 75% layer GDN) nạp
+  và serve được trên vLLM.
+- **Speed: conc1 37,71 (+27,8% vs 29,5) | conc32 768,47 (+36,5% vs 563)** —
+  vượt xa mốc thắng 620. Cấu hình 9B nhanh nhất chiến dịch.
+- **Quality: ppl SWE-bench 5,9646 vs champion 5,158 → ratio 1,156 = WARN**
+  (băng: PASS<1,10 / WARN<1,25 / FAIL>=1,25). Chưa đủ chuẩn thay champion
+  theo luật "không bypass chất lượng". Caveat: so với scalar cũ trong
+  STATUS.md, chưa chạy compare đối chứng cùng runtime.
+- Bẫy môi trường mới: kernel session mới của Colab không tự source
+  /tmp/vllm_env.sh → ImportError libcudart.so.13; phải export lại tay.
+- Tiếp: TASK G2 — biến thể dịu (in_proj int8 toàn bộ) tìm điểm PASS,
+  kèm tái tạo baseline RedHatAI cùng runtime cho phép so nghiêm.
+
 ## TASK F2/F2b (2026-08-09): SLA open-loop trên kịch bản shared-prefix 32K
 
 Cùng cấu hình TASK F. Payload: suffix unique 2.000-2.500 tok sau prefix chung
