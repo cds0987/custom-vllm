@@ -207,7 +207,6 @@ ANCHOR = '''    def weight_loader_v2(
             shard_id=loaded_shard_id,
             shard_offset=shard_offset,
             shard_size=shard_size,
-            tp_rank=self.tp_rank,
         )
 '''
 
@@ -299,7 +298,6 @@ PATCH = '''    def weight_loader_v2(
                 shard_id=loaded_shard_id,
                 shard_offset=shard_offset,
                 shard_size=shard_size,
-                tp_rank=self.tp_rank,
             )
         except AssertionError as e:
             packed_dim = getattr(param, "packed_dim", None)
