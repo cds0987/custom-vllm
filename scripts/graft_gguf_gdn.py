@@ -180,6 +180,30 @@ USAGE
         --gguf <path/to/Qwen3.5-9B-Q4_K_M.gguf> --out <out_dir> \\
         [--group-size 32]
 
+--frame accepts EITHER of two real module-naming conventions, detected
+automatically (see `detect_module_prefix`): a text-only checkpoint already
+run through fix_qwen35_hf_checkpoint.py ("model.layers.*"), or a
+genuinely multimodal-capable checkpoint -- RedHatAI/Qwen3.5-9B-
+quantized.w4a16 included -- used completely UNMODIFIED, straight from the
+Hub ("model.language_model.layers.*"). Do NOT run
+fix_qwen35_hf_checkpoint.py on the latter kind: that fixer's
+"language_model." strip is only correct for text-only checkpoints loaded
+through vLLM's Qwen3_5ForCausalLM class; a multimodal-capable checkpoint
+(one that still carries a real vision tower, "visual.*" weights) loads
+through Qwen3_5ForConditionalGeneration instead, which DOES have a
+`language_model` submodule and needs the RAW, un-stripped key convention
+for vLLM's own hf_to_vllm_mapper to find it -- confirmed empirically
+during TASK M-exec: stripping RedHatAI's checkpoint before grafting
+produced a checkpoint vLLM could not load at all
+(`ValueError: There is no module or parameter named 'model' in
+Qwen3_5ForConditionalGeneration`), and separately verified that
+RedHatAI's own `ignore` list already uses the raw
+"model.language_model.layers.*" convention (compressed-tensors config
+matching operates on the checkpoint's OWN raw key names, not vLLM's
+internal post-mapper module path) -- so grafting against the raw
+convention keeps config.json internally consistent too, not just the
+weights.
+
 Runs entirely on CPU (numpy/torch/gguf/safetensors), no GPU and no vLLM
 install required -- verification that vLLM actually loads and serves this
 checkpoint is out of scope for this box; see the Colab runbook this script
@@ -477,21 +501,21 @@ def narrow_ignore_list(ignore_list: list[str], grafted_names: list[str], probe_n
     return new_ignore
 
 
-def build_probe_names(num_hidden_layers: int, grafted_layers: set[int]) -> list[str]:
+def build_probe_names(num_hidden_layers: int, grafted_layers: set[int], module_prefix: str) -> list[str]:
     """Module names that must remain covered by whatever ignore rule
     previously covered the GDN block, used to catch an overly-broad
     narrowing (see `narrow_ignore_list`): the GDN submodules this script
     does NOT touch (conv1d/norm/out_proj/A_log/dt_bias) on every layer that
     has them, in_proj_* on layers this run did NOT graft, and a couple of
     definitely-unrelated modules (lm_head, a self_attn projection)."""
-    probes = ["lm_head", "model.layers.0.self_attn.q_proj"]
+    probes = ["lm_head", f"{module_prefix}layers.0.self_attn.q_proj"]
     other_gdn_submodules = ("conv1d", "norm", "out_proj", "A_log", "dt_bias")
     for layer in range(num_hidden_layers):
         for sub in other_gdn_submodules:
-            probes.append(f"model.layers.{layer}.linear_attn.{sub}")
+            probes.append(f"{module_prefix}layers.{layer}.linear_attn.{sub}")
         if layer not in grafted_layers:
             for suffix in GDN_SUFFIXES:
-                probes.append(f"model.layers.{layer}.linear_attn.{suffix}")
+                probes.append(f"{module_prefix}layers.{layer}.linear_attn.{suffix}")
     return probes
 
 
@@ -543,12 +567,68 @@ def load_frame_weight_map(frame_dir: Path) -> dict[str, str]:
         return {k: "model.safetensors" for k in f.keys()}
 
 
-def find_gdn_layers(weight_map: dict[str, str]) -> set[int]:
+_STRIPPED_QKV_PATTERN = re.compile(r"^model\.layers\.(\d+)\.linear_attn\.in_proj_qkv\.weight$")
+_RAW_QKV_PATTERN = re.compile(r"^model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_qkv\.weight$")
+
+
+def detect_module_prefix(weight_map: dict[str, str]) -> str:
+    """Detect whether this frame's GDN modules live under "model.layers.*"
+    or "model.language_model.layers.*", and return the corresponding
+    prefix (always ending in a literal "." so callers can just do
+    f"{prefix}layers.{{N}}...").
+
+    Two real, DIFFERENT conventions exist among this project's own champion
+    candidates, and picking the wrong one produces a checkpoint that
+    silently fails to serve:
+
+    - "model.layers.*" -- this project's own quantize_*.py outputs (saved
+      via plain AutoModelForCausalLM, no vision tower) after
+      fix_qwen35_hf_checkpoint.py strips the "language_model." segment so
+      vLLM's TEXT-ONLY Qwen3_5ForCausalLM class (which has no
+      `language_model` submodule) can load them.
+    - "model.language_model.layers.*" -- a genuinely multimodal-capable
+      checkpoint (RedHatAI/Qwen3.5-9B-quantized.w4a16 included: it ships a
+      real vision tower, "visual.*" weights) that vLLM loads through
+      Qwen3_5ForConditionalGeneration, which DOES have a `language_model`
+      submodule and expects the RAW, un-stripped key convention -- its own
+      hf_to_vllm_mapper reorders "model.language_model.*" (checkpoint) into
+      "language_model.model.*" (vLLM's internal module path) itself.
+      Confirmed empirically during TASK M-exec: RedHatAI serves
+      successfully completely unmodified straight from the Hub (no fixer
+      ever applied, this whole campaign); pre-stripping it before grafting
+      produced `ValueError: There is no module or parameter named 'model'
+      in Qwen3_5ForConditionalGeneration` at serve time -- the mapper's own
+      pattern match needs the RAW prefix to fire.
+
+    Never guesses when the frame doesn't unambiguously match exactly one of
+    the two -- raises GraftError instead.
+    """
+    has_stripped = any(_STRIPPED_QKV_PATTERN.match(k) for k in weight_map)
+    has_raw = any(_RAW_QKV_PATTERN.match(k) for k in weight_map)
+    if has_stripped and has_raw:
+        raise GraftError(
+            "--frame's weight_map matches BOTH the stripped ('model.layers.*') "
+            "and raw ('model.language_model.layers.*') GDN naming conventions "
+            "-- ambiguous, refusing to guess which one this frame actually "
+            "serves through."
+        )
+    if has_stripped:
+        return "model."
+    if has_raw:
+        return "model.language_model."
+    raise GraftError(
+        "--frame has no GDN in_proj_qkv weights matching either "
+        "'model.layers.*' or 'model.language_model.layers.*' -- cannot "
+        "determine this frame's module-name convention."
+    )
+
+
+def find_gdn_layers(weight_map: dict[str, str], module_prefix: str) -> set[int]:
     """Layer indices that have an (fp16, ignore-listed) in_proj_qkv weight
     in the frame -- i.e. GDN mixer layers, as opposed to full-attention
     layers (Qwen3.5-9B is a hybrid architecture, ~75% GDN / 25% full
     attention per this project's own measurements)."""
-    pat = re.compile(r"^model\.layers\.(\d+)\.linear_attn\.in_proj_qkv\.weight$")
+    pat = re.compile(rf"^{re.escape(module_prefix)}layers\.(\d+)\.linear_attn\.in_proj_qkv\.weight$")
     layers = set()
     for key in weight_map:
         m = pat.match(key)
@@ -564,7 +644,16 @@ def find_gdn_layers(weight_map: dict[str, str]) -> set[int]:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--frame", required=True, help="dir of the already-fixed champion checkpoint to graft into")
+    ap.add_argument("--frame", required=True, help=(
+        "dir of the champion checkpoint to graft into -- either convention "
+        "works (auto-detected, see detect_module_prefix): a text-only "
+        "checkpoint already run through fix_qwen35_hf_checkpoint.py "
+        "('model.layers.*'), or a genuinely multimodal-capable checkpoint "
+        "like RedHatAI/Qwen3.5-9B-quantized.w4a16 used completely "
+        "unmodified, straight from the Hub ('model.language_model.layers.*'"
+        ") -- do NOT run fix_qwen35_hf_checkpoint.py on the latter kind, it "
+        "breaks vLLM's ConditionalGeneration loading path for them"
+    ))
     ap.add_argument("--gguf", required=True, help="path to the source .gguf file (e.g. Q4_K_M)")
     ap.add_argument("--out", required=True, help="output checkpoint directory")
     ap.add_argument("--group-size", type=int, default=32, choices=MARLIN_SUPPORTED_GROUP_SIZES,
@@ -614,9 +703,15 @@ def main(argv=None) -> int:
     print(f"[graft_gguf_gdn] frame weight_scale dtype: {frame_dtype}", file=sys.stderr)
 
     weight_map = load_frame_weight_map(frame_dir)
-    gdn_layers = find_gdn_layers(weight_map)
+    module_prefix = detect_module_prefix(weight_map)
+    print(f"[graft_gguf_gdn] frame module-name convention: {module_prefix!r}"
+          + (" (raw, un-stripped -- multimodal-capable frame)" if module_prefix != "model." else " (stripped)"),
+          file=sys.stderr)
+    gdn_layers = find_gdn_layers(weight_map, module_prefix)
     if not gdn_layers:
-        raise GraftError("no model.layers.N.linear_attn.in_proj_qkv.weight keys found in --frame; nothing to graft")
+        raise GraftError(
+            f"no {module_prefix}layers.N.linear_attn.in_proj_qkv.weight keys found in --frame; nothing to graft"
+        )
     print(f"[graft_gguf_gdn] frame has {len(gdn_layers)} GDN layers: {sorted(gdn_layers)}", file=sys.stderr)
 
     print(f"[graft_gguf_gdn] reading {args.gguf}", file=sys.stderr)
@@ -625,11 +720,11 @@ def main(argv=None) -> int:
 
     # ---- pass 1: decide, per (layer, suffix), whether it can be grafted ----
     grafted: dict[tuple[int, str], bool] = {}
-    hf_module_name = {}  # (layer, suffix) -> "model.layers.N.linear_attn.in_proj_X"
+    hf_module_name = {}  # (layer, suffix) -> f"{module_prefix}layers.N.linear_attn.in_proj_X"
     ggml_name = {}
     for layer in sorted(gdn_layers):
         for suffix in GDN_SUFFIXES:
-            module = f"model.layers.{layer}.linear_attn.{suffix}"
+            module = f"{module_prefix}layers.{layer}.linear_attn.{suffix}"
             hf_module_name[(layer, suffix)] = module
             gname = f"blk.{layer}.{GGML_SUFFIX_FOR_HF_SUFFIX[suffix]}.weight"
             ggml_name[(layer, suffix)] = gname
@@ -675,7 +770,7 @@ def main(argv=None) -> int:
         error_report.append((module, rel_rms))
 
     # ---- pass 3: config.json surgery -----------------------------------------
-    probe_names = build_probe_names(num_hidden_layers or (max(gdn_layers) + 1), grafted_layers)
+    probe_names = build_probe_names(num_hidden_layers or (max(gdn_layers) + 1), grafted_layers, module_prefix)
     new_ignore = narrow_ignore_list(ignore_list, grafted_names, probe_names)
     new_group = build_new_config_group(quant_cfg, group_size)
     new_group["targets"] = sorted(grafted_names)

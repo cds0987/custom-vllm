@@ -218,6 +218,32 @@ def test_validate_merge_pairs_unit():
         check("error message names the mismatched pair", "in_proj_qkv" in str(e) or "qkv" in str(e), str(e))
 
 
+def test_detect_module_prefix_unit():
+    print("\n-- detect_module_prefix: direct unit test --")
+    stripped_map = {"model.layers.0.linear_attn.in_proj_qkv.weight": "model.safetensors"}
+    check("stripped convention -> 'model.'", graft.detect_module_prefix(stripped_map) == "model.")
+
+    raw_map = {"model.language_model.layers.0.linear_attn.in_proj_qkv.weight": "model.safetensors"}
+    check(
+        "raw (un-stripped, multimodal-capable) convention -> 'model.language_model.'",
+        graft.detect_module_prefix(raw_map) == "model.language_model.",
+    )
+
+    both_map = {**stripped_map, **raw_map}
+    try:
+        graft.detect_module_prefix(both_map)
+        check("both conventions present raises GraftError", False, "no exception raised")
+    except graft.GraftError:
+        check("both conventions present raises GraftError", True)
+
+    neither_map = {"lm_head.weight": "model.safetensors"}
+    try:
+        graft.detect_module_prefix(neither_map)
+        check("neither convention present raises GraftError", False, "no exception raised")
+    except graft.GraftError:
+        check("neither convention present raises GraftError", True)
+
+
 def test_narrow_ignore_list_unit():
     print("\n-- narrow_ignore_list: direct unit test --")
     ignore = ["lm_head", "re:.*linear_attn.*"]
@@ -414,6 +440,7 @@ def test_mismatched_pair_fails():
 def main():
     test_tile_untile_are_inverses()
     test_validate_merge_pairs_unit()
+    test_detect_module_prefix_unit()
     test_narrow_ignore_list_unit()
 
     out_dir, frame_dir, true_weights = test_end_to_end()
