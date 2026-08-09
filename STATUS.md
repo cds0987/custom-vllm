@@ -503,9 +503,29 @@ lừa lần nữa**: batch-đồng-loạt cho 1,3 req/s ảo; Poisson thật k�
 - Đối chứng output ngắn (0,5 QPS, max_tokens 100): TTFT p95 7,06→5,69s,
   vi phạm 48%→29%, e2e p95 74,5→24,9s. Giúp đáng kể nhưng KHÔNG cứu được
   SLA ở 0,5 — chi phí serialize prefill suffix là thật, output ngắn không xóa.
-- Đòn tiếp theo đúng chỗ (F2c, chưa chạy): tune `max-num-batched-tokens` /
-  cỡ chunk prefill để hạn chế prefill chen decode — không phải KV, không
-  phải admission policy.
+- TASK F2c (2026-08-10, đã chạy trên champion, cùng kịch bản): tune
+  `--max-num-batched-tokens` THẮNG một nấc thật:
+
+      variant       rate 0,3: p50/p95/vi phạm   rate 0,5: p95/vi phạm
+      8192 (mặc định)  1,37/2,99s/5%              7,40s/18%
+      2048             1,65/2,69s/0%              5,98s/17%
+      **1088 (sàn)**   **1,35/2,51s/0%**          5,84s/15%
+      8192+lpt2048     1,64/2,85s/3%              7,28s/18%
+
+  - **Config đề nghị cho kịch bản shared-prefix: --max-num-batched-tokens
+    1088.** SLA crossing chính thức: **0,3 req/s sạch** (trước là 0,2).
+  - SÀN CỨNG mới phát hiện: align mode assert `block_size <= max_num_batched_tokens`
+    và mamba block_size của model này = **1056** → 1024/512 KHÔNG khởi động
+    được (AssertionError lúc init, không phải kết quả hiệu năng);
+    `--long-prefill-token-threshold` cũng phải >= 1056.
+  - Nỗi lo "chunk nhỏ → cold TTFT tăng" KHÔNG xảy ra: prefix 30K đã cache
+    nóng, thứ bị chunk chỉ là suffix 2-2,5K (2-3 chunk) — thuế chunk không
+    đáng kể. lpt đơn lẻ gần như vô tác dụng — ngân sách batched-tokens mới
+    là đòn bẩy thật.
+  - Rate 0,5 vẫn KHÔNG mở được bằng đòn này (p95 5,84s): đúng chẩn đoán
+    F2b — vấn đề của 0,5 là decode-residency/tồn đọng concurrency, không
+    phải prefill chen. Đòn còn lại cho 0,5: rút ngắn completion, cap
+    concurrency/admission, hoặc chấp nhận SLA 0,3.
 - Lưu ý bench: script F2 nằm Colab-local (taskF2_sla_sweep.py), payload
   prefix-chung + suffix-unique, KHÔNG tag chống-cache (cache là chủ đích).
 
