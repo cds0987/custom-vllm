@@ -430,6 +430,35 @@ Kết luận: front-load system-prompt/skills một lần cho pool phiên biến
 từ prefill-bound thành decode/cache-bound — TTFT warm ~1,4s bất kể context nền
 30-60K. Đây là pattern production hợp lệ trên L4. Không có bug upstream để báo.
 
+## TASK F2/F2b (2026-08-09): SLA open-loop trên kịch bản shared-prefix 32K
+
+Cùng cấu hình TASK F. Payload: suffix unique 2.000-2.500 tok sau prefix chung
+30K, output 400 tok, Poisson open-loop. **Closed-loop (conc32 wall) đã đánh
+lừa lần nữa**: batch-đồng-loạt cho 1,3 req/s ảo; Poisson thật kịch ở ~0,45.
+
+| rate chào | đạt | TTFT p50 | TTFT p95 | >3s |
+|---|---|---|---|---|
+| 0,10 | 0,13 | 1,29s | 2,09s | 0% |
+| **0,20** | **0,20** | **0,41s** | **1,79s** | **0%** |
+| 0,30 | 0,31 | 0,42s | 3,65s | 6,6% |
+| 0,50 | 0,45 | 2,73s | 7,06s | 48% |
+| 1,0-2,0 | 0,45 | 10-23s | 21-45s | bão hòa, rớt hàng loạt |
+
+- **SLA (TTFT p95 < 3s): 0,2 req/s sạch; 0,3 là mép mềm (6,6% vi phạm).**
+- Chẩn đoán bằng /metrics mỗi 10s ở 0,3: `num_requests_waiting = 0` suốt
+  180s, KV usage đỉnh 37% → KHÔNG phải hết KV, KHÔNG phải queue admission.
+  Là **tranh chấp compute trong batch**: chunked-prefill của người mới
+  (~2,25K tok/req) chen vào giữa các bước decode của người đang chạy;
+  running leo 15-20 là TTFT/decode của tất cả chậm đi mà "waiting" vẫn 0.
+- Đối chứng output ngắn (0,5 QPS, max_tokens 100): TTFT p95 7,06→5,69s,
+  vi phạm 48%→29%, e2e p95 74,5→24,9s. Giúp đáng kể nhưng KHÔNG cứu được
+  SLA ở 0,5 — chi phí serialize prefill suffix là thật, output ngắn không xóa.
+- Đòn tiếp theo đúng chỗ (F2c, chưa chạy): tune `max-num-batched-tokens` /
+  cỡ chunk prefill để hạn chế prefill chen decode — không phải KV, không
+  phải admission policy.
+- Lưu ý bench: script F2 nằm Colab-local (taskF2_sla_sweep.py), payload
+  prefix-chung + suffix-unique, KHÔNG tag chống-cache (cache là chủ đích).
+
 ## TASK C2 (2026-08-09): CPU KV offload — mua context/độ phủ prefix, KHÔNG mua số phiên
 
 Cú pháp (đọc từ factory.py + cpu/spec.py, đã smoke sạch trên 9B W4A16):
