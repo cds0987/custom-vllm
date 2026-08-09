@@ -309,6 +309,14 @@ def test_end_to_end():
             check("weight_packed shape (N, K/4)", tuple(wp.shape) == (n, k // 4), str(wp.shape))
             check("weight_scale shape (N, K/group_size)", tuple(ws.shape) == (n, k // 32), str(ws.shape))
             check("weight_shape == [N, K]", wsh.tolist() == [n, k], str(wsh.tolist()))
+            # This fixture's config.json declares no dtype/torch_dtype field
+            # (predates dtype-aware frames), so resolve_frame_dtype falls back
+            # to float16 -- verifying that fallback actually lands on-disk,
+            # not just that it doesn't crash (see graft_gguf_gdn.py's
+            # resolve_frame_dtype docstring for why this must NOT be a
+            # hardcoded assumption for real frames like RedHatAI's, which are
+            # bfloat16).
+            check("weight_scale dtype == float16 (no-dtype-field fallback)", ws.dtype == torch.float16, str(ws.dtype))
 
             # (a, deeper) grafted weight, once dequantized, recovers the true
             # pre-tile HF weight (not just "low error vs. its own tiled

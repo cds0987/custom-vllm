@@ -339,7 +339,9 @@ def encode_int8_module(w_out_in: np.ndarray, group_size: int):
     for the transpose derivation).
 
     Returns (weight_packed (N, K_packed) int32, weight_scale (N, num_groups)
-    fp16, weight_shape (2,) int64 [N, K], rel_rms_error float).
+    float32 -- cast to the frame's own dtype by the caller, see
+    `resolve_frame_dtype` --, weight_shape (2,) int64 [N, K], rel_rms_error
+    float).
     """
     out_features, in_features = w_out_in.shape
     w_kn = np.ascontiguousarray(w_out_in.T)  # (K, N) -- gguf2marlin's convention
@@ -352,6 +354,68 @@ def encode_int8_module(w_out_in: np.ndarray, group_size: int):
     denom = float(np.sqrt((w_kn.astype(np.float64) ** 2).mean())) or 1.0
     rel_rms = float(np.sqrt(((w_ref.astype(np.float64) - w_kn.astype(np.float64)) ** 2).mean())) / denom
     return weight_packed, weight_scale, weight_shape, rel_rms
+
+
+# ==========================================================================
+# 3b. Frame dtype resolution -- weight_scale must match the frame's OWN
+#     on-disk dtype, not a hardcoded assumption.
+# ==========================================================================
+
+_DTYPE_STRING_MAP = {
+    "float16": torch.float16,
+    "fp16": torch.float16,
+    "half": torch.float16,
+    "bfloat16": torch.bfloat16,
+    "bf16": torch.bfloat16,
+    "float32": torch.float32,
+    "fp32": torch.float32,
+}
+
+
+def resolve_frame_dtype(cfg: dict, text_cfg: dict) -> torch.dtype:
+    """The grafted weight_scale tensor must match the frame's own on-disk
+    dtype: CompressedTensorsWNA16.create_weights allocates
+    GroupQuantScaleParameter as `torch.empty(..., dtype=params_dtype)`,
+    where params_dtype is the model's configured dtype -- NOT a fixed fp16
+    assumption. An earlier version of this script hardcoded
+    `weight_scale.astype(np.float16)` here; checked directly against
+    RedHatAI/Qwen3.5-9B-quantized.w4a16 (the actual --frame this script
+    targets), that frame's config.json declares `"dtype": "bfloat16"`
+    (root and text_config -- modern HF schema; older checkpoints may use
+    `"torch_dtype"` instead) and its own weight_scale tensors are BF16 on
+    disk (verified via safe_open against several mlp.*.weight_scale keys) --
+    a hardcoded fp16 graft would have written a dtype-mismatched tensor into
+    that checkpoint.
+
+    Checks, in order: cfg['dtype'], cfg['torch_dtype'], text_cfg['dtype'],
+    text_cfg['torch_dtype']. Falls back to float16 with a loud warning only
+    if none of those keys are present at all (e.g. this repo's own
+    synthetic test fixture in test_graft_gguf_gdn.py, which predates
+    dtype-aware frames and only ever exercises fp16) -- this function never
+    silently guesses for a frame that actually declares a dtype.
+    """
+    for source in (cfg, text_cfg):
+        for key in ("dtype", "torch_dtype"):
+            val = source.get(key)
+            if val:
+                dt = _DTYPE_STRING_MAP.get(str(val).lower())
+                if dt is None:
+                    raise GraftError(
+                        f"--frame's config.json declares dtype={val!r} which this "
+                        f"script doesn't recognize (known: {sorted(_DTYPE_STRING_MAP)}) "
+                        "-- refusing to guess a weight_scale dtype."
+                    )
+                return dt
+    print(
+        "[graft_gguf_gdn] WARNING: --frame's config.json has no dtype/torch_dtype "
+        "field (checked cfg root and cfg['text_config']) -- defaulting "
+        "weight_scale to float16. This is only correct if the frame's OTHER "
+        "weight_scale tensors are also fp16; verify against the frame's own "
+        "safetensors (safe_open + get_slice(...).get_dtype()) before trusting "
+        "this checkpoint.",
+        file=sys.stderr,
+    )
+    return torch.float16
 
 
 # ==========================================================================
@@ -546,6 +610,9 @@ def main(argv=None) -> int:
     print(f"[graft_gguf_gdn] GDN head shape: num_k={num_k} num_v={num_v} head_k={head_k} "
           f"head_v={head_v} reorder={reorder}", file=sys.stderr)
 
+    frame_dtype = resolve_frame_dtype(cfg, text_cfg)
+    print(f"[graft_gguf_gdn] frame weight_scale dtype: {frame_dtype}", file=sys.stderr)
+
     weight_map = load_frame_weight_map(frame_dir)
     gdn_layers = find_gdn_layers(weight_map)
     if not gdn_layers:
@@ -601,7 +668,9 @@ def main(argv=None) -> int:
 
         weight_packed, weight_scale, weight_shape, rel_rms = encode_int8_module(w, group_size)
         grafted_tensors[module + ".weight_packed"] = torch.from_numpy(weight_packed)
-        grafted_tensors[module + ".weight_scale"] = torch.from_numpy(weight_scale.astype(np.float16))
+        grafted_tensors[module + ".weight_scale"] = torch.from_numpy(
+            weight_scale.astype(np.float32)
+        ).to(frame_dtype)
         grafted_tensors[module + ".weight_shape"] = torch.from_numpy(weight_shape)
         error_report.append((module, rel_rms))
 
