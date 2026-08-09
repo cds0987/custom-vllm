@@ -436,8 +436,15 @@ Chuỗi: quantize_gptq_9b.py --quantize-gdn (in_proj_qkv+z int4 g32,
 in_proj_b+a int8 g128 — mỗi cặp merge đồng nhất scheme) → fix checkpoint
 (922/923 keys) → serve với patch_vllm_gdn_quant_load (anchor đã sửa 777c084).
 
-- Quantize chỉ **13 phút** (không phải 90-120 dự kiến). Checkpoint **7,5GB**
-  (không phải 5,5-6 — cặp b/a nằm int8). Đã xóa base bf16 19GB lấy chỗ.
+- Quantize: con số "13 phút" báo lần đầu là SAI (số đọc nhầm, log gốc mất
+  theo runtime recycle). Đo lại bằng timestamp ở run G2a: **~297s/layer ổn
+  định × 33 layer ≈ 160-165 phút** — khớp dự kiến 90-120+ ban đầu. Chi phí
+  là calibration per-sample (256 forward/layer, ~1s/it, GPU util chỉ ~12% —
+  latency-bound chứ không compute-bound; int4 hay int8 không đổi giá).
+  Muốn nhanh hơn ở vòng sau: giảm --num-samples 256→128 là chia đôi giờ,
+  đổi bằng rủi ro chất lượng chưa kiểm. Checkpoint **7,5GB** (không phải
+  5,5-6 — cặp b/a nằm int8). Đã xóa base bf16 19GB lấy chỗ (phải tải lại
+  ở G2 — giữ base trên disk nếu còn vòng quantize kế tiếp).
 - **Loader patch chạy thật**: log "Using MarlinLinearKernel for
   CompressedTensorsWNA16" trên cả shard GDN, không RuntimeError/Assert.
   Lần đầu tiên checkpoint Qwen3.5 nén-toàn-phần (cả 75% layer GDN) nạp
