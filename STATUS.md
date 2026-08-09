@@ -430,6 +430,28 @@ Kết luận: front-load system-prompt/skills một lần cho pool phiên biến
 từ prefill-bound thành decode/cache-bound — TTFT warm ~1,4s bất kể context nền
 30-60K. Đây là pattern production hợp lệ trên L4. Không có bug upstream để báo.
 
+## TASK C2 (2026-08-09): CPU KV offload — mua context/độ phủ prefix, KHÔNG mua số phiên
+
+Cú pháp (đọc từ factory.py + cpu/spec.py, đã smoke sạch trên 9B W4A16):
+
+    --kv-transfer-config '{"kv_connector": "OffloadingConnector", "kv_role": "kv_both",
+      "kv_connector_extra_config": {"cpu_bytes_to_use": 21474836480}}'
+
+- `cpu_bytes_to_use` BẮT BUỘC (thiếu là raise); extras: `eviction_policy` (lru),
+  `store_threshold`, `blocks_per_chunk`/`block_size` (loại trừ nhau).
+- Model hybrid BẮT BUỘC `--enable-prefix-caching` (assert trong
+  build_offloading_config.py: "Hybrid models need --enable-prefix-caching").
+- Buffer CPU cấp phát TRƯỚC lúc khởi động (RSS 37GB với budget 20GB) — không lazy.
+- Metrics /metrics đã nối đủ (kv_offload_total_bytes, cpu_cache_usage_perc...);
+  chỉ nhảy khi GPU KV thật sự bị đòi chỗ.
+- **Trần kiến trúc** (đọc code, chưa sweep thực nghiệm): OffloadingConnector chỉ
+  quản tier KV attention; trạng thái mamba/conv nằm pool riêng
+  (single_type_kv_cache_manager.py) và request đang chạy vẫn cần 1 slot mamba
+  sống — nên offload KHÔNG nâng được số phiên chạy đồng thời quá trần block
+  mamba. `align` chỉ đồng bộ evict mamba-state với evict KV-block dưới prefix
+  caching (phiên idle/finished resume qua prefix cache), không phải cách chạy
+  thêm phiên live. Mamba-state offload thật sự thì chưa ai ship.
+
 ## Khuyến nghị chọn cấu hình theo workload (L4)
 
 - Chat ngắn / latency thấp: Q4_K_M, DEQUANT unset, fp8_e4m3 KV.
