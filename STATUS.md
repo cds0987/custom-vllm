@@ -403,6 +403,33 @@ tài liệu chịu tải:
 Khuyến nghị production: tách chat/tài liệu ra hai instance trên cùng
 card — rẻ (weights 2B chỉ 1.8 GiB×2), không cần MPS, đuôi trễ sập 6–15×.
 
+## TASK F (2026-08-09): kịch bản shared-prefix 32K/65K — ĐẬU, đúng như thiết kế
+
+Cấu hình: 9B RedHatAI W4A16, `--max-model-len 32768 --enable-prefix-caching
+--mamba-cache-mode align`, fp8 KV. **Bẫy cấu hình mới**: trong build vLLM 0.26
+này prefix caching KHÔNG bật mặc định (log "Mamba cache mode is set to 'none'
+when prefix caching is disabled" bắn ra dù không truyền cờ tắt) — phải truyền
+`--enable-prefix-caching` tường minh, đừng tin mặc định.
+
+- **Correctness (cổng quyết định)**: cùng prompt (prefix 30K + suffix), temp=0,
+  output cache-hit **byte-identical** với output cold — ở CẢ 32K và 65K.
+  Hybrid GDN + APC align-mode đúng trên checkpoint này, không lỗi state-restore
+  dù mode vẫn gắn nhãn experimental.
+- **TTFT warm** (N=10, suffix unique 2000-2500 tok): p50=1,42s p95=1,43s
+  (cold 13,98s → warm 2,55s, 5,5×). Tốt hơn dự phóng 1,7-2s.
+- **Tải**: conc8 wall 10,86s / conc16 14,79s / conc32 24,51s — sạch, 0 preemption.
+- **Hit rate prefix cache**: 95,3% (2,80M/2,94M token) — prefix 30K chung áp đảo.
+- **VRAM/KV**: 19,3/23,0 GiB; KV 316.469 token, `kv_cache_max_concurrency`≈9,66
+  phiên 32K ĐẦY — nhưng với prefix cache chung, mỗi request chỉ tốn KV cho
+  ~2-2,5K suffix riêng, nên số request đồng thời thực tế cao hơn nhiều.
+- **65K**: nạp sạch (max-num-seqs 128), prefix 60K warm-up 26,93s
+  (~2.228 tok/s hiệu dụng — nhanh hơn trần 1.433 đã lập, ghi nhận chưa điều tra),
+  cache-hit 1,81s, output identical. KV 378.019 token, ≈5,77 phiên đầy.
+
+Kết luận: front-load system-prompt/skills một lần cho pool phiên biến workload
+từ prefill-bound thành decode/cache-bound — TTFT warm ~1,4s bất kể context nền
+30-60K. Đây là pattern production hợp lệ trên L4. Không có bug upstream để báo.
+
 ## Khuyến nghị chọn cấu hình theo workload (L4)
 
 - Chat ngắn / latency thấp: Q4_K_M, DEQUANT unset, fp8_e4m3 KV.
