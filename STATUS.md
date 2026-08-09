@@ -610,6 +610,24 @@ served mới chuẩn), 74 câu tuyển từ public-test, bench_skills.py:
   400 Bad Request); (b) kênh transfer base64: PHẢI verify sha256 từng chunk
   ngay lúc paste — 2 lần hỏng chunk im lặng đã bị manifest bắt được.
 
+## TASK L (2026-08-10): calibration nhanh — 10-11× nhanh hơn, chất lượng WARN → chỉ làm "chế độ nháp"
+
+`--calib-batch-size 8 --num-samples 128 --max-seq-len 1024` (không GDN):
+- Wall time **~14-15 phút** vs ~160 phút chuẩn (10-11×) — đúng ước tính.
+- ppl 5,9054 (98/99), ratio 1,1435 vs baseline RedHatAI tươi → **WARN**.
+- Phán quyết: KHÔNG dùng cho checkpoint quality-gated; hợp vai trò nháp
+  nhanh (kiểm pipeline/sanity) trước bản đầy đủ.
+- Caveat đối chứng: chưa có số ppl recipe CHUẨN cùng script không-GDN
+  (A2 bị kill từ trước) — so sánh 1-1 chuẩn-vs-nhanh cùng script còn thiếu.
+- **NGHI VẤN MỞ đáng giá (confound với kết luận TASK G/G2a)**: fastcalib
+  KHÔNG nén GDN mà ppl 5,905 ≈ G/G2a có nén GDN full-calib (5,962-5,965).
+  Gợi ý phần lớn khoảng cách ~15% có thể đến từ RECIPE GPTQ của ta nói
+  chung (bài calib/tham số) so với recipe RedHatAI, không riêng gì GDN.
+  Kết luận "GPTQ-Hessian trên GDN là thủ phạm" cần hạ cấp thành giả thuyết
+  chưa cô lập biến; graft M (0,98) vẫn đúng là đường thắng bất kể cách
+  diễn giải. Muốn cô lập thật: chạy chuẩn 256/bs1/2048 KHÔNG GDN (~160p)
+  rồi so ba chiều — để ngỏ, ưu tiên thấp.
+
 ## A/B attention backend (2026-08-10): KHÔNG CÓ trận đấu — FlashInfer là lựa chọn hợp lệ duy nhất
 
 - vLLM 0.26 bỏ env `VLLM_ATTENTION_BACKEND` (log "Unknown ... variable",
