@@ -327,18 +327,26 @@ LIMITATIONS (be honest)
   in_proj_qkv" (the real Qwen3.5 GDN name) AND "model.layers.{bid}.
   self_attn.qkv_proj" (a different, shorter, generic fused-QKV
   convention some other architecture uses for the same ggml role) --
-  the shortest-wins heuristic picks the wrong one here. Same issue hits
-  in_proj_b (collides with a shorter "self_attn.b_proj" alias). This is
-  NOT a hypothetical -- scripts/test_gguf2marlin.py's merge-pair test
-  unit-tests apply_merge_pair_fixups() directly against synthetic
-  records rather than depending on a real GGUF resolving these two
-  particular ambiguous names correctly, for exactly this reason. In
-  general, disambiguating "which of several architectures' naming
-  conventions applies" requires more than the ggml tensor's role alone
-  (e.g. the target HF config's actual layer_types) -- out of scope for a
-  fully generic script. Qwen3.5's GDN tensors specifically should still
-  go through scripts/transcode_gguf_to_gptq.py, which hardcodes the real
-  names instead of guessing.
+  the shortest-wins heuristic picks the wrong one here. In general,
+  disambiguating "which of several architectures' naming conventions
+  applies" requires more than the ggml tensor's role alone (e.g. the
+  target HF config's actual layer_types) -- out of scope for a fully
+  generic script.
+  TASK K3 UPDATE: this WAS silently producing wrong-but-plausible-looking
+  names for every one of Qwen3.5's GDN tensors (attn_qkv, attn_gate,
+  ssm_beta, ssm_a, ssm_dt, ssm_norm, ssm_out -- confirmed on a real
+  Qwen3.5-2B GGUF: vLLM raised "There is no module or parameter named
+  'layers.0.A_log' in Qwen3_5Model"), not landing them in `unmapped.*` as
+  this section previously (incorrectly) claimed. `qwen35_gdn_override_name`
+  (see its own docstring above, next to `resolve_arch`) now hardcodes the
+  correct "model.layers.{bid}.linear_attn.*" name for all nine GDN tensor
+  roles when `arch_enum` is Qwen3.5/Qwen3.5-MoE, overriding the generic
+  mapper for exactly those tensors -- same hardcode-the-known-exception
+  approach scripts/graft_gguf_gdn.py's GGML_SUFFIX_FOR_HF_SUFFIX already
+  used for the four in_proj_* tensors, extended here to the remaining
+  five (A_log, dt_bias, conv1d, norm, out_proj) gguf2marlin.py also names.
+  This fixes NAMING only -- see the very next bullet for what's still
+  outstanding.
 - Only Q4_0 / Q4_1 / Q4_K source tensors are converted to GPTQ int4.
   Q2_K/Q3_K/Q5_K/Q6_K/Q8_0/IQ*-only checkpoints have nothing to quantize
   (every tensor falls into the fp16-passthrough path) -- this script will
@@ -351,19 +359,36 @@ LIMITATIONS (be honest)
   config (attention heads, rope, activation, hybrid-layer metadata, ...)
   -- without it, the emitted config.json is NOT sufficient to serve any
   non-trivial architecture and this script says so loudly at the end.
-- No llama.cpp-side value/layout transforms are undone for hybrid/exotic
-  architectures (e.g. Qwen3.5's GDN A_log/dt_bias/-exp()/tiled-V-head
-  inversions -- see scripts/patch_gguf_qwen35_transforms.py and
-  scripts/transcode_gguf_to_gptq.py, which DOES implement those). Tensors
-  this script's generic name-mapper cannot resolve to a "model."-style HF
-  name are written under a synthetic `unmapped.<ggml_name>` key and
-  listed in the final report -- the checkpoint will not serve correctly
-  until those are handled by an architecture-specific follow-up. For
-  Qwen3.5 specifically, use scripts/transcode_gguf_to_gptq.py instead;
-  this script's Qwen3.5 test run only exercises the generic-mapping path
-  (the vanilla q/k/v/o/gate/up/down/norm/embed tensors resolve correctly;
-  the four GDN in_proj_* tensors and A_log/dt_bias are expected to land in
-  `unmapped.*` here, by design -- see scripts/test_gguf2marlin.py).
+- STILL OUTSTANDING (not part of TASK K3's scope -- naming only): no
+  llama.cpp-side VALUE/layout transforms are undone for Qwen3.5's GDN
+  tensors -- see scripts/patch_gguf_qwen35_transforms.py's docstring:
+  A_log is stored as -exp(A_log), linear_attn.norm's siblings are stored
+  as 1+weight (linear_attn.norm itself is excluded -- plain RMSNorm),
+  conv1d is squeezed (C,1,K)->(C,K), and V-head-carrying tensors
+  (in_proj_qkv's V-rows, in_proj_z, in_proj_a, in_proj_b, and per that
+  same docstring also A_log/dt_bias/conv1d's V-channels and out_proj's
+  columns) are stored in llama.cpp's "tiled" head order rather than HF's
+  "grouped" order whenever num_k_heads != num_v_heads. gguf2marlin.py
+  copies these tensors' raw dequantized VALUES through unchanged -- only
+  their NAMES are now correct (see the LIMITATIONS entry above). A
+  checkpoint built by this script for a real Qwen3.5 GGUF (any size with
+  grouped-value GDN heads, i.e. num_v_per_k > 1) will therefore now LOAD
+  without a naming crash but almost certainly still generate garbage,
+  exactly as scripts/patch_gguf_qwen35_transforms.py's own docstring
+  describes happening to the live vllm_gguf_plugin path before that patch
+  existed. scripts/transcode_gguf_to_gptq.py DOES implement all of these
+  inversions (see its `_undo_qwen35_gguf_transform`) and remains the
+  correct tool for a from-scratch Qwen3.5 GDN checkpoint; porting the same
+  inversions into gguf2marlin.py's generic pipeline is unresolved --
+  flag this explicitly before trusting a gguf2marlin.py-produced Qwen3.5
+  checkpoint's *generation quality* (as opposed to "does it load") on a
+  GGUF with grouped-value GDN heads.
+- Tensors this script's generic name-mapper cannot resolve to a
+  "model."-style HF name (any architecture other than Qwen3.5's own GDN
+  tensors, which are now hardcoded -- see above) are written under a
+  synthetic `unmapped.<ggml_name>` key and listed in the final report --
+  the checkpoint will not serve correctly until those are handled by an
+  architecture-specific follow-up.
 - No forward pass / activation calibration of any kind (RTN only, see
   ERROR BUDGET above).
 - Streaming: this script processes one GGUF tensor at a time (bounded
@@ -422,6 +447,111 @@ _GGUF_INTERNAL_ONLY_MODEL_TYPES = {
     "qwen35": "qwen3_5",
     "qwen35moe": "qwen3_5_moe",
 }
+
+# --------------------------------------------------------------------------
+# BUG (fallback architectures) FIX -- see module docstring.
+#
+# Reproduced on a real Qwen/Qwen3.5-2B config.json: its `text_config` sub-
+# dict has no 'architectures' field of its own (only the top-level config
+# does, per transformers' nested-config convention for a model that ALSO
+# ships a multimodal wrapper class). The old code unconditionally did
+# `cfg = cfg.get("text_config", cfg)`, discarding the top-level
+# 'architectures' entirely and leaving the emitted config.json without one
+# -- which sent vLLM down its OWN fallback (vllm/transformers_utils/
+# config.py, "Architecture mapping for models without explicit
+# architectures field": `MODEL_MAPPING_NAMES[config.model_type]`, i.e.
+# transformers' plain AutoModel registry, NOT AutoModelForCausalLM) and
+# produced "Qwen3_5TextModel" -- a bare backbone class with no LM head /
+# generate() support, not something vLLM can serve as a CausalLM.
+#
+# `resolve_architectures` below fixes the DISCARDING problem generically
+# (checks the top-level config too, not just whichever sub-dict `cfg` end
+# up aliasing) and, only if genuinely nothing is available anywhere, falls
+# back to inferring the correct *ForCausalLM* class from `model_type` --
+# using this small table of real, verified mappings first (not a single
+# hardcoded model: scripts/transcode_gguf_to_gptq.py's own
+# `cfg["architectures"] = ["Qwen3_5ForCausalLM"]` and vLLM's own model
+# registry, D:\Training\AI_Module\vllm\vllm\vllm\model_executor\models\
+# registry.py, are the source for each entry here), THEN a best-effort
+# generic naming-convention guess (loudly flagged as unverified) only for
+# a model_type this table doesn't recognize.
+_MODEL_TYPE_TO_CAUSAL_LM_CLASS = {
+    # Qwen3.5 text_config.model_type is "qwen3_5_text" (see D:\Training\
+    # AI_Module\vllm\vllm\vllm\transformers_utils\configs\qwen3_5.py:23);
+    # top-level model_type is "qwen3_5". Both text-only checkpoints this
+    # script produces load through the plain Qwen3_5ForCausalLM class
+    # (registry.py has no separate "*_text"-suffixed entry -- the
+    # ConditionalGeneration/multimodal wrapper is a different top-level
+    # class this script never targets, see LIMITATIONS).
+    "qwen3_5_text": "Qwen3_5ForCausalLM",
+    "qwen3_5": "Qwen3_5ForCausalLM",
+    "qwen3_5_moe_text": "Qwen3_5MoeForCausalLM",
+    "qwen3_5_moe": "Qwen3_5MoeForCausalLM",
+    "qwen2": "Qwen2ForCausalLM",
+    "qwen2_moe": "Qwen2MoeForCausalLM",
+    "qwen3": "Qwen3ForCausalLM",
+    "qwen3_moe": "Qwen3MoeForCausalLM",
+    "qwen3_next": "Qwen3NextForCausalLM",
+    "llama": "LlamaForCausalLM",
+    "mistral": "MistralForCausalLM",
+    "gemma": "GemmaForCausalLM",
+    "gemma2": "Gemma2ForCausalLM",
+    "phi3": "Phi3ForCausalLM",
+}
+
+
+def _guess_causal_lm_class_name(model_type: str) -> str:
+    """Best-effort transformers-style class name for a model_type this
+    script doesn't have a verified mapping for: CamelCase each
+    '_'-separated segment and append 'ForCausalLM' (e.g. "my_model" ->
+    "MyModelForCausalLM"). This is a GUESS, not a verified lookup -- unlike
+    transformers' actual model_type resolution (its own MODEL_FOR_CAUSAL_LM_
+    MAPPING_NAMES registry), there is no general rule that reliably
+    reconstructs an arbitrary architecture's exact class spelling from its
+    model_type string alone (case/digit-boundary conventions genuinely
+    differ per family -- e.g. the real "qwen3_5" keeps its underscore
+    before the digit in "Qwen3_5ForCausalLM", while "qwen2" has none at all
+    in "Qwen2ForCausalLM" -- this generic rule gets the latter right and
+    would get the former wrong, which is exactly why it's the FALLBACK,
+    checked only after `_MODEL_TYPE_TO_CAUSAL_LM_CLASS` above). Callers
+    MUST treat this as unverified and warn loudly (see
+    `resolve_architectures`)."""
+    return "".join(seg.capitalize() for seg in model_type.split("_") if seg) + "ForCausalLM"
+
+
+def resolve_architectures(raw_cfg: dict, text_cfg: dict) -> tuple[list[str] | None, bool]:
+    """Decide the output config.json's 'architectures' list for a
+    --hf-config overlay. Returns (architectures_or_None, is_unverified_guess).
+
+    Order (see the BUG (fallback architectures) FIX note above):
+      (a) raw_cfg's own top-level 'architectures', if present -- the
+          top-level config is what a real checkpoint repo's config.json
+          carries this in even when `text_config` doesn't have its own
+          copy (confirmed: Qwen/Qwen3.5-2B's real config.json).
+      (b) text_cfg's own 'architectures', if it happens to carry one
+          itself (covers a flat, non-nested config where `text_cfg IS
+          raw_cfg` and already has it -- a no-op restating (a), and a
+          nested config that unusually duplicates it on the sub-dict).
+      (c) infer from text_cfg's 'model_type' via
+          _MODEL_TYPE_TO_CAUSAL_LM_CLASS (verified mappings).
+      (d) best-effort generic guess (see _guess_causal_lm_class_name),
+          is_unverified_guess=True so the caller prints a loud warning.
+      (e) (None, False) if there's no model_type anywhere to guess from
+          either -- the caller already warns about that missing-model_type
+          case separately.
+    """
+    if raw_cfg.get("architectures"):
+        return list(raw_cfg["architectures"]), False
+    if text_cfg.get("architectures"):
+        return list(text_cfg["architectures"]), False
+    model_type = text_cfg.get("model_type")
+    if not model_type:
+        return None, False
+    known = _MODEL_TYPE_TO_CAUSAL_LM_CLASS.get(model_type)
+    if known is not None:
+        return [known], False
+    return [_guess_causal_lm_class_name(model_type)], True
+
 
 # --- int8 branch (--k-quants-to int8) -- see DECISION 1b below for the
 # vLLM-source evidence that this is a real, Marlin-served on-disk format
@@ -647,6 +777,104 @@ def resolve_arch(reader: "gguf.GGUFReader"):
     return arch_str, name_to_enum.get(arch_str)
 
 
+# --------------------------------------------------------------------------
+# BUG D FIX -- Qwen3.5's GDN (gated-delta-net) mixer tensors, hardcoded.
+#
+# This was the "unresolved gap" flagged in TASK I's LIMITATIONS (see the
+# module docstring's DECISION 3 LIMITATIONS entry) and confirmed on a real
+# Qwen3.5-2B GGUF checkpoint during Colab acceptance: vLLM raised
+# "There is no module or parameter named 'layers.0.A_log' in Qwen3_5Model"
+# (note: no "linear_attn." segment at all).
+#
+# Root cause, verified empirically (build_ggml_to_hf_map(gguf.MODEL_ARCH.
+# QWEN35, ...) run directly against the installed gguf==0.19.0 package):
+# the generic "shortest exact-suffix-hinted, else shortest overall"
+# tie-break picks the WRONG candidate for every one of these ggml roles,
+# not merely an ambiguous one that falls through to "unmapped.*" as the
+# module docstring previously (incorrectly) assumed:
+#
+#     blk.0.ssm_a       -> model.layers.0.A_log                (WRONG; want ...linear_attn.A_log)
+#     blk.0.ssm_dt.bias  -> model.layers.0.dt_proj.bias          (WRONG; want ...linear_attn.dt_bias)
+#     blk.0.ssm_conv1d  -> model.layers.0.conv1d               (WRONG; want ...linear_attn.conv1d)
+#     blk.0.ssm_norm    -> model.layers.0.mamba.norm            (WRONG; want ...linear_attn.norm)
+#     blk.0.ssm_out     -> model.layers.0.out_proj              (WRONG; want ...linear_attn.out_proj)
+#     blk.0.ssm_beta    -> model.layers.0.self_attn.b_proj      (WRONG; want ...linear_attn.in_proj_b)
+#     blk.0.attn_qkv    -> model.layers.0.self_attn.qkv_proj    (WRONG; want ...linear_attn.in_proj_qkv)
+#     blk.0.attn_gate   -> model.layers.0.self_attn.g_proj      (WRONG; want ...linear_attn.in_proj_z)
+#
+# (blk.0.ssm_alpha is the sole exception -- gguf's table has exactly one
+# "model."-style candidate for SSM_ALPHA, "...linear_attn.in_proj_a", so it
+# already resolves correctly; kept in the override table below anyway for
+# completeness/uniformity, it's a no-op there.)
+#
+# The reason a purely "generic, architecture-agnostic" tie-break can never
+# get these right: every one of gguf's own alias lists for these ggml
+# roles (tensor_mapping.py) mixes Qwen3.5's real name in with SHORTER
+# aliases from older/differently-shaped architectures (mamba-hf's bare
+# "model.layers.{bid}.A_log", chatglm/persimmon's "...query_key_value",
+# afmoe's "...self_attn.gate_proj", ...) that happen to share the same
+# ggml tensor purpose -- "shortest wins" and "ends with a known modern
+# suffix" both lose here, exactly as scripts/graft_gguf_gdn.py's own
+# GGML_SUFFIX_FOR_HF_SUFFIX table already had to hardcode for the four
+# in_proj_* tensors. This extends that same hardcode to the REMAINING GDN
+# tensors gguf2marlin.py (unlike graft_gguf_gdn.py) also has to name:
+# A_log, dt_bias, conv1d, norm, out_proj.
+#
+# Real HF names verified against vllm/model_executor/models/qwen3_5.py +
+# .../mamba/gdn/qwen_gdn_linear_attn.py (same source scripts/
+# transcode_gguf_to_gptq.py's PER_LAYER_TENSORS_LINEAR_ATTN table already
+# hardcodes -- cross-checked against it here, not re-derived from scratch).
+# Keyed by the RAW ggml tensor name's "blk.{bid}." tail (i.e. after
+# stripping the block prefix) rather than by the post-split "base" name,
+# because dt_bias needs special handling: llama.cpp stores it as a bare
+# bias parameter "blk.{bid}.ssm_dt.bias" (see scripts/
+# patch_gguf_tensor_mapping.py's docstring), but the real HF parameter name
+# is "linear_attn.dt_bias" -- a single leaf name that already ends in
+# "_bias", NOT "linear_attn.dt" + ".bias" (gguf2marlin's normal
+# base+suffix concatenation, correct for genuine Linear .weight/.bias
+# pairs, would produce the wrong "...dt.bias" here). Overriding on the
+# full raw name sidesteps that split/concatenate step entirely for this
+# tensor. A_log is similar in spirit (a bare parameter with NO suffix at
+# all, "blk.{bid}.ssm_a" -- see scripts/patch_gguf_empty_suffix.py) though
+# it doesn't hit the same concatenation bug; kept in this same table for
+# uniformity.
+# --------------------------------------------------------------------------
+_QWEN35_ARCHES = frozenset(
+    getattr(gguf.MODEL_ARCH, _name)
+    for _name in ("QWEN35", "QWEN35MOE")
+    if hasattr(gguf.MODEL_ARCH, _name)
+)
+
+_QWEN35_GDN_RAW_TAIL_TO_HF_SUFFIX = {
+    "ssm_a": "linear_attn.A_log",  # bare, no ggml suffix at all
+    "ssm_dt.bias": "linear_attn.dt_bias",  # bare bias, ggml suffix ".bias"
+    "attn_qkv.weight": "linear_attn.in_proj_qkv.weight",
+    "attn_gate.weight": "linear_attn.in_proj_z.weight",
+    "ssm_alpha.weight": "linear_attn.in_proj_a.weight",  # already correct generically; kept for uniformity
+    "ssm_beta.weight": "linear_attn.in_proj_b.weight",
+    "ssm_out.weight": "linear_attn.out_proj.weight",
+    "ssm_norm.weight": "linear_attn.norm.weight",
+    "ssm_conv1d.weight": "linear_attn.conv1d.weight",
+}
+_QWEN35_GDN_RAW_NAME_PATTERN = re.compile(
+    r"^blk\.(\d+)\.(" + "|".join(re.escape(k) for k in _QWEN35_GDN_RAW_TAIL_TO_HF_SUFFIX) + r")$"
+)
+
+
+def qwen35_gdn_override_name(raw_ggml_name: str) -> str | None:
+    """Full HF parameter name for a Qwen3.5 GDN tensor's raw ggml name (e.g.
+    "blk.3.ssm_a" -> "model.layers.3.linear_attn.A_log"), or None if
+    `raw_ggml_name` isn't one of the hardcoded GDN tensors above. Caller is
+    responsible for only invoking this when `arch_enum` is Qwen3.5/Qwen3.5-MoE
+    (see `_QWEN35_ARCHES`) -- these ggml roles are shared with other, unrelated
+    architectures where this override would be wrong."""
+    m = _QWEN35_GDN_RAW_NAME_PATTERN.match(raw_ggml_name)
+    if m is None:
+        return None
+    bid, tail = m.group(1), m.group(2)
+    return f"model.layers.{bid}." + _QWEN35_GDN_RAW_TAIL_TO_HF_SUFFIX[tail]
+
+
 # EXACT tail-suffixes of the single most common modern HF decoder naming
 # convention (Llama/Qwen/Qwen2/Qwen3/Mistral/Gemma/Phi/StableLM/...).
 # Picking "shortest candidate" alone is NOT a reliable proxy for "the
@@ -810,11 +1038,21 @@ def main():
     # ---- pass 1: classify every tensor (cheap -- no dequant yet) ----------
     records = []  # dict(hf_base, suffix, ggml_name, tensor, would_quantize, scheme, mapped)
     for t in reader.tensors:
-        base, suffix = split_ggml_name(t.name)
-        hf_base = ggml_to_hf.get(base)
-        mapped = hf_base is not None
-        if not mapped:
-            hf_base = f"unmapped.{base}"
+        # BUG D FIX: Qwen3.5's GDN mixer tensors take priority over the
+        # generic mapper -- see qwen35_gdn_override_name's docstring above
+        # for why the generic tie-break gets every one of these wrong.
+        override_name = (
+            qwen35_gdn_override_name(t.name) if arch_enum in _QWEN35_ARCHES else None
+        )
+        if override_name is not None:
+            hf_base, suffix = split_ggml_name(override_name)
+            mapped = True
+        else:
+            base, suffix = split_ggml_name(t.name)
+            hf_base = ggml_to_hf.get(base)
+            mapped = hf_base is not None
+            if not mapped:
+                hf_base = f"unmapped.{base}"
         is_always_fp16 = any(hf_base.endswith(s) for s in ALWAYS_FP16_HF_SUFFIXES)
         is_2d = len(t.shape) == 2
         gtype_ = gguf.GGMLQuantizationType(t.tensor_type)
@@ -895,8 +1133,8 @@ def main():
     # ---- config.json --------------------------------------------------------
     cfg = {}
     if args.hf_config:
-        cfg = json.loads(Path(args.hf_config).read_text(encoding="utf-8"))
-        cfg = cfg.get("text_config", cfg)
+        raw_cfg = json.loads(Path(args.hf_config).read_text(encoding="utf-8"))
+        cfg = raw_cfg.get("text_config", raw_cfg)
         # Minimal sanity check (Bug C in this repo's auto-marlin hook, see
         # scripts/patch_gguf_auto_marlin.py's module docstring): a caller
         # passing --hf-config is asserting "this is the REAL upstream
@@ -925,6 +1163,48 @@ def main():
                 "upstream HF config.json and not a copy of a GGUF-derived "
                 "one.", file=sys.stderr,
             )
+
+        # BUG (fallback architectures) FIX -- see resolve_architectures's
+        # docstring / the module-level comment above
+        # _MODEL_TYPE_TO_CAUSAL_LM_CLASS. Previously `cfg = cfg.get(
+        # "text_config", cfg)` above silently dropped a top-level
+        # 'architectures' field whenever text_config existed but had none
+        # of its own (Qwen/Qwen3.5-2B's real config.json does exactly
+        # this), leaving the emitted config.json without one at all and
+        # sending vLLM down its own "Qwen3_5TextModel" AutoModel fallback
+        # instead of the CausalLM class. Always resolve and (re-)write
+        # 'architectures' explicitly instead of relying on it having
+        # survived the text_config swap above.
+        architectures, is_guessed_arch = resolve_architectures(raw_cfg, cfg)
+        if architectures is not None:
+            had_it_already = bool(cfg.get("architectures"))
+            cfg["architectures"] = architectures
+            if is_guessed_arch:
+                print(
+                    "[gguf2marlin] WARNING: --hf-config has no 'architectures' "
+                    f"field (checked both the top level and text_config) and "
+                    f"model_type={_hf_model_type!r} is not in this script's "
+                    "known model_type -> class table (_MODEL_TYPE_TO_CAUSAL_LM_"
+                    f"CLASS) -- GUESSING architectures={architectures!r} from "
+                    "model_type by naming convention alone (CamelCase each "
+                    "'_'-segment + 'ForCausalLM'). This is UNVERIFIED and may "
+                    "be wrong (see _guess_causal_lm_class_name's docstring for "
+                    "why this can't be done reliably in general) -- if vLLM "
+                    "can't find this class, edit the output config.json's "
+                    "'architectures' field by hand with the real class name.",
+                    file=sys.stderr,
+                )
+            elif not had_it_already:
+                print(
+                    f"[gguf2marlin] NOTE: --hf-config had no 'architectures' on "
+                    f"text_config itself; inferred architectures={architectures!r} "
+                    f"from {'the top-level config' if raw_cfg.get('architectures') else f'model_type={_hf_model_type!r}'} "
+                    "instead of silently omitting the field (previous behaviour "
+                    "-- see the BUG (fallback architectures) note in the module "
+                    "docstring).", file=sys.stderr,
+                )
+        elif not _hf_model_type:
+            pass  # already warned above (no model_type field at all either).
     else:
         token_embd = next((t for t in reader.tensors if t.name == "token_embd.weight"), None)
         if token_embd is not None:

@@ -605,6 +605,116 @@ def test_qwen35_generic_mapping_partial():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_qwen35_gdn_full_tensor_set():
+    """TASK K3 / BUG D regression test: build a synthetic Qwen3.5-shaped
+    GGUF carrying the FULL set of GDN tensors (not just the one
+    unambiguous in_proj_a case test_qwen35_generic_mapping_partial covers)
+    -- attn_qkv, attn_gate, ssm_beta, ssm_alpha, ssm_out, ssm_norm,
+    ssm_conv1d (all real Linear .weight tensors), plus ssm_a (A_log, a bare
+    parameter with NO ggml suffix at all) and ssm_dt (dt_bias, written by
+    llama.cpp as "blk.{bid}.ssm_dt.bias") -- and check every one of them
+    lands under "model.layers.0.linear_attn.<name>" in the output
+    checkpoint, matching the real Qwen3.5 HF checkpoint's own naming
+    (scripts/transcode_gguf_to_gptq.py's PER_LAYER_TENSORS_LINEAR_ATTN).
+    Before qwen35_gdn_override_name existed, EVERY one of these (except
+    in_proj_a) resolved to a wrong-but-plausible-looking name instead
+    (verified directly against build_ggml_to_hf_map -- see the module
+    docstring's BUG D FIX comment) -- this asserts none of that wrong
+    output resurfaces, and specifically that no "bare" (non-linear_attn)
+    key like "model.layers.0.A_log" is present, matching the exact error
+    vLLM raised on a real Qwen3.5-2B GGUF ("There is no module or
+    parameter named 'layers.0.A_log' in Qwen3_5Model")."""
+    print("\n-- Qwen3.5 GDN: full tensor set gets linear_attn.* names (real GGUF + CLI) --")
+    tmp = Path(tempfile.mkdtemp(prefix="gguf2marlin_qwen35_gdn_"))
+    try:
+        gguf_path = tmp / "toy_qwen35_gdn.gguf"
+        out_dir = tmp / "out"
+        rng = np.random.default_rng(13)
+        hidden = 32
+        writer = gguf.GGUFWriter(str(gguf_path), "qwen35")
+        writer.add_block_count(1)
+        writer.add_tensor("token_embd.weight", rng.normal(0, 0.02, size=(8, hidden)).astype(np.float32))
+        writer.add_tensor("output_norm.weight", np.ones((hidden,), dtype=np.float32))
+        writer.add_tensor("blk.0.attn_norm.weight", np.ones((hidden,), dtype=np.float32))
+
+        def add_q4_0(ggml_name, out_f, in_f):
+            w = rng.normal(0, 0.05, size=(out_f, in_f)).astype(np.float32)
+            writer.add_tensor(ggml_name, gguf_quantize(w, gguf.GGMLQuantizationType.Q4_0),
+                               raw_dtype=gguf.GGMLQuantizationType.Q4_0)
+
+        # Real Linear .weight GDN tensors (2-D, Q4_0 -- quantizable).
+        add_q4_0("blk.0.attn_qkv.weight", 96, hidden)     # in_proj_qkv
+        add_q4_0("blk.0.attn_gate.weight", hidden, hidden)  # in_proj_z
+        add_q4_0("blk.0.ssm_alpha.weight", hidden, hidden)  # in_proj_a
+        add_q4_0("blk.0.ssm_beta.weight", hidden, hidden)   # in_proj_b
+        add_q4_0("blk.0.ssm_out.weight", hidden, hidden)    # out_proj
+        add_q4_0("blk.0.ssm_norm.weight", hidden, hidden)   # norm (2-D here just to exercise the mapper; real one is 1-D)
+        add_q4_0("blk.0.ssm_conv1d.weight", hidden, hidden)  # conv1d
+
+        # Bare / non-Linear GDN parameters -- F32, no quantization involved.
+        writer.add_tensor("blk.0.ssm_a", np.zeros((hidden,), dtype=np.float32))  # A_log, no suffix at all
+        writer.add_tensor("blk.0.ssm_dt.bias", np.zeros((hidden,), dtype=np.float32))  # dt_bias
+
+        writer.write_header_to_file()
+        writer.write_kv_data_to_file()
+        writer.write_tensors_to_file()
+        writer.close()
+
+        result = subprocess.run(
+            [sys.executable, str(GGUF2MARLIN_PATH), str(gguf_path), str(out_dir), "--group-size", "32"],
+            capture_output=True, text=True,
+        )
+        print(result.stdout[-2000:])
+        print(result.stderr[-2000:])
+        check("qwen3.5 GDN CLI run exits 0", result.returncode == 0, result.stderr[-1500:])
+        if result.returncode != 0:
+            return
+
+        with safe_open(out_dir / "model.safetensors", framework="pt") as f:
+            keys = set(f.keys())
+
+        expected_linear_attn_bases = [
+            "model.layers.0.linear_attn.in_proj_qkv",
+            "model.layers.0.linear_attn.in_proj_z",
+            "model.layers.0.linear_attn.in_proj_a",
+            "model.layers.0.linear_attn.in_proj_b",
+            "model.layers.0.linear_attn.out_proj",
+            "model.layers.0.linear_attn.norm",
+            "model.layers.0.linear_attn.conv1d",
+        ]
+        for base in expected_linear_attn_bases:
+            present = any(k.startswith(base + ".") for k in keys)
+            check(f"{base}.* present in output checkpoint", present, str(sorted(keys)))
+
+        check("A_log resolved to model.layers.0.linear_attn.A_log",
+              "model.layers.0.linear_attn.A_log" in keys, str(sorted(k for k in keys if "A_log" in k)))
+        check("dt_bias resolved to model.layers.0.linear_attn.dt_bias",
+              "model.layers.0.linear_attn.dt_bias" in keys, str(sorted(k for k in keys if "dt" in k)))
+
+        # The exact regression this test guards against: no "bare" (non-
+        # linear_attn) GDN key anywhere -- e.g. NOT "model.layers.0.A_log",
+        # NOT "model.layers.0.dt_proj.bias", NOT "model.layers.0.conv1d.*",
+        # NOT "model.layers.0.out_proj.*", NOT "model.layers.0.self_attn.
+        # qkv_proj.*"/"...g_proj.*"/"...b_proj.*" (all real wrong outputs
+        # measured from build_ggml_to_hf_map before this fix).
+        bad_bare_names = [
+            "model.layers.0.A_log",
+            "model.layers.0.dt_proj.bias",
+        ]
+        for bad in bad_bare_names:
+            check(f"no bare (non-linear_attn) key {bad!r}", bad not in keys)
+        bad_bare_prefixes = [
+            "model.layers.0.conv1d.", "model.layers.0.out_proj.",
+            "model.layers.0.self_attn.qkv_proj.", "model.layers.0.self_attn.g_proj.",
+            "model.layers.0.self_attn.b_proj.", "model.layers.0.mamba.norm.",
+        ]
+        stray = [k for k in keys for p in bad_bare_prefixes if k.startswith(p)]
+        check("no wrong-mapped (non-linear_attn) GDN keys under any legacy alias prefix",
+              not stray, str(stray))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_hf_config_overlay_and_model_type_sanity_check():
     """--hf-config: (a) a real config's fields (incl. model_type) land
     verbatim in the emitted config.json, overriding the generic fallback;
@@ -665,6 +775,104 @@ def test_hf_config_overlay_and_model_type_sanity_check():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_hf_config_missing_architectures_infers_causal_lm():
+    """TASK K3 / BUG (fallback architectures) regression test.
+
+    Reproduces the real Qwen/Qwen3.5-2B config.json shape: a top-level
+    dict with model_type "qwen3_5" and a nested "text_config" that has NO
+    'architectures' field of its own (only model_type "qwen3_5_text").
+    Before this fix, `cfg = cfg.get("text_config", cfg)` silently dropped
+    whatever 'architectures' the top level had (if any) and never
+    substituted anything, so a caller whose config only names
+    'architectures' at the top level -- or not at all -- got a
+    config.json with NO 'architectures' key, sending vLLM down its own
+    "Qwen3_5TextModel" AutoModel fallback (see the module docstring's BUG
+    (fallback architectures) FIX comment) instead of a real CausalLM
+    class.
+
+    Covers all three resolution paths in resolve_architectures:
+      (a) top-level 'architectures' present, text_config has none -> used
+          verbatim (not dropped).
+      (b)/(c) neither has 'architectures', but text_config.model_type is a
+          known entry in _MODEL_TYPE_TO_CAUSAL_LM_CLASS ("qwen3_5_text")
+          -> infers "Qwen3_5ForCausalLM", no "unverified guess" warning.
+      (d) neither has 'architectures' AND model_type is unrecognized ->
+          falls back to the generic CamelCase-guess with a loud WARNING
+          (this must not be silently accepted as if verified).
+    """
+    print("\n-- --hf-config: missing 'architectures' infers the right ForCausalLM class --")
+    tmp = Path(tempfile.mkdtemp(prefix="gguf2marlin_hfconfig_arch_"))
+    try:
+        gguf_path = tmp / "toy.gguf"
+        build_test_gguf(gguf_path)
+
+        # (a) top-level 'architectures' present; text_config lacks its own
+        # -- must NOT be dropped by the text_config swap.
+        cfg_top_level_arch = tmp / "cfg_top_level_arch.json"
+        cfg_top_level_arch.write_text(json.dumps({
+            "model_type": "qwen3_5",
+            "architectures": ["Qwen3_5ForConditionalGeneration"],
+            "text_config": {"model_type": "qwen3_5_text", "hidden_size": 999},
+        }), encoding="utf-8")
+        out_a = tmp / "out_a"
+        result_a = subprocess.run(
+            [sys.executable, str(GGUF2MARLIN_PATH), str(gguf_path), str(out_a),
+             "--group-size", "32", "--hf-config", str(cfg_top_level_arch)],
+            capture_output=True, text=True,
+        )
+        check("(a) CLI exits 0", result_a.returncode == 0, result_a.stderr[-1000:])
+        cfg_a = json.loads((out_a / "config.json").read_text())
+        check("(a) architectures preserved from the TOP-LEVEL config (not dropped)",
+              cfg_a.get("architectures") == ["Qwen3_5ForConditionalGeneration"],
+              str(cfg_a.get("architectures")))
+        check("(a) no 'unverified guess' WARNING (a real value was available)",
+              "GUESSING architectures" not in result_a.stderr, result_a.stderr[-1000:])
+
+        # (b) neither top-level nor text_config has 'architectures'; the
+        # real Qwen/Qwen3.5-2B shape -- known model_type -> known class,
+        # no warning needed (verified mapping, not a guess).
+        cfg_known_model_type = tmp / "cfg_known_model_type.json"
+        cfg_known_model_type.write_text(json.dumps({
+            "model_type": "qwen3_5",
+            "text_config": {"model_type": "qwen3_5_text", "hidden_size": 999},
+        }), encoding="utf-8")
+        out_b = tmp / "out_b"
+        result_b = subprocess.run(
+            [sys.executable, str(GGUF2MARLIN_PATH), str(gguf_path), str(out_b),
+             "--group-size", "32", "--hf-config", str(cfg_known_model_type)],
+            capture_output=True, text=True,
+        )
+        check("(b) CLI exits 0", result_b.returncode == 0, result_b.stderr[-1000:])
+        cfg_b = json.loads((out_b / "config.json").read_text())
+        check("(b) architectures inferred as Qwen3_5ForCausalLM from text_config.model_type",
+              cfg_b.get("architectures") == ["Qwen3_5ForCausalLM"], str(cfg_b.get("architectures")))
+        check("(b) NOT the wrong AutoModel-fallback class",
+              cfg_b.get("architectures") != ["Qwen3_5TextModel"], str(cfg_b.get("architectures")))
+        check("(b) no 'unverified guess' WARNING (known model_type table hit)",
+              "GUESSING architectures" not in result_b.stderr, result_b.stderr[-1000:])
+
+        # (d) unrecognized model_type, no architectures anywhere -> loud,
+        # explicit "this is a guess" warning, not a silent wrong answer.
+        cfg_unknown_model_type = tmp / "cfg_unknown_model_type.json"
+        cfg_unknown_model_type.write_text(json.dumps({
+            "model_type": "totally_unknown_arch",
+        }), encoding="utf-8")
+        out_d = tmp / "out_d"
+        result_d = subprocess.run(
+            [sys.executable, str(GGUF2MARLIN_PATH), str(gguf_path), str(out_d),
+             "--group-size", "32", "--hf-config", str(cfg_unknown_model_type)],
+            capture_output=True, text=True,
+        )
+        check("(d) CLI exits 0", result_d.returncode == 0, result_d.stderr[-1000:])
+        cfg_d = json.loads((out_d / "config.json").read_text())
+        check("(d) architectures best-effort guessed as TotallyUnknownArchForCausalLM",
+              cfg_d.get("architectures") == ["TotallyUnknownArchForCausalLM"], str(cfg_d.get("architectures")))
+        check("(d) WARNING printed that this architectures value is an unverified guess",
+              "GUESSING architectures" in result_d.stderr, result_d.stderr[-1000:])
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main():
     test_pack_rows_bit_order()
     test_symmetric_qzeros()
@@ -673,7 +881,9 @@ def main():
     test_q4k_int8_branch()
     test_merge_pair_fixup_logic()
     test_qwen35_generic_mapping_partial()
+    test_qwen35_gdn_full_tensor_set()
     test_hf_config_overlay_and_model_type_sanity_check()
+    test_hf_config_missing_architectures_infers_causal_lm()
 
     print("\n" + "=" * 72)
     if FAILURES:
