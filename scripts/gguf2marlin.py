@@ -347,6 +347,10 @@ LIMITATIONS (be honest)
   five (A_log, dt_bias, conv1d, norm, out_proj) gguf2marlin.py also names.
   This fixes NAMING only -- see the very next bullet for what's still
   outstanding.
+  TASK K5 UPDATE: the same wrong-shortest-candidate failure mode also hit
+  Qwen3.5's per-head attention norms (self_attn.q_norm/k_norm), discovered
+  while verifying the norm value-transform gap below -- see
+  qwen35_attn_norm_override_name's docstring; now hardcoded the same way.
 - Only Q4_0 / Q4_1 / Q4_K source tensors are converted to GPTQ int4.
   Q2_K/Q3_K/Q5_K/Q6_K/Q8_0/IQ*-only checkpoints have nothing to quantize
   (every tensor falls into the fp16-passthrough path) -- this script will
@@ -376,16 +380,32 @@ LIMITATIONS (be honest)
   GDN layers are still wrong. See qwen35_undo_gdn_transform's docstring for
   the exact per-tensor math and scripts/patch_gguf_qwen35_transforms.py's
   module docstring for the llama.cpp-side source of truth these invert.
-  STILL NOT covered (a separate, pre-existing gap, not part of TASK K4's
-  scope): llama.cpp's OTHER Qwen3.5-specific transform -- every
-  zero-centred RMSNorm.weight in the model (not just GDN's) is stored as
-  "1 + weight" (Qwen3_5RMSNorm computes x * (1 + w); linear_attn.norm
-  itself is the one exception, it's a plain RMSNorm with no transform).
-  gguf2marlin.py does not undo this for input_layernorm/
-  post_attention_layernorm/model.norm/etc., so a Qwen3.5 checkpoint this
-  script produces will still have every norm off by a constant +1 bias
-  until that gap is closed too -- flag this before trusting generation
-  quality end-to-end, not just the GDN mixer's own output.
+- TASK K5 UPDATE: the "STILL NOT covered" norm gap the previous entry
+  flagged is now closed too, after verifying it FIRST (not guessing in
+  either direction -- see qwen35_is_zero_centered_norm's write-up above
+  for the full evidence chain: patch_gguf_qwen35_transforms.py + this
+  repo's own upstream/02-...md bug report, which cites llama.cpp's actual
+  converter and reports empirical verification against a real Qwen3.5
+  GGUF + its HF checkpoint; independently cross-checked against vLLM's
+  own qwen3_5.py/qwen3_next.py/layernorm.py source). Every Qwen3.5
+  RMSNorm.weight EXCEPT linear_attn.norm is confirmed stored as "1 +
+  weight" -- this includes input_layernorm, post_attention_layernorm,
+  model.norm, AND the per-head self_attn.q_norm/k_norm (also
+  GemmaRMSNorm-backed, confirmed via Qwen3NextAttention's own `+ 1.0`
+  fused-kernel call); linear_attn.norm is excluded (plain RMSNormGated,
+  not zero-centered). gguf2marlin.py now subtracts 1.0 before the fp16
+  cast for every matching tensor, gated on the same Qwen3.5/Qwen3.5-MoE
+  arch check as the GDN transform (see qwen35_is_zero_centered_norm).
+  TASK K5 ALSO found and fixed an unrelated but Colab-blocking bug
+  surfaced during this verification: the generic name-mapper (DECISION 3)
+  mis-names self_attn.q_norm/k_norm for Qwen3.5 exactly like it mis-named
+  the GDN tensors in TASK K3 (picks a shorter, wrong candidate from an
+  unrelated architecture's alias list -- see qwen35_attn_norm_override_
+  name's docstring for the exact verified before/after). A wrong name
+  there means vLLM refuses to load the checkpoint outright, not silent
+  corruption, and every real Qwen3.5 size has full-attention layers (not
+  just GDN layers) so this was not a corner case -- now hardcoded
+  alongside the GDN override table.
 - Tensors this script's generic name-mapper cannot resolve to a
   "model."-style HF name (any architecture other than Qwen3.5's own GDN
   tensors, which are now hardcoded -- see above) are written under a
@@ -879,6 +899,108 @@ def qwen35_gdn_override_name(raw_ggml_name: str) -> str | None:
 
 
 # --------------------------------------------------------------------------
+# TASK K5 FIX -- Qwen3.5's per-head attention Q/K norms, hardcoded (same
+# class of bug as BUG D FIX above, discovered while verifying the norm
+# "1 + weight" value transform below: the generic "shortest 'model.'-
+# prefixed candidate" tie-break picks the WRONG name for these too).
+#
+# Verified directly against the installed gguf==0.19.0 package (not
+# guessed): gguf.get_tensor_name_map(MODEL_ARCH.QWEN35, ...)'s candidate
+# list for ATTN_Q_NORM/ATTN_K_NORM contains BOTH the real Qwen3.5 name
+# ("model.layers.{bid}.self_attn.q_norm", 31 chars) AND a shorter,
+# unrelated hybrid-arch alias ("model.layers.layers.{bid}.mixer.q", 29
+# chars, some other model's Mamba-mixer Q projection sharing the same
+# ggml role) -- and neither is in `_MODERN_HF_SUFFIXES` (that tuple only
+# hints "self_attn.q_proj" etc., not "self_attn.q_norm"), so the
+# shortest-overall fallback picks the 29-char wrong one. Confirmed via
+# `build_ggml_to_hf_map(gguf.MODEL_ARCH.QWEN35, 2)['blk.0.attn_q_norm']`
+# -> `'model.layers.layers.0.mixer.q'` before this fix. Cross-checked
+# against vllm/model_executor/models/qwen3_next.py's `Qwen3NextAttention`
+# (Qwen3_5DecoderLayer's base class): `self.q_norm = Qwen3NextRMSNorm(
+# self.head_dim, ...)` / `self.k_norm = Qwen3NextRMSNorm(...)`, real
+# parameter names "self_attn.q_norm.weight"/"self_attn.k_norm.weight".
+# A wrong name here means vLLM refuses to load the checkpoint at all
+# ("no module or parameter named ..."), not silent corruption -- so this
+# blocks the Colab acceptance run outright for any real Qwen3.5 GGUF that
+# has full-attention layers (every real Qwen3.5 size interleaves a
+# minority of full-attention layers among its GDN layers, so this is not
+# a corner case).
+# --------------------------------------------------------------------------
+_QWEN35_ATTN_NORM_RAW_TAIL_TO_HF_SUFFIX = {
+    "attn_q_norm.weight": "self_attn.q_norm.weight",
+    "attn_k_norm.weight": "self_attn.k_norm.weight",
+}
+_QWEN35_ATTN_NORM_RAW_NAME_PATTERN = re.compile(
+    r"^blk\.(\d+)\.(" + "|".join(re.escape(k) for k in _QWEN35_ATTN_NORM_RAW_TAIL_TO_HF_SUFFIX) + r")$"
+)
+
+
+def qwen35_attn_norm_override_name(raw_ggml_name: str) -> str | None:
+    """Full HF parameter name for a Qwen3.5 per-head attention Q/K norm's
+    raw ggml name (e.g. "blk.3.attn_q_norm.weight" -> "model.layers.3.
+    self_attn.q_norm.weight"), or None if `raw_ggml_name` isn't one of
+    these two tensors. Same calling convention as `qwen35_gdn_override_name`
+    (caller only invokes this for Qwen3.5/Qwen3.5-MoE arches)."""
+    m = _QWEN35_ATTN_NORM_RAW_NAME_PATTERN.match(raw_ggml_name)
+    if m is None:
+        return None
+    bid, tail = m.group(1), m.group(2)
+    return f"model.layers.{bid}." + _QWEN35_ATTN_NORM_RAW_TAIL_TO_HF_SUFFIX[tail]
+
+
+# --------------------------------------------------------------------------
+# TASK K5 FIX -- undo llama.cpp's Qwen3.5 norm "1 + weight" VALUE transform.
+#
+# Verified BEFORE implementing (not guessed in either direction):
+#   1. patch_gguf_qwen35_transforms.py's module docstring + code (already
+#      shipped, load-time equivalent of this fix for vllm_gguf_plugin) --
+#      "llama.cpp writes 1 + w for every zero-centred RMSNorm" -- and
+#      upstream/02-vllm-gguf-plugin-qwen35-weight-transforms-not-inverted.md
+#      (this repo's own upstream bug report), which cites llama.cpp's
+#      actual converter (`convert_hf_to_gguf.py`, `Qwen3NextModel.
+#      modify_tensors`/`_LinearAttentionVReorderBase.modify_tensors`) as
+#      the source, states the rule as "every *.norm.weight tensor except
+#      linear_attn.norm", and reports empirical verification: "A_log,
+#      dt_bias, conv1d, and norm weights match the HF reference to full
+#      precision" after applying the fix against a real Qwen3.5 GGUF +
+#      its original HF checkpoint.
+#   2. Cross-checked independently against vLLM's own Qwen3.5 modeling
+#      code (not just trusting the bug report):
+#        - vllm/model_executor/models/qwen3_5.py: `Qwen3_5RMSNorm =
+#          GemmaRMSNorm` (aliased import). vllm/model_executor/models/
+#          qwen3_next.py: `input_layernorm`, `post_attention_layernorm`,
+#          `self.norm` (final norm), AND `q_norm`/`k_norm` (per-head,
+#          inside `Qwen3NextAttention`) are ALL `Qwen3NextRMSNorm =
+#          GemmaRMSNorm` too -- so q_norm/k_norm ARE in scope (their real
+#          names end in "norm.weight" just like the others), confirmed
+#          further by `Qwen3NextAttention`'s own fused-kernel call site
+#          passing `self.q_norm.weight.float() + 1.0` /
+#          `self.k_norm.weight.float() + 1.0` explicitly.
+#        - vllm/model_executor/layers/layernorm.py: `GemmaRMSNorm.
+#          forward_native` computes `weight = self.weight.float() + 1.0`
+#          (docstring: "x * (1 + w) instead of x * w") -- confirms the
+#          zero-centered convention these tensors need.
+#        - linear_attn.norm is EXCLUDED: vllm/model_executor/layers/
+#          mamba/gdn/qwen_gdn_linear_attn.py uses plain `RMSNormGated`
+#          (vllm/model_executor/layers/layernorm.py), whose
+#          `reset_parameters` inits weight to `ones_` (not zero-centered,
+#          no "+1" anywhere in its forward) -- confirms linear_attn.norm
+#          must NOT have 1 subtracted, matching both sources above.
+# Conclusion: the transform DOES apply to real Qwen3.5 GGUFs, and DOES
+# include self_attn.q_norm/k_norm (not just input_layernorm/
+# post_attention_layernorm/model.norm) -- SSM_NORM (linear_attn.norm) is
+# the one confirmed exception.
+# --------------------------------------------------------------------------
+
+
+def qwen35_is_zero_centered_norm(hf_name: str) -> bool:
+    """True for a Qwen3.5 norm.weight tensor that llama.cpp stores as
+    1 + weight (every RMSNorm in the model except linear_attn.norm --
+    see the verification write-up immediately above)."""
+    return hf_name.endswith("norm.weight") and not hf_name.endswith("linear_attn.norm.weight")
+
+
+# --------------------------------------------------------------------------
 # TASK K4 FIX -- undo llama.cpp's Qwen3.5 GDN VALUE/LAYOUT transforms.
 #
 # TASK K3 (above) only fixed tensor NAMES: a GGUF Qwen3.5 GDN checkpoint
@@ -1261,12 +1383,14 @@ def main():
     # ---- pass 1: classify every tensor (cheap -- no dequant yet) ----------
     records = []  # dict(hf_base, suffix, ggml_name, tensor, would_quantize, scheme, mapped)
     for t in reader.tensors:
-        # BUG D FIX: Qwen3.5's GDN mixer tensors take priority over the
-        # generic mapper -- see qwen35_gdn_override_name's docstring above
-        # for why the generic tie-break gets every one of these wrong.
-        override_name = (
-            qwen35_gdn_override_name(t.name) if arch_enum in _QWEN35_ARCHES else None
-        )
+        # BUG D FIX / TASK K5 FIX: Qwen3.5's GDN mixer tensors AND its
+        # per-head attention Q/K norms take priority over the generic
+        # mapper -- see qwen35_gdn_override_name's / qwen35_attn_norm_
+        # override_name's docstrings above for why the generic tie-break
+        # gets every one of these wrong.
+        override_name = None
+        if arch_enum in _QWEN35_ARCHES:
+            override_name = qwen35_gdn_override_name(t.name) or qwen35_attn_norm_override_name(t.name)
         if override_name is not None:
             hf_base, suffix = split_ggml_name(override_name)
             base = t.name  # ggml_name is purely informational here (see below)
@@ -1374,6 +1498,13 @@ def main():
                     # GGUF's on-disk (channels, kernel) -> HF's nn.Conv1d
                     # (channels, 1, kernel) -- re-add the squeezed axis.
                     arr = arr[:, None, :]
+            # TASK K5: every Qwen3.5 zero-centered RMSNorm (everything
+            # ending in "norm.weight" except linear_attn.norm -- see
+            # qwen35_is_zero_centered_norm's verification write-up above)
+            # is stored as 1 + weight; subtract before the fp16 cast, same
+            # "transform on float, then cast" ordering as the GDN tensors.
+            if qwen35_gdn is not None and qwen35_is_zero_centered_norm(hf_name):
+                arr = arr - 1.0
             out_tensors[hf_name] = torch.from_numpy(arr.astype(np.float16))
             fp16_kept.append(hf_base)
 

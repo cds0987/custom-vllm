@@ -887,6 +887,36 @@ def _build_qwen35_gdn_ground_truth(rng, num_k, num_v, head_k, head_v, hidden):
     }, qk_dim, v_dim
 
 
+def _build_qwen35_norm_ground_truth(rng, hidden, head_k):
+    """HF-orientation ground truth for the norm tensors TASK K5 covers,
+    plus the llama.cpp-stored ("1 + weight", except linear_attn.norm)
+    values to write into the fixture GGUF. Returns (true, stored) where
+    both are {full_ggml_name: array} / matching HF-name-keyed dicts built
+    by the caller -- see qwen35_is_zero_centered_norm's verification
+    write-up in gguf2marlin.py for why linear_attn.norm (ssm_norm) is the
+    one tensor here NOT transformed."""
+    true = {
+        "input_layernorm": rng.normal(0, 0.3, size=(hidden,)).astype(np.float32),
+        "post_attention_layernorm": rng.normal(0, 0.3, size=(hidden,)).astype(np.float32),
+        "model_norm": rng.normal(0, 0.3, size=(hidden,)).astype(np.float32),
+        "q_norm": rng.normal(0, 0.3, size=(head_k,)).astype(np.float32),
+        "k_norm": rng.normal(0, 0.3, size=(head_k,)).astype(np.float32),
+        # linear_attn.norm: plain RMSNormGated, weight defaults near 1 (NOT
+        # zero-centered) -- llama.cpp stores it VERBATIM, no "+1".
+        "linear_attn_norm": rng.normal(1.0, 0.1, size=(hidden,)).astype(np.float32),
+    }
+    # ggml_name -> stored array (what llama.cpp's converter actually writes).
+    stored_by_ggml_name = {
+        "blk.0.attn_norm.weight": true["input_layernorm"] + 1.0,
+        "blk.0.post_attention_norm.weight": true["post_attention_layernorm"] + 1.0,
+        "output_norm.weight": true["model_norm"] + 1.0,  # global, no "blk.N." prefix
+        "blk.0.attn_q_norm.weight": true["q_norm"] + 1.0,
+        "blk.0.attn_k_norm.weight": true["k_norm"] + 1.0,
+        "blk.0.ssm_norm.weight": true["linear_attn_norm"],  # untouched
+    }
+    return true, stored_by_ggml_name
+
+
 def _tile_qwen35_gdn_for_gguf(true, num_k, num_v_per_k, head_v, qk_dim):
     """Forward llama.cpp-side transform (tile_v_heads_test + -exp + squeeze,
     which conv1d already is) -- the exact inverse of what gguf2marlin.py's
@@ -918,6 +948,7 @@ def _run_qwen35_gdn_value_transform_case(num_k, num_v, head_k, head_v, hidden, *
         rng = np.random.default_rng(seed)
         true, qk_dim, v_dim = _build_qwen35_gdn_ground_truth(rng, num_k, num_v, head_k, head_v, hidden)
         stored = _tile_qwen35_gdn_for_gguf(true, num_k, num_v_per_k, head_v, qk_dim)
+        norm_true, norm_stored_by_ggml_name = _build_qwen35_norm_ground_truth(rng, hidden, head_k)
 
         gguf_path = tmp / "toy.gguf"
         out_dir = tmp / "out"
@@ -935,6 +966,8 @@ def _run_qwen35_gdn_value_transform_case(num_k, num_v, head_k, head_v, hidden, *
         _bare_ggml_names = {"ssm_a", "ssm_dt.bias"}
         for suffix, arr in stored.items():
             ggml_name = f"blk.0.{suffix}" if suffix in _bare_ggml_names else f"blk.0.{suffix}.weight"
+            writer.add_tensor(ggml_name, arr.astype(np.float32))
+        for ggml_name, arr in norm_stored_by_ggml_name.items():
             writer.add_tensor(ggml_name, arr.astype(np.float32))
         writer.write_header_to_file()
         writer.write_kv_data_to_file()
@@ -964,6 +997,14 @@ def _run_qwen35_gdn_value_transform_case(num_k, num_v, head_k, head_v, hidden, *
                 "dt_bias": f.get_tensor("model.layers.0.linear_attn.dt_bias"),
                 "conv1d": f.get_tensor("model.layers.0.linear_attn.conv1d.weight"),
             }
+            norm_out = {
+                "input_layernorm": f.get_tensor("model.layers.0.input_layernorm.weight"),
+                "post_attention_layernorm": f.get_tensor("model.layers.0.post_attention_layernorm.weight"),
+                "model_norm": f.get_tensor("model.norm.weight"),
+                "q_norm": f.get_tensor("model.layers.0.self_attn.q_norm.weight"),
+                "k_norm": f.get_tensor("model.layers.0.self_attn.k_norm.weight"),
+                "linear_attn_norm": f.get_tensor("model.layers.0.linear_attn.norm.weight"),
+            }
 
         check(f"[{label}] conv1d is 3-D (channels, 1, kernel)",
               out["conv1d"].ndim == 3 and out["conv1d"].shape[1] == 1, str(out["conv1d"].shape))
@@ -982,6 +1023,41 @@ def _run_qwen35_gdn_value_transform_case(num_k, num_v, head_k, head_v, hidden, *
         diff_alog = float(np.abs(out["A_log"].astype(np.float64) - true["A_log"].astype(np.float64)).max())
         check(f"[{label}] A_log matches HF ground truth within ~1e-3 (fp16 round-trip)",
               diff_alog < 2e-3, f"max diff={diff_alog}")
+
+        # TASK K5: zero-centered norm "1 + weight" round trip -- covers
+        # input_layernorm/post_attention_layernorm/model.norm/q_norm/k_norm
+        # (all transformed) AND linear_attn.norm (must stay untouched).
+        for name in ("input_layernorm", "post_attention_layernorm", "model_norm", "q_norm", "k_norm",
+                     "linear_attn_norm"):
+            diff = float(np.abs(norm_out[name].astype(np.float64) - norm_true[name].astype(np.float64)).max())
+            check(f"[{label}] {name} matches HF ground truth (fp16 round-trip, max diff)",
+                  diff < 2e-3, f"max diff={diff}")
+
+        # Discriminating power: the STILL-"+1" stored value (what a
+        # transcoder that forgot the norm transform would emit verbatim)
+        # must NOT match the ground truth for the 5 transformed norms --
+        # proves this test would actually catch a regression that skips
+        # the subtraction, not just "it ran".
+        for name, ggml_key in (
+            ("input_layernorm", "blk.0.attn_norm.weight"),
+            ("post_attention_layernorm", "blk.0.post_attention_norm.weight"),
+            ("model_norm", "output_norm.weight"),
+            ("q_norm", "blk.0.attn_q_norm.weight"),
+            ("k_norm", "blk.0.attn_k_norm.weight"),
+        ):
+            still_plus_one_diff = float(np.abs(
+                norm_stored_by_ggml_name[ggml_key].astype(np.float64) - norm_true[name].astype(np.float64)
+            ).max())
+            check(f"[{label}] discriminating power: still-'+1' {name} does NOT match ground truth "
+                  "(proves the norm subtraction is actually needed/tested)",
+                  still_plus_one_diff > 0.5, f"still-'+1' max diff={still_plus_one_diff}")
+        # linear_attn.norm (ssm_norm) is the one exception -- its stored
+        # value IS the ground truth already (no transform); discriminating
+        # power here means: if the code wrongly subtracted 1 from it too,
+        # this check would catch that (diff would jump to ~1.0).
+        check(f"[{label}] linear_attn.norm (ssm_norm) correctly received NO transform",
+              np.allclose(norm_stored_by_ggml_name["blk.0.ssm_norm.weight"], norm_true["linear_attn_norm"],
+                          atol=1e-6))
 
         if num_v_per_k > 1:
             # Discriminating power: the STILL-TILED stored value (what a
