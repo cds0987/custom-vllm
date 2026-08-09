@@ -38,14 +38,51 @@ full failure history if either of these needs re-litigating):
   - int4, group_size=32, symmetric -- finer than RedHatAI's 128, GPTQ
     convention (group + activation reordering is the standard high-fidelity
     GPTQ recipe shape, matching what RedHatAI likely ran).
-  - `re:.*linear_attn.*` stays fully excluded (fp16). Quantizing ANY of
-    GDN's four input projections, at ANY bit width or algorithm, breaks
-    vLLM's merged-parameter load path for this architecture (v2's
-    AssertionError in load_merged_column_weight) -- this is a hard
-    constraint of the serving code, not something GPTQ escapes by being a
-    different algorithm from AWQ.
+  - `re:.*linear_attn.*` stays fully excluded (fp16) BY DEFAULT. Quantizing
+    ANY of GDN's four input projections used to break vLLM's
+    merged-parameter load path unconditionally (v2's AssertionError in
+    load_merged_column_weight) -- see --quantize-gdn below, now that
+    scripts/patch_vllm_gdn_quant_load.py fixes the loader for the case
+    that matters: merging shards that share one quantization scheme.
   - lm_head, conv1d, norm, embed all excluded, same reasoning as v3 (not
     nn.Linear, or a near-zero-size/quality tradeoff not worth touching).
+
+--quantize-gdn (default OFF, opt-in): narrows the GDN exclusion down to
+just conv1d/norms and quantizes the four in_proj_* GDN projections too.
+Requires scripts/patch_vllm_gdn_quant_load.py to be applied on the serving
+side (it patches MergedColumnParallelLinear.weight_loader_v2 to handle
+compressed-tensors packed shards, plus a weight_shape correctness fix --
+see that script's docstring for the full root-cause writeup). That loader
+fix only makes output-channel concatenation of independently-quantized
+shards valid when every shard merged into ONE vLLM parameter shares the
+exact same scheme (num_bits, group_size) -- concatenation happens along N
+(the output/channel axis), while compressed-tensors' int4/int8 packing
+lives along K (the input axis, confirmed by reading
+CompressedTensorsWNA16.create_weights: weight_packed's packed_dim=1 !=
+output_dim=0), so packed_K and the per-group scale width only match across
+shards when the scheme matches. vLLM fuses GDN's four HF projections into
+TWO params:
+    in_proj_qkv + in_proj_z -> in_proj_qkvz  (must share ONE scheme)
+    in_proj_b   + in_proj_a -> in_proj_ba    (must share ONE scheme)
+but the two PAIRS are separate vLLM params, so they may use different
+schemes from each other. This recipe therefore uses two mutually exclusive
+config_groups when --quantize-gdn is set:
+  - group_default (int4, group_size=32, the same scheme as everything
+    else): q/k/v/o_proj, gate/up/down_proj, in_proj_qkv, in_proj_z,
+    out_proj -- i.e. every Linear in the model except in_proj_b/in_proj_a.
+  - group_ba (int8, group_size=128): in_proj_b and in_proj_a only. Kept at
+    a coarser/higher-bit scheme deliberately -- vLLM's own comment on
+    in_proj_ba's construction notes "ba_proj doesn't support blockwise fp8
+    quantization" (qwen_gdn_linear_attn.py), and b/a feed the GDN gating
+    nonlinearities (sigmoid/exp) directly, which are far more sensitive to
+    quantization noise than a linear projection whose output goes through
+    a norm; this project's fp8 sensitivity finding (STATUS.md: "toàn bộ
+    độ nhạy fp8 của Qwen3.5 nằm ở đường GDN in_proj_ba") independently
+    points the same way. Both groups use targets that explicitly name
+    Linear submodules by suffix rather than a blanket ["Linear"] target,
+    so the two config_groups can never both match the same module --
+    avoids depending on unspecified group-precedence behavior when
+    targets overlap.
 
 offload_hessians=True is passed unconditionally: GPTQ's Hessian accumulation
 (the real thing this knob controls, unlike AWQModifier which has no Hessian
@@ -58,11 +95,17 @@ Usage:
     python scripts/quantize_gptq_9b.py
     # writes the checkpoint to /content/qwen35-9b-gptq (or $GPTQ_OUTPUT_DIR)
 
+    python scripts/quantize_gptq_9b.py --quantize-gdn
+    # also quantizes in_proj_qkv/in_proj_z (int4 g32) and in_proj_b/
+    # in_proj_a (int8 g128). Apply scripts/patch_vllm_gdn_quant_load.py
+    # on the serving side before loading this checkpoint.
+
 Then scripts/fix_qwen35_hf_checkpoint.py on the output before serving, same
 two mechanical fixes (language_model prefix + mrope_section) as every other
 checkpoint this project has quantized from HF-saved Qwen3.5 weights.
 """
 
+import argparse
 import os
 
 from compressed_tensors.quantization import QuantizationArgs, QuantizationScheme
@@ -71,6 +114,20 @@ from transformers import AutoTokenizer
 
 from llmcompressor import oneshot
 from llmcompressor.modifiers.quantization import GPTQModifier
+
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    "--quantize-gdn",
+    action="store_true",
+    default=False,
+    help=(
+        "Quantize GDN's in_proj_qkv/in_proj_z/in_proj_b/in_proj_a too "
+        "(default: keep the whole linear_attn block fp16). Requires "
+        "scripts/patch_vllm_gdn_quant_load.py on the serving side. See "
+        "this script's module docstring for the scheme constraints."
+    ),
+)
+args = parser.parse_args()
 
 MODEL_ID = "Qwen/Qwen3.5-9B"
 NUM_CALIBRATION_SAMPLES = 256
@@ -120,28 +177,68 @@ def tokenize(sample):
 
 ds = ds.map(tokenize, remove_columns=ds.column_names)
 
-config_groups = {
-    "group_default": QuantizationScheme(
-        targets=["Linear"],
-        weights=QuantizationArgs(
-            num_bits=4,
-            group_size=32,
-            strategy="group",
-            symmetric=True,
+if args.quantize_gdn:
+    # Two mutually exclusive, name-based target lists -- see the
+    # --quantize-gdn section of the module docstring for why in_proj_b/
+    # in_proj_a need their own (coarser) scheme while everything else,
+    # including in_proj_qkv/in_proj_z, shares group_default.
+    config_groups = {
+        "group_default": QuantizationScheme(
+            targets=[
+                "re:.*\\.(q_proj|k_proj|v_proj|o_proj"
+                "|gate_proj|up_proj|down_proj"
+                "|in_proj_qkv|in_proj_z|out_proj)$"
+            ],
+            weights=QuantizationArgs(
+                num_bits=4,
+                group_size=32,
+                strategy="group",
+                symmetric=True,
+            ),
         ),
-    ),
-}
+        "group_ba": QuantizationScheme(
+            targets=["re:.*\\.(in_proj_b|in_proj_a)$"],
+            weights=QuantizationArgs(
+                num_bits=8,
+                group_size=128,
+                strategy="group",
+                symmetric=True,
+            ),
+        ),
+    }
+    # Only conv1d/norm/embed (not nn.Linear -- irrelevant to quantization
+    # anyway) plus lm_head stay excluded; every in_proj_* is now covered by
+    # one of the two config_groups above instead of being ignored wholesale.
+    ignore = [
+        "lm_head",
+        "re:.*conv1d.*",
+        "re:.*norm.*",
+        "re:.*embed.*",
+    ]
+else:
+    config_groups = {
+        "group_default": QuantizationScheme(
+            targets=["Linear"],
+            weights=QuantizationArgs(
+                num_bits=4,
+                group_size=32,
+                strategy="group",
+                symmetric=True,
+            ),
+        ),
+    }
+    ignore = [
+        "lm_head",
+        "re:.*linear_attn.*",
+        "re:.*conv1d.*",
+        "re:.*norm.*",
+        "re:.*embed.*",
+    ]
 
 recipe = [
     GPTQModifier(
         config_groups=config_groups,
-        ignore=[
-            "lm_head",
-            "re:.*linear_attn.*",
-            "re:.*conv1d.*",
-            "re:.*norm.*",
-            "re:.*embed.*",
-        ],
+        ignore=ignore,
         offload_hessians=True,
     ),
 ]

@@ -59,7 +59,8 @@ for s in \
   patch_gguf_override_signature \
   patch_gguf_repack_q6k \
   patch_gguf_dequant_buffer \
-  patch_gguf_threeway_dispatch
+  patch_gguf_threeway_dispatch \
+  patch_vllm_gdn_quant_load
 do
   echo "=== $s ==="
   python "scripts/$s.py"
