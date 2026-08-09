@@ -254,6 +254,32 @@ GGML_SUFFIX_FOR_HF_SUFFIX = {
 }
 GDN_SUFFIXES = ("in_proj_qkv", "in_proj_z", "in_proj_b", "in_proj_a")
 MERGE_PAIRS = (("in_proj_qkv", "in_proj_z"), ("in_proj_b", "in_proj_a"))
+# vLLM's own MergedColumnParallelLinear fused parameter name for each HF
+# suffix (see qwen3_5.py's hf_to_vllm_mapper.orig_to_new_stacked table,
+# quoted in DECISION 4 below) -- config_groups' `targets` MUST use these
+# FUSED names, not the four individual unfused ones, or vLLM's own
+# compressed-tensors `find_matched_target` will never see them: it tries
+# (1) exact/regex match of the fused layer_name against `targets`, then
+# (2) a *substring* match of the module's class name (e.g.
+# "MergedColumnParallelLinear") against `targets`, and ONLY THEN (3) the
+# fused-vs-unfused-components reconciliation that would actually resolve
+# individual "in_proj_b"/"in_proj_a" entries against the fused "in_proj_ba"
+# layer. Step (2) matches ANY Linear-family module against a bare "Linear"
+# target via substring containment, so a champion's default catch-all
+# config_group (`targets: ["Linear"]`) always wins step (2) before step
+# (3) -- which holds the fused-component logic -- ever runs. (Confirmed
+# empirically during TASK M-exec: grafting with unfused per-projection
+# targets produced a checkpoint where vLLM's Marlin loader tried to merge
+# an int8-packed shard into a param sized for the champion's *int4* g128
+# default scheme, RuntimeError "cannot merge quantized shard 1 ...
+# different num_bits/group_size" -- root-caused by instrumenting
+# find_matched_target/_match_fused_layer directly, not guessed.)
+FUSED_NAME_FOR_HF_SUFFIX = {
+    "in_proj_qkv": "in_proj_qkvz",
+    "in_proj_z": "in_proj_qkvz",
+    "in_proj_b": "in_proj_ba",
+    "in_proj_a": "in_proj_ba",
+}
 GRAFT_GROUP_NAME = "graft_gdn_int8"
 
 
@@ -771,9 +797,21 @@ def main(argv=None) -> int:
 
     # ---- pass 3: config.json surgery -----------------------------------------
     probe_names = build_probe_names(num_hidden_layers or (max(gdn_layers) + 1), grafted_layers, module_prefix)
+    # `ignore` narrowing keeps using the four UNFUSED per-projection names --
+    # should_ignore_layer's own fused-component reconciliation (see that
+    # function's source) already handles resolving them against the fused
+    # layer correctly, unconditionally. `config_groups[*].targets` is
+    # different: it MUST use the FUSED parameter names (see
+    # FUSED_NAME_FOR_HF_SUFFIX's comment for why) or vLLM's
+    # find_matched_target will never route these layers to this scheme.
     new_ignore = narrow_ignore_list(ignore_list, grafted_names, probe_names)
     new_group = build_new_config_group(quant_cfg, group_size)
-    new_group["targets"] = sorted(grafted_names)
+    fused_target_names = sorted({
+        f"{module_prefix}layers.{layer}.linear_attn.{FUSED_NAME_FOR_HF_SUFFIX[suffix]}"
+        for (layer, suffix), do_graft in grafted.items()
+        if do_graft
+    })
+    new_group["targets"] = fused_target_names
 
     new_quant_cfg = dict(quant_cfg)
     new_quant_cfg["ignore"] = new_ignore

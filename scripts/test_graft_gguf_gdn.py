@@ -319,8 +319,18 @@ def test_end_to_end():
         new_group = qc["config_groups"].get("graft_gdn_int8")
         check("new config_group present", new_group is not None, str(qc["config_groups"].keys()))
         if new_group is not None:
-            check("new group targets exactly the 4 grafted modules",
-                  set(new_group["targets"]) == {f"model.layers.0.linear_attn.{s}" for s in graft.GDN_SUFFIXES},
+            # targets must be the FUSED parameter names ("in_proj_qkvz",
+            # "in_proj_ba"), not the four individual unfused ones -- see
+            # FUSED_NAME_FOR_HF_SUFFIX's comment in graft_gguf_gdn.py for
+            # why (vLLM's find_matched_target never resolves unfused
+            # per-projection targets against a fused MergedColumnParallel
+            # layer before its "Linear"-substring module-class fallback
+            # already claims the match).
+            check("new group targets are the 2 FUSED module names (not the 4 unfused ones)",
+                  set(new_group["targets"]) == {
+                      "model.layers.0.linear_attn.in_proj_qkvz",
+                      "model.layers.0.linear_attn.in_proj_ba",
+                  },
                   str(new_group["targets"]))
             check("new group num_bits == 8", new_group["weights"]["num_bits"] == 8, str(new_group["weights"]))
             check("new group group_size == 32", new_group["weights"]["group_size"] == 32, str(new_group["weights"]))
