@@ -263,11 +263,24 @@ def _custom_vllm_am_allow_k():
 
 
 def _custom_vllm_am_log(msg):
+    # NOTE: always print (in addition to trying vLLM's own logger). A
+    # logger named "custom_vllm.gguf_auto_marlin" is NOT a child of the
+    # "vllm" logger vLLM's own _configure_vllm_root_logger() attaches
+    # handlers to (its parent in the logging hierarchy is the bare root
+    # logger, not "vllm"), so .info()/.warning() calls on it are silently
+    # swallowed by Python's logging.lastResort fallback under vLLM's
+    # process -- confirmed empirically: every "auto-marlin: ..." message
+    # (cache hit, transcode complete, refuse) was invisible in server logs
+    # across an entire benchmarking campaign despite the hook running and
+    # deciding correctly every time. print() bypasses that hierarchy
+    # entirely and is unconditionally captured by whatever redirects
+    # `vllm serve`'s stdout (the normal way these logs get read).
     try:
         from vllm.logger import init_logger
         init_logger("custom_vllm.gguf_auto_marlin").info(msg)
     except Exception:
-        print(f"[gguf-auto-marlin] {{msg}}")
+        pass
+    print(f"[gguf-auto-marlin] {{msg}}", flush=True)
 
 
 def _custom_vllm_am_warn(msg):
@@ -275,7 +288,8 @@ def _custom_vllm_am_warn(msg):
         from vllm.logger import init_logger
         init_logger("custom_vllm.gguf_auto_marlin").warning(msg)
     except Exception:
-        print(f"[gguf-auto-marlin] WARNING: {{msg}}")
+        pass
+    print(f"[gguf-auto-marlin] WARNING: {{msg}}", flush=True)
 
 
 def _custom_vllm_am_resolve_local_file(model_ref):
