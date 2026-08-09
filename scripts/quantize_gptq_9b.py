@@ -84,6 +84,28 @@ config_groups when --quantize-gdn is set:
     avoids depending on unspecified group-precedence behavior when
     targets overlap.
 
+--quantize-gdn-int8 (default OFF, opt-in, mutually exclusive with
+--quantize-gdn): TASK G2a, a milder variant born from --quantize-gdn's
+result (SWE-bench ppl ratio 1.156 vs the RedHatAI champion -- a WARN, not
+a PASS, despite a big conc32 speed win). Hypothesis: int4 g32 on
+in_proj_qkv/in_proj_z (the mixed scheme --quantize-gdn used) is the
+quality-costly half of that recipe, since q/k/v feed attention-like score
+computation and z is the gate multiplier -- both plausibly as noise-
+sensitive as b/a already were shown to be (see --quantize-gdn's docstring
+above and STATUS.md's fp8-sensitivity finding). This variant keeps ALL
+FOUR GDN in_proj_* projections at the SAME coarser int8 g128 scheme
+(instead of splitting qkv/z into int4 g32 and b/a into int8 g128), while
+leaving every other Linear (attention proj, MLP) at the champion's int4
+g32. Since compressed-tensors packing is along K (see above), int8 g128
+on both fused pairs (in_proj_qkvz AND in_proj_ba) is still a same-scheme
+merge on each pair, so the loader patch's constraint is satisfied exactly
+as before -- no further loader changes needed. Expected outcome: GDN bytes
+still shrink 2x vs fp16 (not 4x like int4), so decode throughput should
+land between the fp16-GDN champion (563 tok/s @conc32) and the int4-GDN
+attempt (768 tok/s @conc32); ppl should sit much closer to the champion
+since int8 g128 is a materially gentler quantization than int4 g32 on the
+projections that turned out to matter.
+
 offload_hessians=True is passed unconditionally: GPTQ's Hessian accumulation
 (the real thing this knob controls, unlike AWQModifier which has no Hessian
 concept at all) is the memory-heavy step or a 9B model on a 23GB L4, and
@@ -116,15 +138,28 @@ from llmcompressor import oneshot
 from llmcompressor.modifiers.quantization import GPTQModifier
 
 parser = argparse.ArgumentParser()
-parser.add_argument(
+gdn_group = parser.add_mutually_exclusive_group()
+gdn_group.add_argument(
     "--quantize-gdn",
     action="store_true",
     default=False,
     help=(
-        "Quantize GDN's in_proj_qkv/in_proj_z/in_proj_b/in_proj_a too "
-        "(default: keep the whole linear_attn block fp16). Requires "
+        "Quantize GDN's in_proj_qkv/in_proj_z/in_proj_b/in_proj_a too, "
+        "mixed scheme (qkv/z at int4 g32, b/a at int8 g128) -- TASK G's "
+        "recipe (default: keep the whole linear_attn block fp16). Requires "
         "scripts/patch_vllm_gdn_quant_load.py on the serving side. See "
         "this script's module docstring for the scheme constraints."
+    ),
+)
+gdn_group.add_argument(
+    "--quantize-gdn-int8",
+    action="store_true",
+    default=False,
+    help=(
+        "TASK G2a: quantize all four GDN in_proj_* projections at a single "
+        "uniform int8 g128 scheme (milder than --quantize-gdn's mixed "
+        "int4/int8 split -- see module docstring). Requires "
+        "scripts/patch_vllm_gdn_quant_load.py on the serving side."
     ),
 )
 args = parser.parse_args()
@@ -209,6 +244,42 @@ if args.quantize_gdn:
     # Only conv1d/norm/embed (not nn.Linear -- irrelevant to quantization
     # anyway) plus lm_head stay excluded; every in_proj_* is now covered by
     # one of the two config_groups above instead of being ignored wholesale.
+    ignore = [
+        "lm_head",
+        "re:.*conv1d.*",
+        "re:.*norm.*",
+        "re:.*embed.*",
+    ]
+elif args.quantize_gdn_int8:
+    # TASK G2a: uniform int8 g128 across ALL FOUR GDN in_proj_* projections
+    # (both fused pairs), everything else stays at the champion's int4 g32.
+    # Each fused pair (in_proj_qkvz, in_proj_ba) is still internally
+    # same-scheme, so the merged-column loader patch's constraint holds.
+    config_groups = {
+        "group_default": QuantizationScheme(
+            targets=[
+                "re:.*\\.(q_proj|k_proj|v_proj|o_proj"
+                "|gate_proj|up_proj|down_proj|out_proj)$"
+            ],
+            weights=QuantizationArgs(
+                num_bits=4,
+                group_size=32,
+                strategy="group",
+                symmetric=True,
+            ),
+        ),
+        "group_gdn_int8": QuantizationScheme(
+            targets=[
+                "re:.*\\.(in_proj_qkv|in_proj_z|in_proj_b|in_proj_a)$"
+            ],
+            weights=QuantizationArgs(
+                num_bits=8,
+                group_size=128,
+                strategy="group",
+                symmetric=True,
+            ),
+        ),
+    }
     ignore = [
         "lm_head",
         "re:.*conv1d.*",
