@@ -299,6 +299,28 @@ nếu cần 3-bit thì chạy lại bộ 5-biến-thể trước khi dùng.
 Khuyến nghị production 9B: **ở lại Q4_K_M**. Đường "9B nhỏ hơn nữa" chuyển
 sang AWQ/GPTQ mixed-precision (giữ lớp nhạy bit cao có kiểm soát).
 
+## TEST 12 (2026-08-09): W4A16 9B thắng — AWQ/Marlin hạ GGUF ở CẢ HAI cỡ
+
+`RedHatAI/Qwen3.5-9B-quantized.w4a16` (có sẵn Hub, không cần tự quantize),
+fp8 KV, caching off, so với sàn GGUF Q4_K_M 9B (TEST 9 bậc 1):
+- decode conc 1/4/16/32: 29.5/107.0/362.7/**562.6** tok/s — **2.05×** @conc32
+- long-ctx 0.1 QPS: 1.433 vs 1.416 tok/s — hoà (+1.2%)
+- 5 câu dò: PASS (địa lý loop = bệnh nền đã biết, chấm theo control)
+- SWE-bench ppl: **5.158 vs 5.648 GGUF — ratio 0.913, candidate TỐT HƠN baseline**
+Vận hành: checkpoint compressed-tensors quảng cáo max_position_embeddings
+262144 → PHẢI set `--max-model-len 16384` tường minh kẻo KV-too-small;
+mamba-cache ceiling ở 9B: max_num_seqs ≤ số block log báo (299 @0.90 util).
+
+**KẾT LUẬN CHIẾN DỊCH — công thức chuẩn cho family Qwen3.5 trên L4:**
+| cỡ | khuyến nghị #1 | decode conc32 | ghi chú |
+|---|---|---|---|
+| 2B | AWQ W4A16 tự tạo + Marlin | 1859 | quantize_awq_2b.py, TTFT p50 2.59s |
+| 9B | RedHatAI W4A16 + Marlin | 563 | tải Hub, ppl còn tốt hơn GGUF |
+| mọi cỡ, bắt buộc GGUF | Q4_K_M + dispatch 3 đường | 856 (2B) / 274 (9B) | sàn chất lượng là Q4_K_M, đừng xuống thấp hơn |
+Cộng: fp8 KV luôn bật (sm89+), chunk 8192, prefix-caching off khi benchmark,
+không cờ fp32 SSM, plugin build sdist sm_89. Dưới 4-bit weights: mất cả
+chất lượng lẫn tốc độ (thang TEST 9) — 4-bit LÀ đáy thực dụng trên Ada.
+
 ## Profile kernel trên L4 (torch.profiler, eager, 2B — % CUDA time)
 
 | bucket | GGUF decode | GGUF prefill | fp16 decode |
