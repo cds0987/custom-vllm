@@ -88,6 +88,77 @@ surface (4 flat scalars vs compressed-tensors' config_groups/QuantizationArgs
 schema). Given the goal is "generate a correct checkpoint offline with no
 calibration and no vLLM install on this box", AutoGPTQ is the safer target.
 
+DECISION 1b -- OPT-IN int8 BRANCH FOR K-QUANTS (--k-quants-to int8)
+--------------------------------------------------------------------
+Default behaviour (--k-quants-to int4, unchanged from before this flag
+existed) still routes Q4_1/Q4_K through the ~5-15%-RMS symmetric-zero=8
+int4 re-fit described in DECISION 2/CORRECTION below, and leaves Q5_K/Q6_K
+untouched fp16. Passing --k-quants-to int8 instead promotes Q4_1, Q4_K,
+Q5_K, AND Q6_K to a GPTQ **8-bit** encoding (group_size stays whatever
+--group-size says, default 32): dequant each block with gguf-py's own
+dequantize() (same vetted reference as the int4 generic path), then
+requantize per-group(32) into a *symmetric* int8 GPTQ code -- 256 levels
+instead of 16 cuts the RTN quantization-noise floor roughly in proportion
+to level count, which is why the task's ~0.5% (5e-3) target is plausible
+for int8 where < 1e-2 was not for int4 (measured, see
+scripts/test_gguf2marlin.py's Q4_K-int8 test, not merely asserted here).
+
+Verified against the LOCAL vLLM checkout (D:\\Training\\AI_Module\\vllm\\vllm\\vllm)
+that GPTQ 8-bit + group_size=32 is a real Marlin-served on-disk format --
+not assumed:
+  - vllm/model_executor/layers/quantization/auto_gptq.py:101-104
+    AutoGPTQConfig.TYPE_MAP = {(4, True): scalar_types.uint4b8,
+    (8, True): scalar_types.uint8b128} -- 8-bit symmetric IS a first-class
+    AutoGPTQ/Marlin type, not something this format has to be coerced into.
+  - vllm/scalar_type.py:354 `uint8b128 = ScalarType.uint(8, 128)` -- bias
+    (zero point) is 128 = 2**(8-1), the same "2**(bits-1)" pattern as
+    uint4b8's bias=8=2**(4-1) (line 350). bits_zero_and_range() below
+    generalizes this rather than hardcoding two magic numbers.
+  - vllm/model_executor/layers/quantization/utils/quant_utils.py:705-706
+    SUPPORTED_GPTQ_QUANT_TYPES = [uint4b8, uint8b128];
+    SUPPORTED_GROUP_SIZES = [-1, 32, 64, 128] -- ONE group-size list shared
+    by both bit widths. vllm/model_executor/layers/quantization/utils/
+    marlin_utils.py:35 MARLIN_SUPPORTED_GROUP_SIZES is the same list and is
+    not indexed by bit width anywhere it's consumed
+    (_check_marlin_supported, marlin_utils.py:117-149, takes quant_type and
+    group_size as independent arguments). CONCLUSION: the task's suggested
+    fallback ("if 8-bit only supports group 128/-1, follow that") does not
+    apply to this codebase -- group_size=32 is valid for 8-bit exactly as
+    for 4-bit, confirmed by reading the actual assertion/check code, not
+    inferred from a resource-usage argument.
+  - pack_rows/pack_cols (quant_utils.py:758-805) are already parameterized
+    by num_bits with pack_factor = 32 // num_bits computed generically (4
+    for 8-bit vs 8 for 4-bit) -- "int8 packs fewer elements per int32" is
+    literally this formula, not a separate contract to reverse-engineer.
+    pack_rows() in this script (Section 1 below) already took a `bits`
+    argument for exactly this reason; only the *call sites* needed to stop
+    hardcoding BITS=4.
+  - Per-module MIXED bit widths in one checkpoint (Q4_0 tensors stay
+    int4 while promoted K-quant tensors go int8) are not a hack layered on
+    top of a single-scheme format: vllm/model_executor/layers/
+    quantization/utils/gptq_utils.py's override_config()/
+    get_dynamic_override() implement AutoGPTQConfig's documented `dynamic`
+    regex-keyed per-module override (auto_gptq.py:136-145's own docstring
+    example literally shows overriding `bits` for a layer subset), invoked
+    per-layer from get_linear_quant_method() (gptq_utils.py:117-147) via
+    `deepcopy(config)` + `override_config(cloned_config, prefix=prefix)`
+    before the LinearMethod is constructed -- i.e. every Linear layer gets
+    its OWN AutoGPTQConfig with bits/group_size/sym resolved from whichever
+    dynamic rule (if any) matches its prefix, entirely independent of every
+    other layer's resolution. This script writes one such rule per
+    promoted-to-int8 module: `{"+:" + re.escape(hf_base) + "$": {"bits": 8}}"`
+    in config.json's quantization_config["dynamic"] (base config stays
+    bits=4 for the Q4_0/Q4_1/Q4_K-int4 majority).
+
+Symmetric zero point qzeros/g_idx/pack_rows all now take a `bits` parameter
+(threaded through from the target scheme instead of the module-global BITS
+constant) so the SAME code paths serve both branches -- see Section 1/3
+below; nothing about Q4_0's byte-exact fast path changes.
+
+Not attempted here: promoting Q2_K/Q3_K/Q8_0/IQ*-family tensors to int8 --
+out of the task's explicit scope ("Q4_K/Q4_1/Q5_K/Q6_K"); they remain fp16
+passthrough in both --k-quants-to modes.
+
 DECISION 2 -- GGUF BLOCK LAYOUTS (from the installed `gguf==0.19.0`
 package; gguf/quants.py + gguf/constants.py; empirically cross-checked
 below against gguf.quants.quantize()/dequantize() as an independent
@@ -318,6 +389,7 @@ this box; see the Colab runbook printed at the end of a successful run.
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -336,11 +408,50 @@ QUANT_MIN, QUANT_MAX = -8, 7  # uint4b8 signed range
 ZERO_POINT = 8  # uint4b8's fixed bias
 MARLIN_SUPPORTED_GROUP_SIZES = (32, 64, 128)  # from marlin_utils.py (excl. -1 == no grouping)
 
+# --- int8 branch (--k-quants-to int8) -- see DECISION 1b below for the
+# vLLM-source evidence that this is a real, Marlin-served on-disk format
+# (not a guess): bias/range come straight from vllm/scalar_type.py's
+# ScalarType.uint(bits, 2**(bits-1)) definition, verified for both 4- and
+# 8-bit below rather than assumed to generalize.
+def bits_zero_and_range(bits: int) -> tuple[int, int, int]:
+    """(zero_point, quant_min, quant_max) for a symmetric uintNb(2**(N-1))
+    GPTQ code -- zero_point == 8 for bits=4 (scalar_types.uint4b8) and
+    == 128 for bits=8 (scalar_types.uint8b128), matching vllm/scalar_type.py:
+    uint4b8 = ScalarType.uint(4, 8), uint8b128 = ScalarType.uint(8, 128)."""
+    zp = 1 << (bits - 1)
+    return zp, -zp, zp - 1
+
 QUANTIZABLE_GGUF_TYPES = {
     gguf.GGMLQuantizationType.Q4_0,
     gguf.GGMLQuantizationType.Q4_1,
     gguf.GGMLQuantizationType.Q4_K,
 }
+
+# Additionally promoted to GPTQ int8 (not left fp16) when --k-quants-to int8
+# is passed -- see DECISION 1b. Q4_0 is deliberately NOT in this set: it
+# keeps its bit-exact int4 fast path regardless of --k-quants-to (task
+# requirement: "giu nguyen, dung pha").
+K_QUANT_INT8_ELIGIBLE_TYPES = {
+    gguf.GGMLQuantizationType.Q4_1,
+    gguf.GGMLQuantizationType.Q4_K,
+    gguf.GGMLQuantizationType.Q5_K,
+    gguf.GGMLQuantizationType.Q6_K,
+}
+
+
+def classify_target_bits(gtype, k_quants_to: str):
+    """GGUF block type + --k-quants-to mode -> GPTQ bit width to encode this
+    tensor as, or None to keep it fp16. Q4_0 is always bits=4 (bit-exact
+    fast path). In "int4" mode (default, matches the script's original
+    behaviour byte-for-byte): Q4_1/Q4_K -> bits=4 (the ~5-15% RMS lossy
+    generic path documented in the module docstring); Q5_K/Q6_K -> fp16
+    (unsupported, unchanged). In "int8" mode: Q4_1/Q4_K/Q5_K/Q6_K all -> 8.
+    """
+    if gtype == gguf.GGMLQuantizationType.Q4_0:
+        return 4
+    if k_quants_to == "int8":
+        return 8 if gtype in K_QUANT_INT8_ELIGIBLE_TYPES else None
+    return 4 if gtype in (gguf.GGMLQuantizationType.Q4_1, gguf.GGMLQuantizationType.Q4_K) else None
 
 # HF-name suffix pairs that vLLM fuses into ONE MergedColumnParallelLinear
 # parameter at load time (see scripts/patch_vllm_gdn_quant_load.py). Extend
@@ -389,14 +500,16 @@ def unpack_rows(packed: np.ndarray, bits: int, k: int, n: int) -> np.ndarray:
 
 
 def make_symmetric_qzeros(num_groups: int, n: int, bits: int) -> np.ndarray:
-    """All-zero-point-8 qzeros. Inert at inference (see DECISION 1 -- vLLM's
-    Marlin kernel discards qzeros content when zero_points=False), but
+    """All-zero-point qzeros (every nibble/byte == bits_zero_and_range(bits)[0],
+    i.e. 8 for bits=4, 128 for bits=8). Inert at inference (see DECISION 1 --
+    vLLM's Marlin kernel discards qzeros content when zero_points=False), but
     shape-correct and byte-correct for any tool that does read it."""
     pack_factor = 32 // bits
     assert n % pack_factor == 0
+    zero_point, _, _ = bits_zero_and_range(bits)
     packed_val = 0
     for i in range(pack_factor):
-        packed_val |= ZERO_POINT << (bits * i)
+        packed_val |= zero_point << (bits * i)
     return np.full((num_groups, n // pack_factor), packed_val, dtype=np.uint32).astype(np.int32)
 
 
@@ -446,16 +559,21 @@ def unpack_q4_0_exact(raw_bytes: np.ndarray, out_features: int, in_features: int
 # ==========================================================================
 
 
-def quantize_symmetric_group(w_kn: np.ndarray, group_size: int, n_grid: int = 9):
-    """fp32 (K,N) -> GPTQ int4 symmetric (zero=8), group_size along K.
+def quantize_symmetric_group(w_kn: np.ndarray, group_size: int, bits: int = BITS, n_grid: int = 9):
+    """fp32 (K,N) -> GPTQ int<bits> symmetric (zero=2**(bits-1)), group_size
+    along K.
 
     Plain min/max-derived scale, refined by a small clip-ratio grid search
     (shrinking the min/max envelope trades the rare outlier's error for
     better resolution on the bulk of the group -- standard RTN+clip
     baseline, uses only this tensor's own values, still calibration-free).
-    Returns (qweight int32 packed (K//8,N), scales fp16 (K//group_size,N),
-    w_ref fp32 (K,N) dequantized reconstruction, for error reporting).
+    Returns (qweight int32 packed (K//pack_factor,N), scales fp16
+    (K//group_size,N), w_ref fp32 (K,N) dequantized reconstruction, for
+    error reporting). `bits` defaults to the module's int4 constant for
+    backward compatibility with existing call sites; pass bits=8 for the
+    --k-quants-to int8 branch (see DECISION 1b).
     """
+    zero_point, quant_min, quant_max = bits_zero_and_range(bits)
     k, n = w_kn.shape
     assert k % group_size == 0, f"k={k} not divisible by group_size={group_size}"
     num_groups = k // group_size
@@ -463,13 +581,13 @@ def quantize_symmetric_group(w_kn: np.ndarray, group_size: int, n_grid: int = 9)
 
     max_val = wg.max(axis=1, keepdims=True)
     min_val = wg.min(axis=1, keepdims=True)
-    base_scale = np.maximum(np.abs(max_val / QUANT_MAX), np.abs(min_val / QUANT_MIN))
+    base_scale = np.maximum(np.abs(max_val / quant_max), np.abs(min_val / quant_min))
     base_scale = np.clip(base_scale, 1e-10, None)
 
     best_scale, best_mse = base_scale, None
     for ratio in np.linspace(1.0, 0.6, n_grid):
         s = np.clip(base_scale * ratio, 1e-10, None)
-        q_try = np.clip(np.round(wg / s), QUANT_MIN, QUANT_MAX)
+        q_try = np.clip(np.round(wg / s), quant_min, quant_max)
         mse = ((q_try * s - wg) ** 2).mean(axis=1, keepdims=True)
         if best_mse is None:
             best_mse, best_scale = mse, s
@@ -479,19 +597,21 @@ def quantize_symmetric_group(w_kn: np.ndarray, group_size: int, n_grid: int = 9)
             best_mse = np.where(better, mse, best_mse)
     scale = best_scale
 
-    q = np.clip(np.round(wg / scale), QUANT_MIN, QUANT_MAX)
+    q = np.clip(np.round(wg / scale), quant_min, quant_max)
     w_ref = (q * scale).reshape(k, n).astype(np.float32)
     scales_out = scale.reshape(num_groups, n).astype(np.float16)
-    q_biased = (q + ZERO_POINT).reshape(k, n).astype(np.int32)
-    qweight = pack_rows(q_biased, BITS, k, n)
+    q_biased = (q + zero_point).reshape(k, n).astype(np.int32)
+    qweight = pack_rows(q_biased, bits, k, n)
     return qweight, scales_out, w_ref
 
 
-def dequant_gptq_for_verification(qweight: np.ndarray, scales: np.ndarray, k: int, n: int, group_size: int) -> np.ndarray:
+def dequant_gptq_for_verification(qweight: np.ndarray, scales: np.ndarray, k: int, n: int, group_size: int, bits: int = BITS) -> np.ndarray:
     """Unpack + dequantize our own on-disk GPTQ tensors back to (K,N) fp32,
     independent of the encoder's internals -- the "read our own output
-    back" half of the per-tensor error report."""
-    q = unpack_rows(qweight, BITS, k, n).astype(np.float32) - ZERO_POINT
+    back" half of the per-tensor error report. `bits` defaults to int4 for
+    backward compatibility; pass bits=8 for an int8-packed tensor."""
+    zero_point, _, _ = bits_zero_and_range(bits)
+    q = unpack_rows(qweight, bits, k, n).astype(np.float32) - zero_point
     num_groups = k // group_size
     q = q.reshape(num_groups, group_size, n)
     s = scales.astype(np.float32).reshape(num_groups, 1, n)
@@ -572,13 +692,31 @@ def split_ggml_name(name: str):
     return name, ""
 
 
+def _scheme_key(r: dict):
+    """A record's quantization scheme for merge-pair comparison: the target
+    bit width (4 or 8), or None/False for "kept fp16". Prefers the "scheme"
+    key (bits or None) when present -- added for the --k-quants-to int8
+    branch, where two merge-pair members can BOTH be "would_quantize=True"
+    yet still be incompatible if one is int4 and the other int8 (different
+    pack_factor => different K-packed width, same failure mode as one side
+    being fp16, see module docstring). Falls back to the plain boolean
+    "would_quantize" for callers (and the existing unit test) that don't
+    supply "scheme" -- behaviourally identical to the original bool-only
+    check in that case.
+    """
+    if "scheme" in r:
+        return r["scheme"]
+    return r["would_quantize"]
+
+
 def apply_merge_pair_fixups(records: list[dict]) -> set[str]:
     """See KNOWN_MERGE_PAIRS / module docstring "MERGED-PROJECTION SCHEME
     CONSISTENCY". Given the pass-1 classification records (each a dict with
-    at least "hf_base" and "would_quantize"), returns the set of hf_base
-    names that must be forced to fp16 because their merge-pair partner
-    disagrees on quantized-vs-not. Factored out from main() so it's
-    directly unit-testable without a real GGUF file or subprocess --
+    at least "hf_base" and "would_quantize", optionally "scheme" -- see
+    _scheme_key), returns the set of hf_base names that must be forced to
+    fp16 because their merge-pair partner uses a different scheme (one
+    quantized/other not, OR one int4/other int8). Factored out from main()
+    so it's directly unit-testable without a real GGUF file or subprocess --
     resolving an architecture's ggml-name -> HF-name mapping (a separate,
     much harder problem for hybrid architectures, see LIMITATIONS) is not
     a precondition for exercising this logic correctly.
@@ -591,10 +729,11 @@ def apply_merge_pair_fixups(records: list[dict]) -> set[str]:
             for r_b in records if r_b["hf_base"] == r_a["hf_base"][: -len(suffix_a)] + suffix_b
         ]
         for r_a, r_b in pairs:
-            if r_a["would_quantize"] != r_b["would_quantize"]:
+            if _scheme_key(r_a) != _scheme_key(r_b):
                 print(f"[gguf2marlin] WARNING: merge pair ({r_a['hf_base']}, {r_b['hf_base']}) "
-                      f"has mismatched schemes (one quantizable, one not) -- forcing BOTH to "
-                      f"fp16 so vLLM's merged-column loader sees a consistent shard scheme "
+                      f"has mismatched schemes (scheme={_scheme_key(r_a)!r} vs "
+                      f"{_scheme_key(r_b)!r}) -- forcing BOTH to fp16 so vLLM's "
+                      f"merged-column loader sees a consistent shard scheme "
                       f"(see scripts/patch_vllm_gdn_quant_load.py)", file=sys.stderr)
                 forced_fp16.add(r_a["hf_base"])
                 forced_fp16.add(r_b["hf_base"])
@@ -622,6 +761,16 @@ def main():
                      help="optional path to a real upstream config.json to overlay "
                           "(architecture-specific fields this script cannot reconstruct "
                           "generically -- see LIMITATIONS in the module docstring)")
+    ap.add_argument("--k-quants-to", choices=("int4", "int8"), default="int4",
+                     help="default 'int4' -- Q4_1/Q4_K use the original ~5-15%%-RMS "
+                          "symmetric int4 re-fit (see CORRECTION under DECISION 2), "
+                          "Q5_K/Q6_K stay fp16, unchanged from before this flag existed. "
+                          "'int8' -- see DECISION 1b: promotes Q4_1/Q4_K/Q5_K/Q6_K to a "
+                          "GPTQ 8-bit (uint8b128) encoding instead (~0.5%% RMS target); "
+                          "Q4_0 is unaffected either way (always its int4 bit-exact fast "
+                          "path). Produces a MIXED-bits checkpoint using AutoGPTQConfig's "
+                          "'dynamic' per-module override (base bits=4, promoted modules "
+                          "get a 'dynamic' regex entry with bits=8).")
     args = ap.parse_args()
 
     out_dir = Path(args.out_dir)
@@ -644,7 +793,7 @@ def main():
           f"({len(ggml_to_hf)} known tensor purposes)", file=sys.stderr)
 
     # ---- pass 1: classify every tensor (cheap -- no dequant yet) ----------
-    records = []  # dict(hf_base, suffix, ggml_name, tensor, would_quantize, mapped)
+    records = []  # dict(hf_base, suffix, ggml_name, tensor, would_quantize, scheme, mapped)
     for t in reader.tensors:
         base, suffix = split_ggml_name(t.name)
         hf_base = ggml_to_hf.get(base)
@@ -653,13 +802,16 @@ def main():
             hf_base = f"unmapped.{base}"
         is_always_fp16 = any(hf_base.endswith(s) for s in ALWAYS_FP16_HF_SUFFIXES)
         is_2d = len(t.shape) == 2
-        would_quantize = (
-            mapped and is_2d and not is_always_fp16
-            and gguf.GGMLQuantizationType(t.tensor_type) in QUANTIZABLE_GGUF_TYPES
+        gtype_ = gguf.GGMLQuantizationType(t.tensor_type)
+        scheme = (
+            classify_target_bits(gtype_, args.k_quants_to)
+            if (mapped and is_2d and not is_always_fp16)
+            else None
         )
+        would_quantize = scheme is not None
         records.append({
             "hf_base": hf_base, "suffix": suffix, "ggml_name": base,
-            "tensor": t, "would_quantize": would_quantize, "mapped": mapped,
+            "tensor": t, "would_quantize": would_quantize, "scheme": scheme, "mapped": mapped,
         })
 
     # ---- pass 2: merge-pair scheme-consistency fixups ----------------------
@@ -667,8 +819,8 @@ def main():
 
     # ---- pass 3: do the actual work ----------------------------------------
     out_tensors: dict[str, torch.Tensor] = {}
-    quantized_modules, fp16_kept, unmapped_names = [], [], []
-    error_report = []  # (hf_base, gguf_type_name, rel_rms)
+    quantized_modules, int8_modules, fp16_kept, unmapped_names = [], [], [], []
+    error_report = []  # (hf_base, gguf_type_name, bits, rel_rms)
 
     for r in records:
         t = r["tensor"]
@@ -676,24 +828,25 @@ def main():
         hf_name = hf_base + suffix
         gtype = gguf.GGMLQuantizationType(t.tensor_type)
         quantize_this = r["would_quantize"] and hf_base not in forced_fp16
+        bits = r["scheme"] if quantize_this else None
 
         if not r["mapped"]:
             unmapped_names.append(hf_base)
 
         if quantize_this:
             out_features, in_features = int(t.shape[-1]), int(t.shape[0])
-            if gtype == gguf.GGMLQuantizationType.Q4_0 and group_size == 32:
+            if gtype == gguf.GGMLQuantizationType.Q4_0 and group_size == 32 and bits == 4:
                 q_biased, scales = unpack_q4_0_exact(t.data, out_features, in_features)
-                qweight = pack_rows(q_biased.astype(np.int32), BITS, in_features, out_features)
-                w_ref = dequant_gptq_for_verification(qweight, scales, in_features, out_features, group_size)
+                qweight = pack_rows(q_biased.astype(np.int32), 4, in_features, out_features)
+                w_ref = dequant_gptq_for_verification(qweight, scales, in_features, out_features, group_size, bits=4)
                 w_pre = np.ascontiguousarray(gguf_dequantize(t.data, gtype), dtype=np.float32).T
             else:
                 w_pre_out_in = np.ascontiguousarray(gguf_dequantize(t.data, gtype), dtype=np.float32)
                 w_pre = w_pre_out_in.T  # (K, N)
-                qweight, scales, w_ref = quantize_symmetric_group(w_pre, group_size)
+                qweight, scales, w_ref = quantize_symmetric_group(w_pre, group_size, bits=bits)
 
             k_dim, n_dim = in_features, out_features
-            qzeros = make_symmetric_qzeros(k_dim // group_size, n_dim, BITS)
+            qzeros = make_symmetric_qzeros(k_dim // group_size, n_dim, bits)
             g_idx = (np.arange(k_dim, dtype=np.int32) // group_size)
 
             out_tensors[hf_name.replace(".weight", ".qweight")] = torch.from_numpy(np.ascontiguousarray(qweight))
@@ -701,10 +854,12 @@ def main():
             out_tensors[hf_name.replace(".weight", ".scales")] = torch.from_numpy(np.ascontiguousarray(scales))
             out_tensors[hf_name.replace(".weight", ".g_idx")] = torch.from_numpy(np.ascontiguousarray(g_idx))
             quantized_modules.append(hf_base)
+            if bits == 8:
+                int8_modules.append(hf_base)
 
             denom = float(np.sqrt((w_pre.astype(np.float64) ** 2).mean())) or 1.0
             rel_rms = float(np.sqrt(((w_ref.astype(np.float64) - w_pre.astype(np.float64)) ** 2).mean())) / denom
-            error_report.append((hf_base, gtype.name, rel_rms))
+            error_report.append((hf_base, gtype.name, bits, rel_rms))
         else:
             if gtype in (gguf.GGMLQuantizationType.F16, gguf.GGMLQuantizationType.F32):
                 arr = np.ascontiguousarray(t.data, dtype=np.float32)
@@ -736,29 +891,60 @@ def main():
         cfg["tie_word_embeddings"] = tie_word_embeddings
         cfg["model_type"] = arch_str
 
-    cfg["quantization_config"] = {
+    quant_cfg = {
         "quant_method": "gptq",
-        "bits": BITS,
+        "bits": BITS,  # base/majority scheme -- int4. Per-module overrides below.
         "group_size": group_size,
         "sym": True,
         "desc_act": False,
         "lm_head": False,
     }
+    if int8_modules:
+        # See DECISION 1b: AutoGPTQConfig's "dynamic" regex-keyed per-module
+        # override (vllm/model_executor/layers/quantization/utils/
+        # gptq_utils.py override_config()/get_dynamic_override(), invoked
+        # per-layer from get_linear_quant_method()) is what makes a
+        # per-module bits=8 override on an otherwise-bits=4 checkpoint a
+        # real, vLLM-served mixed-precision GPTQ config -- not a
+        # convention this script invented.
+        quant_cfg["dynamic"] = {
+            f"+:{re.escape(hf_base)}$": {"bits": 8} for hf_base in int8_modules
+        }
+    cfg["quantization_config"] = quant_cfg
     (out_dir / "config.json").write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    print(f"[gguf2marlin] wrote {out_dir} -- {len(quantized_modules)} modules quantized to "
-          f"GPTQ int4 g{group_size}, {len(fp16_kept)} kept fp16, {len(unmapped_names)} unmapped",
-          file=sys.stderr)
+    # ---- manifest.json -- per-tensor scheme + RMS error, machine-readable ---
+    # (consumed directly by scripts/patch_gguf_auto_marlin.py's cache-hit
+    # check/logging -- see that script's module docstring).
+    manifest = {
+        "source_gguf": Path(args.gguf_path).name,
+        "group_size": group_size,
+        "k_quants_to": args.k_quants_to,
+        "quantized_modules": quantized_modules,
+        "int8_modules": int8_modules,
+        "fp16_kept": fp16_kept,
+        "unmapped": unmapped_names,
+        "tensors": [
+            {"module": name, "gguf_type": gtype_name, "bits": bits, "rel_rms_error": rel_rms}
+            for name, gtype_name, bits, rel_rms in error_report
+        ],
+    }
+    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    _print_report(args, quantized_modules, fp16_kept, unmapped_names, error_report, args.hf_config is None)
+    print(f"[gguf2marlin] wrote {out_dir} -- {len(quantized_modules)} modules quantized "
+          f"({len(int8_modules)} of them int8 g{group_size}, rest int4 g{group_size}), "
+          f"{len(fp16_kept)} kept fp16, {len(unmapped_names)} unmapped", file=sys.stderr)
+
+    _print_report(args, quantized_modules, int8_modules, fp16_kept, unmapped_names, error_report, args.hf_config is None)
     return 0
 
 
-def _print_report(args, quantized_modules, fp16_kept, unmapped_names, error_report, config_is_best_effort):
+def _print_report(args, quantized_modules, int8_modules, fp16_kept, unmapped_names, error_report, config_is_best_effort):
     print("\n" + "=" * 72)
     print("VERIFICATION REPORT")
     print("=" * 72)
-    print(f"quantized (GPTQ int4 g{args.group_size}): {len(quantized_modules)}")
+    print(f"quantized (GPTQ, group_size={args.group_size}): {len(quantized_modules)} "
+          f"({len(int8_modules)} int8, {len(quantized_modules) - len(int8_modules)} int4)")
     print(f"kept fp16: {len(fp16_kept)}")
     print(f"unmapped (no generic HF name found, written under 'unmapped.*'): "
           f"{len(unmapped_names)}")
@@ -768,18 +954,18 @@ def _print_report(args, quantized_modules, fp16_kept, unmapped_names, error_repo
               "under any real parameter name -- see LIMITATIONS in the module docstring.")
 
     if error_report:
-        print(f"\nper-tensor relative RMS error (GPTQ-dequant vs GGUF-dequant), by source type:")
-        by_type: dict[str, list[float]] = {}
-        for _name, gtype_name, rel_rms in error_report:
-            by_type.setdefault(gtype_name, []).append(rel_rms)
-        for gtype_name, errs in sorted(by_type.items()):
+        print(f"\nper-tensor relative RMS error (GPTQ-dequant vs GGUF-dequant), by source type + bits:")
+        by_type: dict[tuple[str, int], list[float]] = {}
+        for _name, gtype_name, bits, rel_rms in error_report:
+            by_type.setdefault((gtype_name, bits), []).append(rel_rms)
+        for (gtype_name, bits), errs in sorted(by_type.items()):
             errs_np = np.array(errs)
-            print(f"    {gtype_name:8s}  n={len(errs):4d}  mean={errs_np.mean():.6f}  "
+            print(f"    {gtype_name:8s} int{bits}  n={len(errs):4d}  mean={errs_np.mean():.6f}  "
                   f"max={errs_np.max():.6f}  min={errs_np.min():.6f}")
-        worst = sorted(error_report, key=lambda x: -x[2])[:5]
+        worst = sorted(error_report, key=lambda x: -x[3])[:5]
         print("  worst 5 tensors:")
-        for name, gtype_name, rel_rms in worst:
-            print(f"    {rel_rms:.6f}  {gtype_name:6s}  {name}")
+        for name, gtype_name, bits, rel_rms in worst:
+            print(f"    {rel_rms:.6f}  {gtype_name:6s} int{bits}  {name}")
 
     if config_is_best_effort:
         print("\nNOTE: no --hf-config given -- config.json only has generic "

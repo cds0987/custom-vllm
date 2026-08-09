@@ -369,6 +369,118 @@ def test_end_to_end():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_q4k_int8_branch():
+    """--k-quants-to int8: Q4_K's relative RMS error must drop from the
+    ~5-15% int4 band to < 1e-2 (task target ~5e-3), and the on-disk int8
+    qweight packing must match vLLM's bit order for bits=8 -- pack_factor=4
+    (32 // 8), row i (0..3) of each 4-row group in byte i, verified with a
+    hand-rolled unpacker independent of gguf2marlin.pack_rows/unpack_rows,
+    same spirit as test_pack_rows_bit_order() above but at bits=8.
+    """
+    print("\n-- --k-quants-to int8: Q4_K RMS + bit-order (real GGUF + CLI) --")
+    tmp = Path(tempfile.mkdtemp(prefix="gguf2marlin_int8_"))
+    try:
+        gguf_path = tmp / "toy_int8.gguf"
+        out_dir = tmp / "out"
+        rng = np.random.default_rng(23)
+        hidden = 32
+        writer = gguf.GGUFWriter(str(gguf_path), "llama")
+        writer.add_block_count(1)
+        writer.add_tensor("token_embd.weight", rng.normal(0, 0.02, size=(8, hidden)).astype(np.float32))
+        writer.add_tensor("blk.0.attn_norm.weight", np.ones((hidden,), dtype=np.float32))
+
+        k_w = rng.normal(0, 0.05, size=(hidden, 256)).astype(np.float32)
+        writer.add_tensor("blk.0.attn_k.weight", encode_q4k_naive(k_w), raw_dtype=gguf.GGMLQuantizationType.Q4_K)
+
+        # Q4_0 must stay on its int4 bit-exact fast path regardless of
+        # --k-quants-to int8 (task requirement: don't touch Q4_0 at all).
+        q_w = rng.normal(0, 0.05, size=(hidden, 64)).astype(np.float32)
+        writer.add_tensor("blk.0.attn_q.weight", gguf_quantize(q_w, gguf.GGMLQuantizationType.Q4_0),
+                           raw_dtype=gguf.GGMLQuantizationType.Q4_0)
+
+        writer.add_tensor("output_norm.weight", np.ones((hidden,), dtype=np.float32))
+        writer.write_header_to_file()
+        writer.write_kv_data_to_file()
+        writer.write_tensors_to_file()
+        writer.close()
+
+        result = subprocess.run(
+            [sys.executable, str(GGUF2MARLIN_PATH), str(gguf_path), str(out_dir),
+             "--group-size", "32", "--k-quants-to", "int8"],
+            capture_output=True, text=True,
+        )
+        print(result.stdout[-2500:])
+        print(result.stderr[-1500:])
+        check("int8-branch CLI exits 0", result.returncode == 0, f"returncode={result.returncode}")
+        if result.returncode != 0:
+            return
+
+        cfg = json.loads((out_dir / "config.json").read_text())
+        qc = cfg.get("quantization_config", {})
+        check("base config bits == 4 (majority scheme unchanged)", qc.get("bits") == 4, str(qc))
+        base_k = "model.layers.0.self_attn.k_proj"
+        base_q = "model.layers.0.self_attn.q_proj"
+        dynamic = qc.get("dynamic", {})
+        import re as _re
+        expected_pattern = f"+:{_re.escape(base_k)}$"
+        check("dynamic override present for the promoted Q4_K module",
+              dynamic.get(expected_pattern, {}).get("bits") == 8, str(dynamic))
+        check("Q4_0 module NOT present in dynamic (stays base int4 scheme)",
+              not any(base_q in p for p in dynamic), str(dynamic))
+
+        manifest = json.loads((out_dir / "manifest.json").read_text())
+        check("manifest.json k_quants_to == int8", manifest.get("k_quants_to") == "int8")
+        check("manifest.json lists the Q4_K module under int8_modules",
+              base_k in manifest.get("int8_modules", []), str(manifest.get("int8_modules")))
+        k_entry = next((e for e in manifest["tensors"] if e["module"] == base_k), None)
+        check("manifest has a tensor entry for the promoted module", k_entry is not None)
+
+        with safe_open(out_dir / "model.safetensors", framework="pt") as f:
+            keys = set(f.keys())
+            check(f"{base_k}.qweight present", base_k + ".qweight" in keys)
+            qw = f.get_tensor(base_k + ".qweight").numpy()
+            gi = f.get_tensor(base_k + ".g_idx").numpy()
+            k_dim, n_dim = gi.shape[0], qw.shape[1]
+            check("int8 qweight packs 4 elements/int32 (pack_factor=32//8)",
+                  qw.shape == (k_dim // 4, n_dim), f"qweight.shape={qw.shape}, k={k_dim}, n={n_dim}")
+
+            # Independent hand-rolled int8 unpacker (bits=8, pack_factor=4,
+            # row i of each 4-row group -> byte i, row 0 = bits [0:8)) --
+            # NOT calling g2m.unpack_rows, mirrors test_pack_rows_bit_order.
+            packed_u32 = qw.astype(np.uint32)
+            recovered = np.zeros((k_dim, n_dim), dtype=np.int64)
+            for row in range(k_dim):
+                group, i = divmod(row, 4)
+                nibble = (packed_u32[group, :] >> (8 * i)) & 0xFF
+                recovered[row, :] = nibble.astype(np.int64)
+            via_module = g2m.unpack_rows(qw, bits=8, k=k_dim, n=n_dim)
+            check("independent bit-order unpack matches module's own unpack_rows(bits=8)",
+                  np.array_equal(recovered, via_module))
+
+            post = g2m.dequant_gptq_for_verification(qw, f.get_tensor(base_k + ".scales").numpy(),
+                                                       k_dim, n_dim, 32, bits=8)
+            gguf_ref = gguf_dequantize(encode_q4k_naive(k_w), gguf.GGMLQuantizationType.Q4_K).T.astype(np.float32)
+            rel_rms = float(np.sqrt(((post - gguf_ref) ** 2).mean())) / float(np.sqrt((gguf_ref ** 2).mean()))
+            check("Q4_K -> int8 relative RMS error < 1e-2 (task target ~5e-3)",
+                  rel_rms < 1e-2, f"rel_rms={rel_rms}")
+            print(f"    (measured Q4_K int8 rel_rms = {rel_rms:.6f})")
+
+            # Q4_0 unaffected by --k-quants-to int8: still bit-exact int4.
+            qw_q = f.get_tensor(base_q + ".qweight").numpy()
+            gi_q = f.get_tensor(base_q + ".g_idx").numpy()
+            check("Q4_0 qweight still packs 8 elements/int32 (untouched int4 fast path)",
+                  qw_q.shape == (gi_q.shape[0] // 8, qw_q.shape[1]))
+            post_q = g2m.dequant_gptq_for_verification(qw_q, f.get_tensor(base_q + ".scales").numpy(),
+                                                         gi_q.shape[0], qw_q.shape[1], 32, bits=4)
+            gguf_ref_q = gguf_dequantize(
+                gguf_quantize(q_w, gguf.GGMLQuantizationType.Q4_0), gguf.GGMLQuantizationType.Q4_0
+            ).T.astype(np.float32)
+            check("Q4_0 round trip still bit-exact under --k-quants-to int8",
+                  float(np.abs(post_q - gguf_ref_q).max()) == 0.0)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_merge_pair_fixup_logic():
     """Unit-tests apply_merge_pair_fixups() directly against synthetic
     classification records, independent of ggml-name -> HF-name mapping.
@@ -389,6 +501,9 @@ def test_merge_pair_fixup_logic():
 
     def rec(hf_base, would_quantize):
         return {"hf_base": hf_base, "would_quantize": would_quantize}
+
+    def rec_scheme(hf_base, scheme):
+        return {"hf_base": hf_base, "would_quantize": scheme is not None, "scheme": scheme}
 
     # Mismatched pair (qkv quantizable, z not) -> both forced to fp16.
     records = [
@@ -424,6 +539,21 @@ def test_merge_pair_fixup_logic():
     check("only the mismatched layer's pair is forced (other layers untouched)",
           forced_multi == {"model.layers.5.linear_attn.in_proj_qkv", "model.layers.5.linear_attn.in_proj_z"},
           str(forced_multi))
+
+    # --k-quants-to int8: both members "would_quantize=True" but with
+    # DIFFERENT bit widths (one int4, one int8) must still be forced to
+    # fp16 -- a bool-only "would_quantize" check (the pre-int8-branch
+    # behaviour) would miss this, since it only compares quantized-vs-not.
+    records_bits_mismatch = [
+        rec_scheme("model.layers.2.linear_attn.in_proj_qkv", 4),
+        rec_scheme("model.layers.2.linear_attn.in_proj_z", 8),
+        rec_scheme("model.layers.2.linear_attn.in_proj_b", 8),
+        rec_scheme("model.layers.2.linear_attn.in_proj_a", 8),  # matched -> untouched
+    ]
+    forced_bits = g2m.apply_merge_pair_fixups(records_bits_mismatch)
+    check("int4-vs-int8 scheme mismatch: both members forced to fp16",
+          forced_bits == {"model.layers.2.linear_attn.in_proj_qkv", "model.layers.2.linear_attn.in_proj_z"},
+          str(forced_bits))
 
 
 def test_qwen35_generic_mapping_partial():
@@ -480,6 +610,7 @@ def main():
     test_symmetric_qzeros()
     test_q4k_encoder_matches_library_dequant()
     test_end_to_end()
+    test_q4k_int8_branch()
     test_merge_pair_fixup_logic()
     test_qwen35_generic_mapping_partial()
 
