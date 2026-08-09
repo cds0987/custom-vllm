@@ -457,8 +457,28 @@ in_proj_b+a int8 g128 — mỗi cặp merge đồng nhất scheme) → fix check
   STATUS.md, chưa chạy compare đối chứng cùng runtime.
 - Bẫy môi trường mới: kernel session mới của Colab không tự source
   /tmp/vllm_env.sh → ImportError libcudart.so.13; phải export lại tay.
-- Tiếp: TASK G2 — biến thể dịu (in_proj int8 toàn bộ) tìm điểm PASS,
-  kèm tái tạo baseline RedHatAI cùng runtime cho phép so nghiêm.
+- TASK G2a (2026-08-09, uniform int8 g128 cả 4 in_proj, checkpoint 8,0GB,
+  baseline RedHatAI tái tạo TƯƠI cùng runtime + compare chuẩn, 99 đề):
+
+      config                        conc1   conc32   ppl      ratio    verdict
+      RedHatAI W4A16 (champion)     29,5    563      5,169    1,00     PASS
+      G  (int4 qkv/z + int8 b/a)    37,7    768      5,9646   1,1541   WARN
+      G2a (int8 toàn bộ GDN)        35,4    738      5,9618   1,1534   WARN
+
+  **Giả thuyết "int4 là thủ phạm" SAI**: int8 không cứu được gì (ratio
+  1,1534 vs 1,1541 — không phân biệt thống kê) mà còn chậm hơn G. Kết luận
+  mạnh: chi phí ~15% ppl nằm ở việc CHẠM VÀO GDN in_proj bằng GPTQ, không
+  phụ thuộc bit-width/group-size trong dải đã thử. Champion GIỮ NGUYÊN
+  RedHatAI W4A16. G/G2a là "chế độ turbo" hợp lệ nếu use case chấp nhận
+  đổi ~15% ppl lấy +31-36% conc32 — quyết định thuộc người vận hành.
+  - Manh mối nhánh chất lượng còn mở: GGUF Q4_K_M (llama.cpp tự nén, KHÔNG
+    calibration) nén cả GDN mà vẫn qua cổng chất lượng (TEST 9) → nghi vấn
+    chuyển sang chính calibration/Hessian của GPTQ trên input linear_attn,
+    không phải bản thân việc nén GDN. Phương án cấy GDN từ GGUF→int8 Marlin
+    (transcoder TASK I/K) là nước thử kế tiếp nếu đánh tiếp nhánh này.
+  - Vận hành: giữa run bị Colab FULL recycle (mất /content + HF cache);
+    khôi phục = re-clone + setup_env.sh + pip install llmcompressor datasets
+    (hai gói này KHÔNG nằm trong setup_env.sh) + export lại LD_LIBRARY_PATH.
 
 ## TASK F2/F2b (2026-08-09): SLA open-loop trên kịch bản shared-prefix 32K
 
