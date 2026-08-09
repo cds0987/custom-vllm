@@ -205,6 +205,14 @@ PREFIX_CACHE_METRIC_NAMES = (
     "vllm:external_prefix_cache_hits",
 )
 
+# vllm 0.26.0 renamed the counters with a _total suffix (Prometheus counter
+# convention); TASK H found the bare names silently scrape to zero there.
+# Each _total series is folded into its bare-name bucket so the rest of the
+# script keeps a single canonical key per metric.
+_METRIC_NAME_ALIASES = {
+    name + "_total": name for name in PREFIX_CACHE_METRIC_NAMES
+}
+
 
 def scrape_prefix_cache_metrics() -> dict:
     """Sum every series for each tracked metric name (collapses across
@@ -226,6 +234,7 @@ def scrape_prefix_cache_metrics() -> dict:
         if not m:
             continue
         name = m.group("name")
+        name = _METRIC_NAME_ALIASES.get(name, name)
         if name in totals:
             totals[name] += float(m.group("value"))
     return totals

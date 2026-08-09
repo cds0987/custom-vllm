@@ -551,6 +551,29 @@ Cú pháp (đọc từ factory.py + cpu/spec.py, đã smoke sạch trên 9B W4A1
   caching (phiên idle/finished resume qua prefix cache), không phải cách chạy
   thêm phiên live. Mamba-state offload thật sự thì chưa ai ship.
 
+## TASK H (2026-08-10): bench skills-pack + câu hỏi thật — kịch bản production ĐẬU ĐẸP
+
+Champion RedHatAI W4A16, --enable-prefix-caching --max-model-len 32768,
+prefix skills ~28.760 token thật (ước 23,2K từ --dry-run — đếm bằng tokenizer
+served mới chuẩn), 74 câu tuyển từ public-test, bench_skills.py:
+
+    conc   TTFT p50   TTFT p95   decode/user   throughput tổng
+      1     0,21s      0,26s      27,1 tok/s      26,8
+      8     0,45s      0,88s      19,1           140,8
+     16     0,70s      1,73s      15,7           228,7
+     32     1,27s      3,10s      11,2           286,5
+
+- **74/74 câu sạch ở mọi mức, 0 lỗi.** Warm-up cold một lần: 10,52s.
+- **Prefix cache hit 99,04%** (đọc thẳng /metrics) — TTFT 0,21s vs cold
+  10,52s = 50×. Câu hỏi thật (ngắn hơn nhiều so với suffix synthetic 2-2,5K
+  của F2/F2b) cho TTFT tốt hơn hẳn dự phóng worst-case.
+- Ngưỡng "max conc giữ TTFT p95<3s" cho kịch bản này: giữa 16 và 32, sát 32.
+- Bug đã sửa sau run: vllm 0.26 đổi tên metric thành *_total →
+  bench_skills.py trước đó báo cache_hit_rate=None oan (đã vá alias).
+- Bẫy vận hành ghi lại: (a) --max-model-len phải >= prefix thật (8192 →
+  400 Bad Request); (b) kênh transfer base64: PHẢI verify sha256 từng chunk
+  ngay lúc paste — 2 lần hỏng chunk im lặng đã bị manifest bắt được.
+
 ## A/B attention backend (2026-08-10): KHÔNG CÓ trận đấu — FlashInfer là lựa chọn hợp lệ duy nhất
 
 - vLLM 0.26 bỏ env `VLLM_ATTENTION_BACKEND` (log "Unknown ... variable",
