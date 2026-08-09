@@ -179,7 +179,16 @@ def build_test_gguf(gguf_path: Path, true_weights: dict, *, omit_suffix=None) ->
             continue
         ggml_suffix = graft.GGML_SUFFIX_FOR_HF_SUFFIX[suffix]
         tiled = tile_for_gguf(suffix, w)
-        writer.add_tensor(f"blk.0.{ggml_suffix}", t_g2m.encode_q4k_naive(tiled), raw_dtype=gguf.GGMLQuantizationType.Q4_K)
+        # Real llama.cpp-converted GGUFs store weight tensors as
+        # "blk.N.<suffix>.weight" (confirmed against an actual downloaded
+        # unsloth/Qwen3.5-9B-GGUF file's reader.tensors names during TASK
+        # M-exec) -- match that here so this fixture doesn't silently agree
+        # with a since-fixed bug in graft_gguf_gdn.py's own name lookup
+        # (both used to omit ".weight", so they matched each other and
+        # this test passed while the real GGUF didn't).
+        writer.add_tensor(
+            f"blk.0.{ggml_suffix}.weight", t_g2m.encode_q4k_naive(tiled), raw_dtype=gguf.GGMLQuantizationType.Q4_K
+        )
     writer.write_header_to_file()
     writer.write_kv_data_to_file()
     writer.write_tensors_to_file()

@@ -631,7 +631,7 @@ def main(argv=None) -> int:
         for suffix in GDN_SUFFIXES:
             module = f"model.layers.{layer}.linear_attn.{suffix}"
             hf_module_name[(layer, suffix)] = module
-            gname = f"blk.{layer}.{GGML_SUFFIX_FOR_HF_SUFFIX[suffix]}"
+            gname = f"blk.{layer}.{GGML_SUFFIX_FOR_HF_SUFFIX[suffix]}.weight"
             ggml_name[(layer, suffix)] = gname
             in_frame = (module + ".weight") in weight_map
             in_gguf = gname in ggml_tensors
