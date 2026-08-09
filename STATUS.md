@@ -480,6 +480,42 @@ in_proj_b+a int8 g128 — mỗi cặp merge đồng nhất scheme) → fix check
     khôi phục = re-clone + setup_env.sh + pip install llmcompressor datasets
     (hai gói này KHÔNG nằm trong setup_env.sh) + export lại LD_LIBRARY_PATH.
 
+## TASK M (2026-08-10): GRAFT GGUF→GDN — **CHAMPION MỚI**, thắng cả hai trục
+
+Ý tưởng: thân RedHatAI W4A16 (attention/MLP calibration xịn) + tim GDN lấy
+từ GGUF Q4_K_M của unsloth (lưới RTN llama.cpp, KHÔNG calibration) chuyển
+int8 g32 (~0,55% RMS), khâu bằng scripts/graft_gguf_gdn.py, nạp qua
+patch_vllm_gdn_quant_load.
+
+    metric        champion cũ (RedHatAI)   GRAFT (mới)
+    conc1         29,5                     33,06  (+12%)
+    conc32        563                      610,45 (+8,4%)
+    ppl (99 đề)   5,1645 (baseline tươi)   5,0672 → ratio 0,9812 **PASS**
+
+- Ứng viên KHÔNG đánh đổi: nhanh hơn Ở CẢ HAI mức tải VÀ ppl còn nhỉnh hơn
+  baseline → thắng tuyệt đối (Pareto), phong champion theo đúng luật.
+- **Giả thuyết cốt lõi xác nhận sạch**: vấn đề chất lượng của G/G2a
+  (ratio ~1,15) là đặc thù của GPTQ-Hessian trên in_proj GDN, không phải
+  của việc nén GDN — lưới RTN của llama.cpp nén cùng tensor mà ppl 0,98.
+- Turbo mode (G, 768 tok/s, WARN) vẫn là lựa chọn riêng cho ai cần tối đa
+  throughput và chấp nhận ppl.
+- 4 bug thật tìm/sửa trong quá trình exec (commit 62c08a9..9b730eb):
+  (1) dtype scale phải đọc từ config frame (RedHatAI là bf16, không fp16);
+  (2) KHÔNG chạy fix_qwen35_hf_checkpoint lên RedHatAI — checkpoint đó
+  multimodal thật (visual.*), nạp qua Qwen3_5ForConditionalGeneration và
+  CẦN prefix language_model nguyên bản; fixer chỉ dành cho output
+  AutoModelForCausalLM của quantize_*.py nhà mình. Graft giờ tự detect
+  convention; (3) tên tensor GGUF có đuôi ".weight" (fixture test cũ sai
+  y hệt nên tự đồng thuận — bài học: fixture phải đối chiếu format thật);
+  (4) **gotcha vLLM đáng nhớ**: find_matched_target khớp catch-all
+  targets:["Linear"] bằng SUBSTRING TÊN CLASS ("MergedColumnParallelLinear"
+  chứa "Linear") TRƯỚC khi bước reconcile fused-component kịp chạy → mọi
+  config_group cho module fused phải target TÊN FUSED ("in_proj_qkvz",
+  "in_proj_ba") để exact-match bước 1, nếu không sẽ âm thầm rơi về scheme
+  mặc định rồi nổ merge-mismatch.
+- Checkpoint: /content/redhatai_grafted3 (~8,7GB) + graft_manifest.json.
+  Cần đẩy lên HF repo riêng để không mất theo runtime recycle.
+
 ## TASK F2/F2b (2026-08-09): SLA open-loop trên kịch bản shared-prefix 32K
 
 Cùng cấu hình TASK F. Payload: suffix unique 2.000-2.500 tok sau prefix chung
