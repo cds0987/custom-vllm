@@ -320,6 +320,10 @@ mamba-cache ceiling ở 9B: max_num_seqs ≤ số block log báo (299 @0.90 util
 Cộng: fp8 KV luôn bật (sm89+), chunk 8192, prefix-caching off khi benchmark,
 không cờ fp32 SSM, plugin build sdist sm_89. Dưới 4-bit weights: mất cả
 chất lượng lẫn tốc độ (thang TEST 9) — 4-bit LÀ đáy thực dụng trên Ada.
+Spot-check FP8-dynamic 9B (RedHatAI): 467.6 tok/s @conc32 — thắng GGUF
+(1.7×) nhưng thua W4A16 (563); mamba-cache block ceiling 172 ở footprint
+8-bit (max_num_seqs 128) — quy tắc: LUÔN đọc số block trong log trước khi
+đặt max_num_seqs cho 9B. Không có trục nào W4A16 thua → không chạy full gate.
 
 ## Profile kernel trên L4 (torch.profiler, eager, 2B — % CUDA time)
 
