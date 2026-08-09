@@ -125,6 +125,82 @@ Usage:
 Then scripts/fix_qwen35_hf_checkpoint.py on the output before serving, same
 two mechanical fixes (language_model prefix + mrope_section) as every other
 checkpoint this project has quantized from HF-saved Qwen3.5 weights.
+
+--- Calibration speed knobs (measured on Colab L4, latency-bound) ---
+
+Measured baseline: 256 samples x 2048 max_seq_len, batch_size=1 (the
+defaults below, unchanged) -- calibration ran ~297s/layer x 33 layers
+(~160 min total). nvidia-smi during that run showed ~12% GPU utilization
+at 99% max clocks and no thermal throttling: this is NOT compute-bound,
+it's per-sample Python/tokenize/Hessian-update overhead between forwards
+dominating wall time. The fix is batching forwards, not a faster GPU.
+
+llm-compressor's oneshot() has a genuine (non-patched) calibration-batching
+path: `batch_size` and `data_collator` are real DatasetArguments fields
+(llmcompressor/args/dataset_arguments.py), plumbed straight through
+oneshot()'s kwargs into the calibration DataLoader
+(llmcompressor/datasets/utils.py:make_dataset_splits / get_calibration_dataloader).
+With the default data_collator="truncation", a batch's sequences are
+truncated down to the SHORTEST sequence's length in that batch (not
+padded) -- see DataCollatorWithTruncation in that file -- so batching does
+NOT introduce padding tokens or a fabricated attention_mask into the
+Hessian statistics; it only discards the tail of longer samples in a
+batch, exactly like max_seq_length truncation already does at the single-
+sample level. When batch_size > 1, `--calib-shuffle` should stay off
+(shuffle_calibration_samples=False) so oneshot uses its LengthAwareSampler
+(same file) to group similarly-long samples into the same batch --
+minimizes how much of the longer samples' tails get truncated away.
+Passing shuffle_calibration_samples=True with batch_size>1 instead uses a
+plain RandomSampler and llm-compressor itself warns this "can lead to
+unoptimal batching" / "delete a large number of tokens". This script's own
+dataset-level `.shuffle(seed=42)` calls already randomize sample order
+before calibration ever sees the data, so turning off oneshot's *internal*
+shuffle-for-batching does not make the calibration set itself less random
+-- it only controls how the 256 (or --num-samples) selected examples get
+grouped into batches.
+
+Recommended combinations (bs = --calib-batch-size). The "wall time" column
+matches this script's own pre-flight estimate formula (~160 min *
+ceil(num_samples / bs) / 256) so the printed estimate and this table never
+disagree; that formula only scales with forward-CALL count, it does not
+model per-forward compute growing with batch size or max_seq_len, so
+treat every non-bs=1 estimate as a LOWER BOUND, not a promise:
+
+  num_samples x max_seq_len, bs   | wall time (L4)          | quality
+  ---------------------------------|--------------------------|-------------------
+  256 x 2048, bs=1 (DEFAULT)       | ~160 min -- MEASURED     | verified baseline
+                                    |                          | (every prior ppl
+                                    |                          | number used this)
+  128 x 1024, bs=8                 | ~10 min lower bound,     | UNVERIFIED -- run
+                                    | budget ~15-25 min        | a 128-vs-256 ppl
+                                    | wall-clock in practice   | A/B before trusting
+                                    |                          | this for a real
+                                    |                          | checkpoint
+
+  Only the 256x2048/bs=1 row is what every existing SWE-bench ppl number
+  in this project's history (v3's 6.9958, the fp16-GDN G run, G2a, etc.)
+  was measured against. Smaller/batched calibration changes what the
+  Hessian sees (fewer samples, shorter truncated-off tails, coarser
+  activation statistics) and per llm-compressor's own docs GPTQ's
+  Hessian-based scale/zero-point solve is more calibration-sensitive than
+  most PTQ methods -- do not point a real quality-gated checkpoint run at
+  the 128x1024/bs=8 row (or anything more aggressive) without first
+  running both configurations back-to-back and comparing SWE-bench ppl.
+  If they land close, adopt the fast config going forward; if not, the
+  256x2048/bs=1 default remains the only trusted path.
+
+Flags (all default to the exact prior behavior -- no flag = no change):
+    --calib-batch-size N   (default 1)  -- passed straight to oneshot's
+                            genuine batch_size kwarg above.
+    --num-samples N        (default 256, this script's prior hardcoded
+                            NUM_CALIBRATION_SAMPLES)
+    --max-seq-len N         (default 2048, this script's prior hardcoded
+                            MAX_SEQUENCE_LENGTH)
+
+Before running, the script prints an expected-time estimate derived from
+the measured ~1s/sample-forward, ~297s/(256/1)-layer baseline above, so
+whoever kicks off a run can see roughly what they're buying before they
+wait for it.
 """
 
 import argparse
@@ -162,12 +238,66 @@ gdn_group.add_argument(
         "scripts/patch_vllm_gdn_quant_load.py on the serving side."
     ),
 )
+parser.add_argument(
+    "--calib-batch-size",
+    type=int,
+    default=1,
+    help=(
+        "TASK L: calibration forward batch size, passed straight to "
+        "llm-compressor oneshot()'s genuine `batch_size` dataset argument "
+        "(default 1 -- identical to every prior run's behavior). >1 uses "
+        "oneshot's default data_collator='truncation', which truncates a "
+        "batch's sequences down to the shortest member -- no padding, no "
+        "fabricated attention_mask, so Hessian statistics stay clean. See "
+        "the module docstring's speed-knob table before using >1 on a "
+        "quality-gated run: only bs=1 has a verified SWE-bench ppl number."
+    ),
+)
+parser.add_argument(
+    "--num-samples",
+    type=int,
+    default=256,
+    help="Number of calibration samples (default 256, the verified value).",
+)
+parser.add_argument(
+    "--max-seq-len",
+    type=int,
+    default=2048,
+    help="Max calibration sequence length (default 2048, the verified value).",
+)
 args = parser.parse_args()
 
 MODEL_ID = "Qwen/Qwen3.5-9B"
-NUM_CALIBRATION_SAMPLES = 256
-MAX_SEQUENCE_LENGTH = 2048
+NUM_CALIBRATION_SAMPLES = args.num_samples
+MAX_SEQUENCE_LENGTH = args.max_seq_len
+CALIB_BATCH_SIZE = args.calib_batch_size
 OUTPUT_DIR = os.environ.get("GPTQ_OUTPUT_DIR", "/content/qwen35-9b-gptq")
+
+# TASK L, knob 3: rough pre-flight time estimate so whoever kicks off a run
+# sees what they're buying before waiting for it. Anchored to the measured
+# L4 baseline (256 samples, batch_size=1, max_seq_len=2048 -> ~160 min
+# total, i.e. ~1s of wall time per calibration *sample-forward* at that
+# per-layer overhead). Batching amortizes the per-forward Python/Hessian
+# overhead across CALIB_BATCH_SIZE samples per forward call, so the
+# forward-call count (and thus wall time) scales with
+# num_samples / batch_size, not num_samples alone; shortening max_seq_len
+# is not modeled here (compute-bound tail, not the latency-bound overhead
+# this estimate targets) so it is intentionally left out of the scaling.
+_BASELINE_SAMPLES = 256
+_BASELINE_MINUTES = 160
+_est_forward_calls = -(-NUM_CALIBRATION_SAMPLES // CALIB_BATCH_SIZE)  # ceil div
+_baseline_forward_calls = _BASELINE_SAMPLES  # bs=1 baseline: 1 call/sample
+_est_minutes = _BASELINE_MINUTES * _est_forward_calls / _baseline_forward_calls
+print(
+    f"[quantize_gptq_9b] calibration plan: num_samples={NUM_CALIBRATION_SAMPLES}, "
+    f"batch_size={CALIB_BATCH_SIZE}, max_seq_len={MAX_SEQUENCE_LENGTH} "
+    f"-> ~{_est_forward_calls} calibration forward calls/layer, expected "
+    f"~{_est_minutes:.0f} min on L4 at the measured ~1s/sample-forward rate "
+    f"(extrapolated from the 256x2048/bs=1 baseline; NOT compute-model-"
+    f"adjusted for max_seq_len changes). See module docstring for which "
+    f"combinations have a verified SWE-bench ppl number vs. which are "
+    f"speed-only extrapolations."
+)
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 
@@ -321,6 +451,17 @@ oneshot(
     max_seq_length=MAX_SEQUENCE_LENGTH,
     num_calibration_samples=NUM_CALIBRATION_SAMPLES,
     output_dir=OUTPUT_DIR,
+    batch_size=CALIB_BATCH_SIZE,
+    # dataset-level .shuffle(seed=42) calls above already randomized sample
+    # order/selection; disabling oneshot's *internal* shuffle-for-batching
+    # when batch_size > 1 switches it from RandomSampler to
+    # LengthAwareSampler, which groups similarly-long samples into the same
+    # batch so the default truncation-based collator (see module docstring)
+    # discards as little of each sample's tail as possible. At batch_size=1
+    # this has no effect (LengthAwareSampler with batch_size=1 samples in
+    # descending-length order, RandomSampler samples randomly, and no
+    # truncation-to-shortest-in-batch happens either way).
+    shuffle_calibration_samples=(CALIB_BATCH_SIZE == 1),
 )
 
 print("DONE_GPTQ_QUANTIZE_9B")
