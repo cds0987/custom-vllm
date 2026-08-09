@@ -605,6 +605,66 @@ def test_qwen35_generic_mapping_partial():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_hf_config_overlay_and_model_type_sanity_check():
+    """--hf-config: (a) a real config's fields (incl. model_type) land
+    verbatim in the emitted config.json, overriding the generic fallback;
+    (b) a config whose model_type is a GGUF-parser-internal alias (e.g.
+    "qwen35" -- see scripts/patch_gguf_plugin.py's model_type
+    normalization) triggers a WARNING on stderr rather than being silently
+    accepted or rejected outright -- this repo's auto-marlin hook
+    (scripts/patch_gguf_auto_marlin.py) relies on this to catch a caller
+    accidentally pointing --hf-config at a bogus/GGUF-derived file instead
+    of the real upstream one (Bug C)."""
+    print("\n-- --hf-config: real config overlay + model_type sanity warning --")
+    tmp = Path(tempfile.mkdtemp(prefix="gguf2marlin_hfconfig_"))
+    try:
+        gguf_path = tmp / "toy.gguf"
+        build_test_gguf(gguf_path)
+
+        # (a) a real-shaped config.json overlays cleanly, no warning.
+        real_cfg = tmp / "real_config.json"
+        real_cfg.write_text(json.dumps({
+            "model_type": "qwen3_5", "architectures": ["Qwen3_5ForCausalLM"],
+            "hidden_size": 999,
+        }), encoding="utf-8")
+        out_dir_ok = tmp / "out_ok"
+        result_ok = subprocess.run(
+            [sys.executable, str(GGUF2MARLIN_PATH), str(gguf_path), str(out_dir_ok),
+             "--group-size", "32", "--hf-config", str(real_cfg)],
+            capture_output=True, text=True,
+        )
+        check("CLI exits 0 with a real --hf-config", result_ok.returncode == 0, result_ok.stderr[-1000:])
+        cfg_ok = json.loads((out_dir_ok / "config.json").read_text())
+        check("config.json model_type == the real config's (qwen3_5)",
+              cfg_ok.get("model_type") == "qwen3_5", str(cfg_ok.get("model_type")))
+        check("config.json carries architectures from the real config",
+              cfg_ok.get("architectures") == ["Qwen3_5ForCausalLM"], str(cfg_ok.get("architectures")))
+        check("no model_type sanity WARNING for a real-looking config",
+              "model_type" not in result_ok.stderr or "looks like a GGUF-parser-internal" not in result_ok.stderr,
+              result_ok.stderr[-1000:])
+
+        # (b) a GGUF-internal-alias model_type ("qwen35") warns, but still
+        # runs to completion (does not block -- see module docstring,
+        # "cân nhắc: đừng chặn quá tay").
+        suspicious_cfg = tmp / "suspicious_config.json"
+        suspicious_cfg.write_text(json.dumps({"model_type": "qwen35"}), encoding="utf-8")
+        out_dir_warn = tmp / "out_warn"
+        result_warn = subprocess.run(
+            [sys.executable, str(GGUF2MARLIN_PATH), str(gguf_path), str(out_dir_warn),
+             "--group-size", "32", "--hf-config", str(suspicious_cfg)],
+            capture_output=True, text=True,
+        )
+        check("CLI still exits 0 with a suspicious model_type (warns, does not block)",
+              result_warn.returncode == 0, result_warn.stderr[-1000:])
+        check("WARNING printed for GGUF-internal-alias model_type ('qwen35')",
+              "looks like a GGUF-parser-internal" in result_warn.stderr, result_warn.stderr[-1000:])
+        cfg_warn = json.loads((out_dir_warn / "config.json").read_text())
+        check("config.json still written with the (suspicious) model_type as given",
+              cfg_warn.get("model_type") == "qwen35", str(cfg_warn.get("model_type")))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main():
     test_pack_rows_bit_order()
     test_symmetric_qzeros()
@@ -613,6 +673,7 @@ def main():
     test_q4k_int8_branch()
     test_merge_pair_fixup_logic()
     test_qwen35_generic_mapping_partial()
+    test_hf_config_overlay_and_model_type_sanity_check()
 
     print("\n" + "=" * 72)
     if FAILURES:
