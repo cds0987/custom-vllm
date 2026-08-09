@@ -191,12 +191,25 @@ def test_disabled_by_default():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _write_sibling_hf_config(gguf_path: Path) -> Path:
+    """Bug C fixture helper: a real caller only gets past auto-marlin's
+    config.json check by placing one next to the .gguf file (same
+    convention vllm_gguf_plugin's own stock GGUF path already requires --
+    see patch_gguf_auto_marlin.py's module docstring, "HF CONFIG"). Content
+    just needs a real (non-GGUF-internal) `model_type` for
+    scripts/gguf2marlin.py's --hf-config overlay + sanity check."""
+    cfg_path = gguf_path.with_name("config.json")
+    cfg_path.write_text(json.dumps({"model_type": "qwen3_5"}))
+    return cfg_path
+
+
 def test_safe_file_auto_transcodes_and_caches():
     print("\n-- all-Q4_0 file: auto-transcodes, then cache-hits on rerun --")
     tmp = Path(tempfile.mkdtemp(prefix="patch_auto_marlin_safe_"))
     try:
         gguf_path = tmp / "toy_safe.gguf"
         _build_toy_gguf(gguf_path, kquant=False)
+        _write_sibling_hf_config(gguf_path)
         cache_root = tmp / "cache"
         ns = _load_helpers_namespace()
         import os
@@ -232,12 +245,121 @@ def test_safe_file_auto_transcodes_and_caches():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _toy_hf_config(model_type="qwen3_5", **extra):
+    """A minimal but REAL-shaped upstream config.json body -- distinct from
+    gguf2marlin.py's own generic fallback (which sets model_type to the raw
+    GGUF architecture string, e.g. "qwen35") and from the GGUF-parser-only
+    alias that string collides with. Used to prove Bug C's fix: when this
+    is found and passed through --hf-config, the checkpoint's model_type
+    is THIS value, not the "qwen35" fallback."""
+    cfg = {"model_type": model_type, "architectures": ["Qwen3_5ForCausalLM"]}
+    cfg.update(extra)
+    return cfg
+
+
+def test_sibling_hf_config_used_and_missing_config_refuses():
+    print("\n-- Bug C: real config.json next to the .gguf is found and used; "
+          "missing config.json refuses transcode --")
+    tmp = Path(tempfile.mkdtemp(prefix="patch_auto_marlin_hfconfig_"))
+    try:
+        import os
+
+        # ---- (1) no config.json anywhere -> refuse, fall back to stock ---
+        gguf_path_missing = tmp / "missing_cfg" / "toy.gguf"
+        gguf_path_missing.parent.mkdir(parents=True, exist_ok=True)
+        _build_toy_gguf(gguf_path_missing, kquant=False)
+        ns = _load_helpers_namespace()
+        env_backup = dict(os.environ)
+        try:
+            os.environ["CUSTOM_VLLM_GGUF_AUTO_MARLIN"] = "1"
+            os.environ.pop("CUSTOM_VLLM_GGUF_AUTO_MARLIN_ALLOW_K", None)
+            os.environ.pop("CUSTOM_VLLM_GGUF_AUTO_MARLIN_HF_CONFIG", None)
+            os.environ["CUSTOM_VLLM_MARLIN_CACHE_DIR"] = str(tmp / "cache_missing")
+            os.environ["CUSTOM_VLLM_GGUF2MARLIN_PATH"] = str(GGUF2MARLIN_PATH)
+
+            result = ns["_custom_vllm_maybe_auto_marlin"](str(gguf_path_missing))
+            check("missing config.json -> refuses transcode (returns None)", result is None, str(result))
+            check("nothing written to the cache dir on refusal",
+                  not ns["_custom_vllm_am_cache_dir"](
+                      ns["_custom_vllm_am_hash_file"](str(gguf_path_missing))
+                  ).exists())
+        finally:
+            os.environ.clear()
+            os.environ.update(env_backup)
+
+        # ---- (2) sibling config.json -> found and passed to gguf2marlin ---
+        gguf_path_sibling = tmp / "sibling_cfg" / "toy.gguf"
+        gguf_path_sibling.parent.mkdir(parents=True, exist_ok=True)
+        _build_toy_gguf(gguf_path_sibling, kquant=False)
+        (gguf_path_sibling.parent / "config.json").write_text(
+            json.dumps(_toy_hf_config()), encoding="utf-8"
+        )
+        ns = _load_helpers_namespace()
+        env_backup = dict(os.environ)
+        try:
+            os.environ["CUSTOM_VLLM_GGUF_AUTO_MARLIN"] = "1"
+            os.environ.pop("CUSTOM_VLLM_GGUF_AUTO_MARLIN_ALLOW_K", None)
+            os.environ.pop("CUSTOM_VLLM_GGUF_AUTO_MARLIN_HF_CONFIG", None)
+            os.environ["CUSTOM_VLLM_MARLIN_CACHE_DIR"] = str(tmp / "cache_sibling")
+            os.environ["CUSTOM_VLLM_GGUF2MARLIN_PATH"] = str(GGUF2MARLIN_PATH)
+
+            result = ns["_custom_vllm_maybe_auto_marlin"](str(gguf_path_sibling))
+            check("sibling config.json -> transcode succeeds", result is not None, str(result))
+            if result is None:
+                return
+            out_cfg = json.loads((Path(result) / "config.json").read_text())
+            check("output config.json model_type == real config's (qwen3_5)",
+                  out_cfg.get("model_type") == "qwen3_5", str(out_cfg.get("model_type")))
+            check("output config.json model_type is NOT the gguf-only fallback ('qwen35')",
+                  out_cfg.get("model_type") != "qwen35", str(out_cfg.get("model_type")))
+            check("output config.json carries architectures from the real config",
+                  out_cfg.get("architectures") == ["Qwen3_5ForCausalLM"], str(out_cfg.get("architectures")))
+        finally:
+            os.environ.clear()
+            os.environ.update(env_backup)
+
+        # ---- (3) CUSTOM_VLLM_GGUF_AUTO_MARLIN_HF_CONFIG env override -------
+        gguf_path_env = tmp / "env_cfg" / "toy.gguf"
+        gguf_path_env.parent.mkdir(parents=True, exist_ok=True)
+        _build_toy_gguf(gguf_path_env, kquant=False)
+        # deliberately NOT placing config.json next to the .gguf -- only the
+        # env override should supply it.
+        override_dir = tmp / "override_cfg_dir"
+        override_dir.mkdir(parents=True, exist_ok=True)
+        (override_dir / "config.json").write_text(
+            json.dumps(_toy_hf_config(model_type="qwen3_5_moe")), encoding="utf-8"
+        )
+        ns = _load_helpers_namespace()
+        env_backup = dict(os.environ)
+        try:
+            os.environ["CUSTOM_VLLM_GGUF_AUTO_MARLIN"] = "1"
+            os.environ.pop("CUSTOM_VLLM_GGUF_AUTO_MARLIN_ALLOW_K", None)
+            # override is a DIRECTORY containing config.json, not the file itself.
+            os.environ["CUSTOM_VLLM_GGUF_AUTO_MARLIN_HF_CONFIG"] = str(override_dir)
+            os.environ["CUSTOM_VLLM_MARLIN_CACHE_DIR"] = str(tmp / "cache_env")
+            os.environ["CUSTOM_VLLM_GGUF2MARLIN_PATH"] = str(GGUF2MARLIN_PATH)
+
+            result = ns["_custom_vllm_maybe_auto_marlin"](str(gguf_path_env))
+            check("env-override config.json -> transcode succeeds", result is not None, str(result))
+            if result is None:
+                return
+            out_cfg = json.loads((Path(result) / "config.json").read_text())
+            check("output config.json model_type == env-overridden config's (qwen3_5_moe)",
+                  out_cfg.get("model_type") == "qwen3_5_moe", str(out_cfg.get("model_type")))
+        finally:
+            os.environ.clear()
+            os.environ.update(env_backup)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_kquant_refused_by_default_and_allowed_with_flag():
     print("\n-- Q4_K present: refused by default, allowed with ALLOW_K=1 --")
     tmp = Path(tempfile.mkdtemp(prefix="patch_auto_marlin_kquant_"))
     try:
         gguf_path = tmp / "toy_kquant.gguf"
         _build_toy_gguf(gguf_path, kquant=True)
+        _write_sibling_hf_config(gguf_path)
         cache_root = tmp / "cache"
         ns = _load_helpers_namespace()
         import os
@@ -281,6 +403,7 @@ def main():
     test_patch_application()
     test_disabled_by_default()
     test_safe_file_auto_transcodes_and_caches()
+    test_sibling_hf_config_used_and_missing_config_refuses()
     test_kquant_refused_by_default_and_allowed_with_flag()
 
     print("\n" + "=" * 72)

@@ -408,6 +408,21 @@ QUANT_MIN, QUANT_MAX = -8, 7  # uint4b8 signed range
 ZERO_POINT = 8  # uint4b8's fixed bias
 MARLIN_SUPPORTED_GROUP_SIZES = (32, 64, 128)  # from marlin_utils.py (excl. -1 == no grouping)
 
+# GGUF-parser-internal architecture-string aliases that are NOT real
+# transformers `model_type` values -- see scripts/patch_gguf_plugin.py's
+# "qwen3.5 model_type normalization" (it maps the real HF model_type
+# "qwen3_5"/"qwen3_5_moe" to these gguf-only spellings purely so
+# vllm-gguf-plugin's own gguf.MODEL_ARCH_NAMES exact-match lookup
+# succeeds). Used below as a --hf-config sanity-check heuristic (Bug C
+# in this repo's auto-marlin hook): if a caller-supplied "real" config's
+# model_type lands on one of these, it is very likely actually this
+# script's own generic fallback (or a copy of it), not the true upstream
+# config -- see scripts/patch_gguf_auto_marlin.py's module docstring.
+_GGUF_INTERNAL_ONLY_MODEL_TYPES = {
+    "qwen35": "qwen3_5",
+    "qwen35moe": "qwen3_5_moe",
+}
+
 # --- int8 branch (--k-quants-to int8) -- see DECISION 1b below for the
 # vLLM-source evidence that this is a real, Marlin-served on-disk format
 # (not a guess): bias/range come straight from vllm/scalar_type.py's
@@ -882,6 +897,34 @@ def main():
     if args.hf_config:
         cfg = json.loads(Path(args.hf_config).read_text(encoding="utf-8"))
         cfg = cfg.get("text_config", cfg)
+        # Minimal sanity check (Bug C in this repo's auto-marlin hook, see
+        # scripts/patch_gguf_auto_marlin.py's module docstring): a caller
+        # passing --hf-config is asserting "this is the REAL upstream
+        # config", so the emitted model_type should be a real transformers
+        # id, not a GGUF-parser-internal alias like this script's own
+        # generic fallback below writes. Warn (do not block -- a real
+        # config genuinely named this way is possible in principle and
+        # this script has no authoritative registry to check against).
+        _hf_model_type = cfg.get("model_type")
+        if not _hf_model_type:
+            print(
+                "[gguf2marlin] WARNING: --hf-config "
+                f"{args.hf_config!r} has no 'model_type' field -- vLLM's "
+                "stock (non-gguf) config loader will not be able to select "
+                "an architecture from this config.json.", file=sys.stderr,
+            )
+        elif _hf_model_type in _GGUF_INTERNAL_ONLY_MODEL_TYPES:
+            print(
+                f"[gguf2marlin] WARNING: --hf-config's model_type="
+                f"{_hf_model_type!r} looks like a GGUF-parser-internal "
+                "architecture alias (see vllm_gguf_plugin's own model_type "
+                "normalization), not a real transformers model_type -- "
+                "expected something like "
+                f"{_GGUF_INTERNAL_ONLY_MODEL_TYPES[_hf_model_type]!r} for "
+                "this architecture. Double-check this is really the "
+                "upstream HF config.json and not a copy of a GGUF-derived "
+                "one.", file=sys.stderr,
+            )
     else:
         token_embd = next((t for t in reader.tensors if t.name == "token_embd.weight"), None)
         if token_embd is not None:

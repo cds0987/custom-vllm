@@ -93,6 +93,58 @@ LATER `vllm serve` of the same file silently reuse that lossy cache with no
 warning at all. Re-checking the manifest's own recorded scheme on cache hit
 closes that gap.
 
+HF CONFIG -- Bug C ("model_type=qwen35 is a GGUF-parser-internal string,
+not a real transformers model_type")
+-----------------------------------------------------------------------
+`scripts/gguf2marlin.py`, run with no `--hf-config`, cannot reconstruct a
+real architecture config from the GGUF file alone -- its own module
+docstring says so ("LIMITATIONS") -- so its best-effort `config.json`
+sets `model_type` to the raw GGUF `general.architecture` string (e.g.
+`"qwen35"` for Qwen3.5). That string is understood by vllm-gguf-plugin's
+OWN gguf-side parser (`gguf.MODEL_ARCH_NAMES`), but NOT by transformers'
+`AutoConfig`/`CONFIG_MAPPING` -- so once auto-marlin reroutes the
+transcoded checkpoint through vLLM's STOCK (non-gguf) config path (see
+"HOOK POINT" above), `AutoConfig.from_pretrained()` raises `ValueError:
+The checkpoint you are trying to load has model type 'qwen35' but
+Transformers does not recognize this architecture` and the server never
+starts. This was diagnosed on real GPU hardware, not guessed.
+
+The fix leans on an existing, ALREADY-MANDATORY operational constraint
+instead of inventing a new one: `vllm_gguf_plugin.config_parser
+.GGUFConfigParser._resolve_config_source()` (upstream plugin code, not
+touched by this repo) requires a real `config.json` to sit next to any
+`.gguf` file even on the plain STOCK path (no auto-marlin involved) --
+without one, the plugin itself refuses to serve. In other words, any
+GGUF this hook could ever be asked to transcode has ALREADY had to have a
+real config.json placed next to it by the operator for the file to be
+servable at all. `_custom_vllm_am_find_hf_config()` (below) simply reuses
+that same file: it looks, in order, at (1)
+`CUSTOM_VLLM_GGUF_AUTO_MARLIN_HF_CONFIG` (a file path or a directory
+containing `config.json` -- an explicit override for cases where the
+sibling-file convention doesn't apply, e.g. a remote/HF-Hub-resolved
+GGUF with no natural "next to it" directory) and (2) `config.json` in the
+same directory as the resolved local `.gguf` file. If neither exists,
+auto-marlin does NOT guess (e.g. by inventing/downloading one, or by
+stripping the trailing digit off `"qwen35"` and hoping) -- it logs both
+ways to supply one and REFUSES to transcode, falling through to the
+stock GGUF plugin path (same safe-fallback philosophy as the K-quant
+policy refusal above: costs performance, never correctness). Once found,
+the path is passed straight through to `scripts/gguf2marlin.py
+--hf-config <path>`, which overlays the real config's fields (attention
+heads, rope, hybrid-layer metadata, and critically `model_type`) onto the
+emitted `config.json` -- see that script's own `--hf-config` handling and
+its `_GGUF_INTERNAL_ONLY_MODEL_TYPES` sanity check (warns, does not
+block, if the supplied config's `model_type` still looks like a
+GGUF-internal alias rather than a real transformers id).
+
+LIMITATIONS: this hook still cannot serve a GGUF that genuinely has no
+config.json anywhere (sibling file or env override) through the Marlin
+path -- by design, matching Bug B's pre-existing requirement rather than
+working around it. An operator who has never been able to serve the
+GGUF via the stock plugin path either (Bug B applies there too) gains
+nothing new to configure: the SAME config.json they already had to place
+for stock serving is what auto-marlin now reuses.
+
 MTP / unmapped tensors: scripts/gguf2marlin.py's own generic architecture
 mapper already passes through any tensor it cannot resolve to a modern HF
 name (this repo's Qwen3.5 MTP head is one such case) as
@@ -323,6 +375,33 @@ def _custom_vllm_am_resolve_local_file(model_ref):
     return None
 
 
+def _custom_vllm_am_find_hf_config(local_path):
+    """Resolve a REAL upstream config.json to overlay onto the transcoded
+    checkpoint (fixes Bug C -- see module docstring, "HF CONFIG"). Never
+    guesses: only two sources are honored, in order --
+    (1) CUSTOM_VLLM_GGUF_AUTO_MARLIN_HF_CONFIG (a file path, or a directory
+        containing config.json);
+    (2) config.json sitting next to the resolved local .gguf file -- the
+        SAME file vllm_gguf_plugin's own GGUFConfigParser already requires
+        to be there for the stock (non-auto-marlin) path (Bug B, upstream,
+        not fixed here).
+    Returns a path to a config.json, or None if neither source resolved to
+    an existing file. Does not log -- the caller decides how to react
+    (refuse vs. warn) since only it knows the full context.
+    """
+    override = _custom_vllm_am_os.environ.get("CUSTOM_VLLM_GGUF_AUTO_MARLIN_HF_CONFIG")
+    if override:
+        p = _CustomVllmAmPath(override)
+        if p.is_dir():
+            p = p / "config.json"
+        if p.is_file():
+            return str(p)
+    sibling = _CustomVllmAmPath(local_path).with_name("config.json")
+    if sibling.is_file():
+        return str(sibling)
+    return None
+
+
 def _custom_vllm_am_hash_file(path):
     h = _custom_vllm_am_hashlib.sha256()
     with open(path, "rb") as f:
@@ -414,7 +493,7 @@ def _custom_vllm_am_refuse(unsafe_types):
     )
 
 
-def _custom_vllm_am_transcode(local_path, out_dir, k_quants_to):
+def _custom_vllm_am_transcode(local_path, out_dir, k_quants_to, hf_config_path):
     script = _custom_vllm_am_find_transcoder_script()
     if script is None:
         _custom_vllm_am_warn(
@@ -428,6 +507,7 @@ def _custom_vllm_am_transcode(local_path, out_dir, k_quants_to):
     cmd = [
         _custom_vllm_am_sys.executable, script, local_path, str(out_dir),
         "--group-size", "32", "--k-quants-to", k_quants_to,
+        "--hf-config", hf_config_path,
     ]
     _custom_vllm_am_log(f"auto-marlin: cache miss -- transcoding via {{' '.join(cmd)}}")
     result = _custom_vllm_am_subprocess.run(cmd, capture_output=True, text=True)
@@ -503,8 +583,30 @@ def _custom_vllm_maybe_auto_marlin(model_ref):
         _custom_vllm_am_refuse(unsafe_types)
         return None
 
+    hf_config_path = _custom_vllm_am_find_hf_config(local_path)
+    if hf_config_path is None:
+        _custom_vllm_am_warn(
+            f"auto-marlin: no real upstream config.json found for {{local_path!r}} "
+            "-- checked (1) CUSTOM_VLLM_GGUF_AUTO_MARLIN_HF_CONFIG (env var, "
+            "a config.json file or a directory containing one) and (2) a "
+            "config.json next to the .gguf file itself. Without it, "
+            "scripts/gguf2marlin.py can only emit a best-effort config.json "
+            "whose model_type is a GGUF-parser-internal string (e.g. "
+            "'qwen35') that transformers does not recognize -- serving the "
+            "transcoded checkpoint would fail with a ValidationError. "
+            "REFUSING to auto-transcode; passing through to the stock GGUF "
+            "loader instead (no Marlin speedup, but no broken server "
+            "either). Fix: place a real config.json next to the .gguf file "
+            "(vllm-gguf-plugin's own config parser already requires this "
+            "for the stock, non-auto-marlin path too -- see "
+            "patch_gguf_auto_marlin.py's module docstring, 'HF CONFIG'), or "
+            "set CUSTOM_VLLM_GGUF_AUTO_MARLIN_HF_CONFIG=<path to config.json "
+            "or its containing directory>."
+        )
+        return None
+
     k_quants_to = "int8" if unsafe_types else "int4"
-    if not _custom_vllm_am_transcode(local_path, cache_dir, k_quants_to):
+    if not _custom_vllm_am_transcode(local_path, cache_dir, k_quants_to, hf_config_path):
         return None
 
     try:
