@@ -12,49 +12,65 @@ reordering, no per-layer sensitivity handling.
 Our edge, per this project's own accumulated knowledge (STATUS.md's kernel
 profile + the GGUF format-sweep quality table): not every Linear in this
 architecture is equally forgiving of 4-bit noise, and finer groups buy back
-precision at a small size cost. This recipe differentiates:
+precision at a small size cost. FINAL shipped recipe (v3, after two
+empirical dead ends recorded below): a single config_group, int4
+group_size=32 (finer than RedHatAI's 128) on every Linear EXCEPT GDN's
+linear_attn.* (kept fp16, same scope as the 2B script -- see the v2 NOTE
+below for why) and lm_head. GDN was never the target of the "our edge"
+premise anyway: STATUS.md's kernel profile already measured GDN/fla at
+2-12% of decode CUDA time, so leaving it fp16 costs essentially nothing,
+and the genuine differentiation from RedHatAI survives untouched on the
+part of the model that actually dominates decode time (attention Q/K/V/O
+and MLP gate/up/down, all now g32 instead of their g128).
 
-  group_gdn:     GDN's four input projections (in_proj_a, in_proj_b,
-                 in_proj_qkv, in_proj_z) -- int8, group_size=128
-  group_default: every other Linear -- int4, group_size=32 (finer than
-                 RedHatAI's 128, more scale granularity per weight)
+NOTE v1->v2 (found empirically, not part of the original design): a first
+attempt tried giving GDN's in_proj_a/in_proj_b their own int8 group_size=128
+scheme (matching the task spec's literal wording) and crashed inside
+AWQModifier's grid search with `RuntimeError: The size of tensor a (32) must
+match the size of tensor b (128) at non-singleton dimension 1`. Root cause,
+confirmed against the AWQ mappings TEST 10 already recorded in recipe.yaml
+for the 2B checkpoint: AWQModifier's auto-resolved mapping smooths all FOUR
+of a GDN layer's input projections (in_proj_qkv, in_proj_z, in_proj_b,
+in_proj_a) jointly under one `smooth_layer: input_layernorm` /
+`balance_layers: [...]` group, because they all read the same
+input_layernorm output. The grid search that picks the shared smoothing
+scale fake-quantizes every balance_layer with each trial scale to measure
+reconstruction error -- which requires every balance_layer in the group to
+share one quantization scheme. Splitting a jointly-smoothed AWQ mapping
+across two different quantization group_sizes is a structural conflict, not
+a config typo. v2's fix: widen the GDN group to int8 g128 across all four
+co-smoothed tensors instead of trying to isolate two of them.
 
-NOTE (found empirically, not part of the original design): a first attempt
-scoped group_gdn to ONLY in_proj_a/in_proj_b (matching the task spec's
-literal wording) and crashed inside AWQModifier's grid search with
-`RuntimeError: The size of tensor a (32) must match the size of tensor b
-(128) at non-singleton dimension 1`. Root cause, confirmed against the AWQ
-mappings TEST 10 already recorded in recipe.yaml for the 2B checkpoint:
-AWQModifier's auto-resolved mapping smooths all FOUR of a GDN layer's input
-projections (in_proj_qkv, in_proj_z, in_proj_b, in_proj_a) jointly under one
-`smooth_layer: input_layernorm` / `balance_layers: [...]` group, because
-they all read the same input_layernorm output. The grid search that picks
-the shared smoothing scale fake-quantizes every balance_layer with each
-trial scale to measure reconstruction error -- which requires every
-balance_layer in the group to share one quantization scheme. Ours didn't:
-in_proj_a/b were group_gdn (g128) while in_proj_qkv/z fell through to
-group_default (g32), so the fake-quantize step tried to apply a g128 scale
-tensor to a g32-shaped weight chunk mid grid-search. Splitting a
-jointly-smoothed AWQ mapping across two different quantization group_sizes
-is a structural conflict, not a config typo -- the fix widens group_gdn to
-cover all four co-smoothed tensors instead of trying to isolate two of them.
+NOTE v2->v3 (found empirically, one level deeper): v2's quantize step
+completed cleanly and produced a checkpoint, but vLLM crashed AT SERVE TIME
+loading it -- `AssertionError` in vllm/model_executor/parameter.py:175,
+inside `load_merged_column_weight`. Root cause: vLLM's
+Qwen3_5Model.hf_to_vllm_mapper doesn't just rename GDN's four input
+projections, it MERGES pairs of them into fused parameters via
+orig_to_new_stacked (in_proj_qkv+in_proj_z -> in_proj_qkvz,
+in_proj_b+in_proj_a -> in_proj_ba). That merge path is built to concatenate
+RAW (unquantized) shards into one destination tensor at load time -- it
+cannot reassemble two INDEPENDENTLY quantized-and-packed compressed-tensors
+modules (each with its own separately-computed weight_packed/weight_scale/
+weight_shape from having been quantized as a standalone Linear); the shapes
+don't line up and the assert fires before a single token generates. This is
+exactly the constraint the 2B script's docstring already flagged when it
+excluded linear_attn.* wholesale ("avoiding the fused in_proj_qkvz/
+in_proj_ba layout mismatch entirely") -- it wasn't merely conservative, it
+was load-bearing: quantizing ANY of GDN's four input projections at all,
+regardless of bit width, breaks vLLM's merged-load path for this
+architecture as it exists today. v3's fix: revert to the 2B script's full
+`re:.*linear_attn.*` exclusion.
 
-Two things this recipe explicitly does NOT change from the 2B script
+Two things this recipe carries over unchanged from the 2B script
 (scripts/quantize_awq_2b.py), verified against Qwen/Qwen3.5-9B's actual
 model.safetensors.index.json before writing this docstring (never assumed):
 
   - GDN naming is confirmed HF-side as
     model.language_model.layers.N.linear_attn.in_proj_a.weight /
     ...in_proj_b.weight (separate tensors, matching the 2B checkpoint's
-    layout) -- hence the group_gdn regex now covers all four sibling
-    tensors, `re:.*linear_attn\\.in_proj_(a|b|qkv|z)$`, per the note above.
-    This is a wider net than the 2B script's `re:.*linear_attn.*` exclusion
-    (which kept ALL of linear_attn fp16, avoiding the fused
-    in_proj_qkvz/in_proj_ba layout question entirely) -- here all four input
-    projections DO get quantized, at int8 rather than being skipped. Verify
-    PPL wasn't in fact traded away by this widening of scope -- that's
-    exactly the swebench-ppl gate at the bottom of the runbook this script's
-    docstring points to.)
+    layout, plus sibling in_proj_qkv/in_proj_z tensors) -- all four covered
+    by the `re:.*linear_attn.*` ignore, per the v3 NOTE above.
   - The checkpoint has a substantial vision tower: 333 of Qwen/Qwen3.5-9B's
     775 safetensors keys are model.visual.* (confirmed via the same index.json
     read -- Qwen/Qwen3.5-2B carries one too, 297/632 keys, and the 2B AWQ
@@ -132,22 +148,31 @@ def tokenize(sample):
 
 ds = ds.map(tokenize, remove_columns=ds.column_names)
 
-# Dict insertion order = resolution priority: group_gdn's specific regex is
-# checked before group_default's blanket "Linear" catch-all, so all four
-# in_proj_* land in the int8 group and everything else Linear falls through
-# to int4. Must cover all four siblings (a/b/qkv/z), not just a/b -- see the
-# module docstring's NOTE for why splitting AWQ's jointly-smoothed group
-# across two quantization group_sizes crashes the scale grid search.
+# SECOND empirical finding (v2 of this recipe, after the group_gdn-covers-all-
+# four fix): quantizing the GDN input projections at ALL -- even uniformly at
+# int8, all four siblings together -- crashes vLLM at SERVE time, not quantize
+# time. vLLM's Qwen3_5Model.hf_to_vllm_mapper doesn't just rename these
+# tensors, it MERGES pairs of them into fused parameters via
+# orig_to_new_stacked: in_proj_qkv+in_proj_z -> in_proj_qkvz,
+# in_proj_b+in_proj_a -> in_proj_ba (see vllm/model_executor/models/qwen3_5.py).
+# That merge goes through MergedColumnParallelLinear's weight_loader_v2 ->
+# load_merged_column_weight, which asserts the incoming shard's shape matches
+# the destination parameter's shape -- a check written for concatenating RAW
+# (unquantized) shards into one merged tensor at load time, not for
+# reassembling two INDEPENDENTLY quantized-and-packed compressed-tensors
+# modules (each with its own weight_packed/weight_scale/weight_shape from
+# being quantized as a standalone Linear). The shapes don't line up and it
+# throws `AssertionError` in parameter.py:175, before a single token is ever
+# generated. This is exactly the constraint the 2B script's docstring already
+# flagged when it excluded linear_attn.* wholesale ("avoiding the fused
+# in_proj_qkvz/in_proj_ba layout mismatch entirely") -- it wasn't merely
+# conservative, it was load-bearing. Reverting to that same full exclusion
+# here. GDN is not the bottleneck to chase anyway: STATUS.md's kernel profile
+# already measured GDN/fla at 2-12% of decode CUDA time, so fp16 GDN costs
+# essentially nothing. The genuine point of differentiation from RedHatAI's
+# recipe survives unchanged: int4 group_size=32 (vs their 128) on every OTHER
+# Linear -- attention Q/K/V/O and the MLP gate/up/down projections.
 config_groups = {
-    "group_gdn": QuantizationScheme(
-        targets=[r"re:.*linear_attn\.in_proj_(a|b|qkv|z)$"],
-        weights=QuantizationArgs(
-            num_bits=8,
-            group_size=128,
-            strategy="group",
-            symmetric=True,
-        ),
-    ),
     "group_default": QuantizationScheme(
         targets=["Linear"],
         weights=QuantizationArgs(
@@ -163,7 +188,13 @@ recipe = [
     AWQModifier(),
     QuantizationModifier(
         config_groups=config_groups,
-        ignore=["lm_head", "re:.*conv1d.*", "re:.*norm.*", "re:.*embed.*"],
+        ignore=[
+            "lm_head",
+            "re:.*linear_attn.*",
+            "re:.*conv1d.*",
+            "re:.*norm.*",
+            "re:.*embed.*",
+        ],
     ),
 ]
 
