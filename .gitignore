@@ -8,3 +8,7 @@ venv/
 build/
 dist/
 .env
+
+public-test.jsonl
+skills_pack/
+out_skills/
