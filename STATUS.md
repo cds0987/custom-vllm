@@ -610,6 +610,20 @@ served mới chuẩn), 74 câu tuyển từ public-test, bench_skills.py:
   400 Bad Request); (b) kênh transfer base64: PHẢI verify sha256 từng chunk
   ngay lúc paste — 2 lần hỏng chunk im lặng đã bị manifest bắt được.
 
+### Re-bench trên CHAMPION GRAFT (2026-08-10, config production đầy đủ
+### mnbt1088 + prefix caching + align + fp8 KV) — bảng chung cuộc:
+
+    conc   TTFT p50 (cũ→mới)   p95 (cũ→mới)    throughput (cũ→mới)
+      1    0,21 → 0,217        0,26 → 0,28      26,8 → 31,2   (+16%)
+      8    0,45 → 0,315        0,88 → 0,76     140,8 → 191,4  (+36%)
+     16    0,70 → 0,488        1,73 → 1,62     228,7 → 273,7  (+20%)
+     32    1,27 → 0,959        3,10 → 3,03     286,5 → 370,6  (+29%)
+
+- 74/74 sạch mọi mức, hit rate 99,37%. Vượt kỳ vọng +8-12% (bench_load
+  đo prompt ngắn đánh giá thấp lợi ích byte-giảm ở decode dài context).
+- conc32 p95 3,03s — sát trần 3s; "max conc trong SLA" giờ ~28-32.
+- Kết quả: out_skills/bench_skills_champion_graft.jsonl (Colab-local).
+
 ## TASK L (2026-08-10): calibration nhanh — 10-11× nhanh hơn, chất lượng WARN → chỉ làm "chế độ nháp"
 
 `--calib-batch-size 8 --num-samples 128 --max-seq-len 1024` (không GDN):
