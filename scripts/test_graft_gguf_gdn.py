@@ -280,12 +280,12 @@ def test_narrow_ignore_list_unit():
 # ==========================================================================
 
 
-def run_cli(frame, gguf_path, out_dir, group_size=32):
-    return subprocess.run(
-        [sys.executable, str(GRAFT_PATH), "--frame", str(frame), "--gguf", str(gguf_path),
-         "--out", str(out_dir), "--group-size", str(group_size)],
-        capture_output=True, text=True,
-    )
+def run_cli(frame, gguf_path, out_dir, group_size=32, bits=None):
+    cmd = [sys.executable, str(GRAFT_PATH), "--frame", str(frame), "--gguf", str(gguf_path),
+           "--out", str(out_dir), "--group-size", str(group_size)]
+    if bits is not None:
+        cmd += ["--bits", str(bits)]
+    return subprocess.run(cmd, capture_output=True, text=True)
 
 
 def test_end_to_end():
@@ -408,6 +408,57 @@ def test_end_to_end():
         pass  # caller (test_determinism) reuses tmp inputs; cleaned there
 
 
+def test_bits4_end_to_end():
+    print("\n-- TASK N3: end-to-end CLI run with --bits 4 --")
+    tmp = Path(tempfile.mkdtemp(prefix="graft_gdn_bits4_"))
+    try:
+        rng = np.random.default_rng(43)
+        true_weights = build_true_gdn_weights(rng)
+        frame_dir = tmp / "frame"
+        gguf_path = tmp / "src.gguf"
+        out_dir = tmp / "out"
+        build_test_frame(frame_dir, true_weights)
+        build_test_gguf(gguf_path, true_weights)
+
+        result = run_cli(frame_dir, gguf_path, out_dir, bits=4)
+        print(result.stdout[-2000:])
+        print(result.stderr[-2000:])
+        check("CLI exits 0 with --bits 4", result.returncode == 0, f"returncode={result.returncode}")
+        if result.returncode != 0:
+            return
+
+        cfg = json.loads((out_dir / "config.json").read_text())
+        qc = cfg["quantization_config"]
+        new_group = qc["config_groups"].get("graft_gdn_int8")  # group NAME is cosmetic, unchanged by --bits
+        check("new config_group present (bits=4)", new_group is not None, str(qc["config_groups"].keys()))
+        if new_group is not None:
+            check("new group num_bits == 4", new_group["weights"]["num_bits"] == 4, str(new_group["weights"]))
+
+        with safe_open(out_dir / "model.safetensors", framework="pt") as f:
+            base = "model.layers.0.linear_attn.in_proj_qkv"
+            wp = f.get_tensor(base + ".weight_packed")
+            ws = f.get_tensor(base + ".weight_scale")
+            n, k = QK_DIM + V_DIM, HIDDEN
+            # packed_factor = 32/num_bits: 4 bits -> 8 values/int32, vs. 4
+            # values/int32 for the default 8-bit graft (see DECISION 1's
+            # packed_dim=1, packed_factor comment in graft_gguf_gdn.py).
+            check("weight_packed shape (N, K/8) for 4-bit packing", tuple(wp.shape) == (n, k // 8), str(wp.shape))
+            check("weight_scale shape unaffected by bit width (N, K/group_size)",
+                  tuple(ws.shape) == (n, k // 32), str(ws.shape))
+
+            deq = graft.g2m.dequant_gptq_for_verification(wp.numpy().T, ws.numpy().T, k, n, 32, bits=4)
+            rel_rms_vs_true = float(np.sqrt(((deq - true_weights["in_proj_qkv"].T) ** 2).mean())) / \
+                float(np.sqrt((true_weights["in_proj_qkv"].T ** 2).mean()))
+            # Looser bound than the 8-bit test: 4-bit RTN carries meaningfully
+            # more quantization noise on top of the Q4_K source noise, but
+            # should still be far from the "wrong permutation" ballpark
+            # (~1.4x raw signal RMS).
+            check("bits=4 grafted dequant still recovers TRUE pre-tile weight (untile correctness)",
+                  rel_rms_vs_true < 0.5, f"rel_rms_vs_true={rel_rms_vs_true}")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_determinism(tmp_frame_gguf):
     frame_dir, gguf_path = tmp_frame_gguf
     print("\n-- determinism: two runs produce identical output --")
@@ -456,6 +507,7 @@ def main():
     out_dir, frame_dir, true_weights = test_end_to_end()
     test_determinism((frame_dir, frame_dir.parent / "src.gguf"))
     test_mismatched_pair_fails()
+    test_bits4_end_to_end()
 
     print("\n" + "=" * 72)
     if FAILURES:

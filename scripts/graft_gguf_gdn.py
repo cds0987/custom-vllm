@@ -676,8 +676,20 @@ def main(argv=None) -> int:
     ap.add_argument("--gguf", required=True, help="path to the source .gguf file (e.g. Q4_K_M)")
     ap.add_argument("--out", required=True, help="output checkpoint directory")
     ap.add_argument("--group-size", type=int, default=32, choices=MARLIN_SUPPORTED_GROUP_SIZES,
-                     help="int8 group size for the grafted GDN modules (default 32 -- see DECISION 2)")
+                     help="group size for the grafted GDN modules (default 32 -- see DECISION 2)")
+    ap.add_argument("--bits", type=int, default=8, choices=(4, 8), help=(
+        "bit width for the grafted GDN modules (default 8, TASK M's original "
+        "recipe). TASK N3: --bits 4 tests whether a tighter graft (matching "
+        "the champion's own W4A16 int4 groups exactly, rather than a mixed "
+        "int8-on-int4 checkpoint) trades some of the int8 graft's ppl margin "
+        "for speed -- quantize_symmetric_group/pack_rows (imported from "
+        "gguf2marlin.py) are already bit-width-generic, this flag just "
+        "threads the choice through instead of hardcoding int8."
+    ))
     args = ap.parse_args(argv)
+
+    global BITS
+    BITS = args.bits
 
     frame_dir = Path(args.frame)
     out_dir = Path(args.out)
