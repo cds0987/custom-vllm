@@ -624,6 +624,21 @@ served mới chuẩn), 74 câu tuyển từ public-test, bench_skills.py:
 - conc32 p95 3,03s — sát trần 3s; "max conc trong SLA" giờ ~28-32.
 - Kết quả: out_skills/bench_skills_champion_graft.jsonl (Colab-local).
 
+## TASK N5a (2026-08-11): ngram speculative — LOẠI ở mọi mức tải
+
+bench_skills 74 câu, graft int8, so {OFF, MTP (N2), ngram}:
+- conc1: ngram p95 0,54s — CHẬM HƠN OFF (0,28s), không có lợi ích nào
+  (khác MTP +29%). conc8: p95 2,99s vs OFF 0,76s. conc32: **SỤP — p95
+  101,3s (33× OFF), throughput 239 vs 370,6, cache hit rơi 99%→53%**.
+- Nguyên nhân từ log: ngram TẮT async scheduling ("Async scheduling not
+  supported with ngram-based speculative decoding") + overhead
+  prompt-lookup trên prefix 30K mỗi bước. Kỳ vọng "prefix chứa sẵn Đáp
+  án:/JSON nên đoán trúng cao" KHÔNG cứu được chi phí matching.
+- **Kết luận: loại ngram khỏi menu cho workload shared-prefix dài; MTP
+  (bật tải thấp) vẫn là spec-decode duy nhất đáng dùng.**
+- Vận hành: wipe TOÀN BỘ lần 4 ngay sau N5a — mất cả 2 checkpoint graft
+  + skills_pack + môi trường. Rebuild ~40-60 phút (quy trình tất định).
+
 ## TASK N3 (2026-08-11): graft int4 — ứng viên soán ngôi, CHỜ XÁC NHẬN baseline tươi
 
 graft_gguf_gdn.py --bits 4 (commit a1dea03, mặc định vẫn int8), graft
