@@ -624,6 +624,25 @@ served mới chuẩn), 74 câu tuyển từ public-test, bench_skills.py:
 - conc32 p95 3,03s — sát trần 3s; "max conc trong SLA" giờ ~28-32.
 - Kết quả: out_skills/bench_skills_champion_graft.jsonl (Colab-local).
 
+## TASK N3 (2026-08-11): graft int4 — ứng viên soán ngôi, CHỜ XÁC NHẬN baseline tươi
+
+graft_gguf_gdn.py --bits 4 (commit a1dea03, mặc định vẫn int8), graft
+~4,6 phút CPU, RMS refit 9,4% (đúng tầm RTN int4 đã dự).
+
+    checkpoint        ppl (99 đề)     bench_skills conc32 (74 câu thật)
+    RedHatAI          5,1645 (CŨ*)    —
+    graft int8 (đương kim) 5,0672      p50 0,96s / p95 3,03s / 370,6 tok/s
+    **graft int4**    **4,7497 (ratio 0,92)** p50 0,61s / **p95 2,75s** / **388,7 (+4,9%)**
+
+- int4 THẮNG int8 cả 4 chỉ số speed + ppl thấp hơn cả int8 (phản trực
+  giác — giả thuyết: int4 g32 khớp nguyên scheme W4A16 của frame, không
+  có biên mixed-precision int8/int4 tại Marlin; hoặc nhiễu mẫu 99 đề).
+- (*) CẢNH BÁO KỶ LUẬT: ppl so với baseline SỐ CŨ (JSON gốc mất theo
+  wipe). Chưa phong champion — cần lượt xác nhận: baseline RedHatAI +
+  ppl CẢ HAI graft đo tươi cùng runtime, bảng 3 chiều. Nếu xác nhận:
+  int4 là champion v2 (nhẹ hơn 0,6GB, p95 chui hẳn dưới trần 3s).
+- Đang giữ cả 2 checkpoint trên Colab chờ phán quyết.
+
 ## TASK N2 (2026-08-11): MTP trên DỮ LIỆU THẬT — thắng tải thấp, cấm tải cao
 
 Champion graft + production flags + `--speculative-config '{"method":
