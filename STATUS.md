@@ -624,6 +624,24 @@ served mới chuẩn), 74 câu tuyển từ public-test, bench_skills.py:
 - conc32 p95 3,03s — sát trần 3s; "max conc trong SLA" giờ ~28-32.
 - Kết quả: out_skills/bench_skills_champion_graft.jsonl (Colab-local).
 
+## TASK N1 (2026-08-10): admission cap phía server — THUA RÕ, đóng hướng này
+
+Sweep --max-num-seqs {8,16,24} trên champion graft, client vẫn đổ conc32
+(bench_skills 74 câu): baseline không-cap p95 3,03s / 370,6 tok/s;
+mns=24 → p95 64,6s (p50 1,77s đẹp nhưng 8 request tràn cap chờ hàng đợi
+chi phối đuôi); mns=16 → p95 57,4s; mns=8 → thảm họa (122,7s, 193 tok/s).
+- **Kết luận: KHÔNG dùng max-num-seqs làm đòn SLA khi client đổ nguyên
+  batch — cap server chỉ chuyển chi phí từ "cùng chậm" sang "đuôi chết
+  đói", p95 luôn tệ hơn.** Kiểm soát SLA đúng chỗ = giới hạn concurrency
+  phía CLIENT/load-balancer khớp sức chứa server.
+- Artifact phương pháp ghi lại: sweep rate dùng --skip-warmup → mức rate
+  ĐẦU mỗi lượt hứng chi phí nguội (thấy rate 0,4 "tệ hơn" 0,5 — đảo trực
+  giác do thứ tự chạy, không phải số thật). Luật: sweep rate PHẢI warmup
+  đầy đủ trước mức đầu tiên.
+- Vận hành: runtime wipe lần 3 — champion graft DỰNG LẠI TỪ ĐẦU trong
+  ~4,5 phút (frame + GGUF + graft, RMS khớp ~0,005) → quy trình tái tạo
+  đã chứng minh rẻ và tất định; backup HF vẫn nên làm.
+
 ## Auto-marlin (TASK K/K2-K4) — trạng thái cuối 2026-08-10: cơ khí ĐẠT, đúng đắn CHƯA
 
 Nghiệm thu Qwen3.5-2B GGUF "Q4_0" (thực chất trộn Q6_K/Q5_K/Q8_0/Q4_1 →
