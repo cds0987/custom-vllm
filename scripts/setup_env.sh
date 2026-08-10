@@ -14,6 +14,15 @@ echo "=== Installing llmcompressor + datasets (quantize_*.py / eval_quality_sweb
 # these but the core serve/patch path does not, so failures here must not
 # abort setup for a pure-serving session.
 pip install -q llmcompressor datasets || echo "WARNING: llmcompressor/datasets install failed (non-fatal for serving-only sessions)"
+# datasets pins an older huggingface_hub (observed: downgraded to 1.23.0,
+# which predates the `ResolvedRevision` symbol) and silently overwrites the
+# newer huggingface_hub vllm/vllm_gguf_plugin need -- vllm_gguf_plugin's
+# loader.py does `from huggingface_hub import ResolvedRevision, ...` at
+# import time, so any server load of ANY model (not just GGUF) then dies
+# with ImportError before it even reaches gguf-specific code. Force the
+# newer huggingface_hub back after datasets has had its say; harmless if
+# datasets didn't touch it.
+pip install -q -U huggingface_hub || echo "WARNING: huggingface_hub re-pin failed"
 
 echo "=== Installing vllm-gguf-plugin (GGUF moved out-of-tree as of vllm 0.26) ==="
 # once for the dependencies (gguf, ...), then package-only so the in-place
