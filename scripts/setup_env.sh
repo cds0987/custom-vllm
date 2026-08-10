@@ -7,6 +7,14 @@ set -e
 echo "=== Installing vllm ==="
 pip install -q vllm requests
 
+echo "=== Installing llmcompressor + datasets (quantize_*.py / eval_quality_swebench.py's lazy load_dataset) ==="
+# Light guard, not a hard dependency of serving itself: several scripts/ tools
+# (quantize_gptq_9b.py, quantize_awq_*.py, bench_serving.py, bench_swebench.py,
+# eval_quality_swebench.py's lazy `from datasets import load_dataset`) need
+# these but the core serve/patch path does not, so failures here must not
+# abort setup for a pure-serving session.
+pip install -q llmcompressor datasets || echo "WARNING: llmcompressor/datasets install failed (non-fatal for serving-only sessions)"
+
 echo "=== Installing vllm-gguf-plugin (GGUF moved out-of-tree as of vllm 0.26) ==="
 # once for the dependencies (gguf, ...), then package-only so the in-place
 # patches below always apply to pristine sources
