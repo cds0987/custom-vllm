@@ -624,6 +624,29 @@ served mới chuẩn), 74 câu tuyển từ public-test, bench_skills.py:
 - conc32 p95 3,03s — sát trần 3s; "max conc trong SLA" giờ ~28-32.
 - Kết quả: out_skills/bench_skills_champion_graft.jsonl (Colab-local).
 
+## Auto-marlin (TASK K/K2-K4) — trạng thái cuối 2026-08-10: cơ khí ĐẠT, đúng đắn CHƯA
+
+Nghiệm thu Qwen3.5-2B GGUF "Q4_0" (thực chất trộn Q6_K/Q5_K/Q8_0/Q4_1 →
+buộc ALLOW_K=1, nhánh int8 lossy chưa qua cổng ppl):
+- ĐẠT: hook + config resolve + transcode (150 modules, tên GDN đúng sau K4)
+  + serve qua MarlinLinearKernel + cache. 6 lớp bug đã bóc/sửa có test
+  (A logging, B config upstream, C model_type, D naming GDN, transforms
+  A_log/V-head/conv1d, norm 1+w + q/k_norm naming).
+- TRƯỢT: completion rác ("The capital of France is notably purple...";
+  "2+2?" → "4" rồi suy thoái ***). Tang vật: /content/marlin_transcode_evidence_K4
+  (1,8GB) + cache hash cd70221b... Ba giả thuyết chưa phân định: (a) nhánh
+  int8 K-quant chưa đủ chính xác cho GDN; (b) còn transform chưa đảo;
+  (c) tokenizer/vocab mismatch base vs unsloth GGUF.
+- Thí nghiệm phân định rẻ nhất (chưa chạy): thêm cờ transcode ép TOÀN BỘ
+  linear_attn.* về fp16 → nếu mạch lạc = lỗi trong đường quant GDN; nếu
+  vẫn rác = lỗi ngoài GDN (norm/embed/tokenizer). Một cờ local + một lượt
+  serve.
+- Lưu ý test-config: architectures phải đổi ForConditionalGeneration →
+  ForCausalLM cho checkpoint text-only, và strip mrope như Bug 2 cũ.
+- KHÔNG ảnh hưởng champion/graft (đường đó dùng frame RedHatAI + GGUF
+  bóc tay, đã PASS ppl). Auto-marlin xếp trạng thái BETA cho tới khi
+  phân định xong.
+
 ## TASK L (2026-08-10): calibration nhanh — 10-11× nhanh hơn, chất lượng WARN → chỉ làm "chế độ nháp"
 
 `--calib-batch-size 8 --num-samples 128 --max-seq-len 1024` (không GDN):
