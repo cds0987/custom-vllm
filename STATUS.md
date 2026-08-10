@@ -652,11 +652,20 @@ graft_gguf_gdn.py --bits 4 (commit a1dea03, mặc định vẫn int8), graft
 - int4 THẮNG int8 cả 4 chỉ số speed + ppl thấp hơn cả int8 (phản trực
   giác — giả thuyết: int4 g32 khớp nguyên scheme W4A16 của frame, không
   có biên mixed-precision int8/int4 tại Marlin; hoặc nhiễu mẫu 99 đề).
-- (*) CẢNH BÁO KỶ LUẬT: ppl so với baseline SỐ CŨ (JSON gốc mất theo
-  wipe). Chưa phong champion — cần lượt xác nhận: baseline RedHatAI +
-  ppl CẢ HAI graft đo tươi cùng runtime, bảng 3 chiều. Nếu xác nhận:
-  int4 là champion v2 (nhẹ hơn 0,6GB, p95 chui hẳn dưới trần 3s).
-- Đang giữ cả 2 checkpoint trên Colab chờ phán quyết.
+- XÁC NHẬN TƯƠI (2026-08-11, cùng runtime, cùng lệnh eval, 98/98 mỗi lượt):
+  baseline 5,1322 / int8 5,0512 (0,9842) / **int4 4,7780 (0,9310)** —
+  pattern int4 < int8 < baseline TÁI LẬP, không phải nhiễu baseline cũ
+  (tươi vs cũ lệch <1%). **→ PHONG CHAMPION v2: graft int4**
+  (`graft_gguf_gdn.py --bits 4`, RMS 9,4%, 9,1GB). Đầy đủ chỉ số:
+  ppl ratio 0,931 · conc32 388,7 tok/s · TTFT p95 2,75s (dưới trần SLA)
+  · TTFT p50 0,61s. Giải thích int4<int8 vẫn là giả thuyết mở
+  (scheme thuần nhất với frame W4A16, không biên mixed-precision).
+- Bug vận hành sửa tận gốc trong lượt rebuild: (a) `datasets` âm thầm
+  downgrade huggingface_hub làm vllm_gguf_plugin chết từ import — fix
+  re-pin trong setup_env.sh (bb8b894); (b) patch_gguf_override_signature
+  giờ no-op khi plugin đã fix upstream thay vì giết setup (6699d2c);
+  (c) doc trap "chạy fix_qwen35 lên output graft" trong suggested-run đã
+  xóa — graft output phải serve NGUYÊN TRẠNG.
 
 ## TASK N2 (2026-08-11): MTP trên DỮ LIỆU THẬT — thắng tải thấp, cấm tải cao
 

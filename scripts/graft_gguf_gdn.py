@@ -900,10 +900,13 @@ def _print_report(out_dir, grafted_names, kept_names, error_report):
             print(f"    {e:.6f}  {name}")
     print(f"\nwrote {out_dir}")
     print("\nSuggested Colab acceptance run (GPU, not run from this box):")
-    print("    python scripts/fix_qwen35_hf_checkpoint.py <out_dir>  # if not already fixed")
+    print("    # Do NOT run fix_qwen35_hf_checkpoint.py on this output: the graft")
+    print("    # preserves the frame's own naming convention, and stripping the")
+    print("    # language_model prefix breaks multimodal (ConditionalGeneration)")
+    print("    # frames -- serve the graft output directly, unmodified.")
     print("    vllm serve <out_dir> --max-model-len 8192")
-    print("    # fast-bench conc1 + conc32, eval ppl on the 99-prompt SWE-bench set,")
-    print("    # compare against the champion's baseline ppl=5.1578 (target ratio < 1.10)")
+    print("    # fast-bench conc1 + conc32, eval ppl on the 99-prompt SWE-bench set")
+    print("    # against a FRESH same-runtime baseline (target ratio < 1.10)")
     print("=" * 72)
 
 
