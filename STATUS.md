@@ -624,6 +624,31 @@ served mới chuẩn), 74 câu tuyển từ public-test, bench_skills.py:
 - conc32 p95 3,03s — sát trần 3s; "max conc trong SLA" giờ ~28-32.
 - Kết quả: out_skills/bench_skills_champion_graft.jsonl (Colab-local).
 
+## TASK N2 (2026-08-11): MTP trên DỮ LIỆU THẬT — thắng tải thấp, cấm tải cao
+
+Champion graft + production flags + `--speculative-config '{"method":
+"qwen3_5_mtp", "num_speculative_tokens": 1}'` (model_mtp.safetensors trong
+graft được nhận diện, share embed+lm_head). Thước chính: bench_skills 74 câu.
+
+    conc   OFF thr/decode       MTP thr/decode        Δthr      TTFT p95 OFF→MTP
+      1    31,2 / 31,45         40,2 / 41,39         +28,8%     0,28 → 0,81s
+      8    191,4 / 25,32        223,0 / 30,38        +16,5%     0,76 → 4,64s (!)
+     16    273,7 / 18,98        305,0 / 21,66        +11,4%     1,62 → 8,61s
+     32    370,6 / 14,36        386,8 / 15,75        +4,4%      3,03 → 17,67s
+
+- **Acceptance thực trên tiếng Việt/MCQ/JSON: 85,0%** (135.749/159.710,
+  /metrics spec_decode) — dự đoán "phụ thuộc phân phối dữ liệu" đúng,
+  và workload này đoán trúng cao.
+- +33% conc1 của TASK D tái lập (+28,8% trên graft).
+- **Nhưng TTFT p95 nổ theo concurrency** (4,6s ngay ở conc8): FlashInfer
+  không hỗ trợ CUDAGraph FULL với spec-decode (log tự hạ về PIECEWISE) +
+  draft forward mỗi bước cạnh tranh compute với prefill người mới.
+- MTP + prefix caching chung sống ổn (không crash, hit 95,7% — nhích thấp
+  hơn 99,37%, nghi do cách đếm draft-token, chưa đào).
+- **Khuyến nghị vận hành: MTP là công tắc theo tải — bật khi conc<=4
+  (decode +29%, TTFT vẫn <1s), TẮT từ conc8 trở lên (vi phạm SLA 3s).**
+  Router tự động theo tải là việc tầng gateway nếu muốn ăn cả hai.
+
 ## TASK N1 (2026-08-10): admission cap phía server — THUA RÕ, đóng hướng này
 
 Sweep --max-num-seqs {8,16,24} trên champion graft, client vẫn đổ conc32
