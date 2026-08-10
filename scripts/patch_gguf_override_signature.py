@@ -20,6 +20,7 @@ GGUF->GPTQ transcode validation on this stack.
 """
 
 import glob
+import re
 import sysconfig
 
 PATCH_MARKER = "# --- custom_vllm: vLLM 0.26 passes hf_config; accept it or every non-GGUF quant load dies ---"
@@ -51,10 +52,27 @@ path = matches[0]
 with open(path, encoding="utf-8") as f:
     src = f.read()
 
+# Some vllm_gguf_plugin releases have since fixed this upstream (the pip
+# package now ships override_quantization_method() with its own hf_config
+# param), which makes ANCHOR (the pre-fix two-argument signature) legitimately
+# absent without our PATCH_MARKER ever having run. Detect that case by regex
+# over the method signature itself, independent of exact formatting, so a
+# fixed-upstream build is treated as a no-op success instead of a hard error.
+UPSTREAM_FIXED_RE = re.compile(
+    r"def\s+override_quantization_method\s*\([^)]*hf_config[^)]*\)", re.DOTALL
+)
+
 if PATCH_MARKER in src:
     print(f"Already patched: {path}")
 elif ANCHOR not in src:
-    raise SystemExit(f"Anchor not found in {path}; plugin source may have changed")
+    if UPSTREAM_FIXED_RE.search(src):
+        print(
+            f"Anchor not found in {path}, but override_quantization_method() "
+            "already accepts hf_config upstream -- treating as no-op (plugin "
+            "shipped the fix itself)."
+        )
+    else:
+        raise SystemExit(f"Anchor not found in {path}; plugin source may have changed")
 else:
     src = src.replace(ANCHOR, PATCH, 1)
     with open(path, "w", encoding="utf-8") as f:
