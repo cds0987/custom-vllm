@@ -47,10 +47,14 @@ thông, chỉ đáng khi TTFT-lượt-sau quan trọng hơn phí tổn. (d) `LMC
 persist-to-disk (Nhóm E-20) không giải bài này — nó cứu qua *restart*, không cứu
 tranh chấp LRU giữa các phiên đang sống.
 
-**Thí nghiệm chứng minh.** CHƯA ĐO. Cần `scripts/bench_agent_loop.py` (chưa viết,
-xem mục cuối) với cờ đề xuất `--tool-think-time <dist>` (phân phối thời gian chờ
-tool mỗi lượt) và `--competing-noise-sessions N` (traffic nền cạnh tranh pool),
-đo TTFT lượt-kế-tiếp theo hàm của (thời gian chờ × tải nền).
+**Thí nghiệm chứng minh.** Bench đã tồn tại (`scripts/bench_agent_loop.py`,
+đã viết, **CHƯA CHẠY thật trên GPU** — chưa có số trong `STATUS.md`), đúng chế độ
+`--resume-probe --resume-probe-gaps 0.5,2,5,15,60` — một phiên, quét thời gian
+chờ tool T qua nhiều mức, lặp `--resume-probe-trials` lần mỗi mức, trả thẳng đường
+cong TTFT(T). Docstring script tự gọi đây là "phép đo quyết định nhất trong file"
+cho đúng câu hỏi này. Muốn đo cả phần "tải nền cạnh tranh" (LRU bị traffic khác
+chiếm) cần kết hợp với `--mixed-chat N` chạy song song. **CHƯA ĐO** — cần chạy trên
+GPU thật và ghi số vào `STATUS.md`.
 
 ### (2) KV pool cạn vì nhiều phiên × lịch sử dài → preemption dây chuyền
 
@@ -81,12 +85,13 @@ tệ hơn traffic 1-lượt ngắn một cách **cấu trúc**, vì working-set 
 giữ sống cho các request đang chạy + cache gần đây) tăng không giới hạn trong khi
 pool cố định — không phải hiện tượng ngẫu nhiên.
 
-**Thí nghiệm chứng minh.** CHƯA ĐO cho hình dạng agent cụ thể (nhiều phiên, lịch sử
-tăng dần theo lượt). TASK N1 (`STATUS.md` mục "admission cap phía server") đã chứng
-minh phần "không cap phía server", nhưng đó là traffic đồng nhất conc32 một cấu
-hình, không phải nhiều phiên lịch sử tăng dần. Cần
-`scripts/bench_agent_loop.py --num-sessions N --turns T --history-mode accumulate`,
-theo dõi `vllm:num_preemptions` theo N×T.
+**Thí nghiệm chứng minh.** TASK N1 (`STATUS.md` mục "admission cap phía server") đã
+chứng minh phần "không cap phía server", nhưng đó là traffic đồng nhất conc32 một
+cấu hình, không phải nhiều phiên lịch sử tăng dần. `scripts/bench_agent_loop.py`
+(đã viết, chưa chạy) đúng hình dạng này qua `--sessions 1,4,8,16 --turns K` (mặc
+định transcript chỉ NỐI DÀI, không viết lại — đúng tính chất "lịch sử tăng dần"
+cần cho kịch bản này); nên theo dõi `vllm:num_preemptions`/log `"Preemptions: %d"`
+song song lúc chạy qua nhiều mức `--sessions`. **CHƯA ĐO** trên GPU thật.
 
 ### (3) Slot mamba cạn (pool riêng, đặc thù model lai)
 
@@ -139,8 +144,9 @@ TASK C2 đã đóng hướng này ("Mamba-state offload thật sự thì chưa a
 
 **Thí nghiệm chứng minh.** TASK C2 (đọc code, chưa sweep thực nghiệm số phiên) +
 TASK F (correctness align mode, đã PASS). CHƯA ĐO: số phiên agent đồng thời tăng
-dần tới khi chạm trần block mamba và quan sát hành vi lỗi/degrade — cần
-`scripts/bench_agent_loop.py --num-sessions` quét qua trần đã đọc từ log.
+dần tới khi chạm trần block mamba và quan sát hành vi lỗi/degrade — dùng
+`scripts/bench_agent_loop.py --sessions <quét qua trần đọc từ log khởi động>`
+(đã viết, chưa chạy).
 
 ### (4) Prefix skills 30K bị lịch sử các phiên đá ra khỏi cache → thảm họa toàn hệ
 
@@ -180,11 +186,15 @@ lịch sử dài (dấu hiệu phân biệt với kịch bản (1), vốn chỉ 
   nhau khỏi VRAM)") — chỉ cứu cold-start sau restart, không cứu tranh chấp sống.
   Đừng kỳ vọng LMCache là lời giải cho đúng kịch bản này.
 
-**Thí nghiệm chứng minh.** CHƯA ĐO. Cần `scripts/bench_agent_loop.py` chạy traffic
-skills-pack (như `bench_skills.py` đã có) SONG SONG với `--competing-noise-sessions`
-(lịch sử dài, không share prefix) tăng dần, đo đường cong tụt hit-rate + TTFT trôi —
-tái dùng cơ chế scrape `/metrics` đã có sẵn trong `bench_skills.py`
-(`scrape_prefix_cache_metrics`/`diff_prefix_cache_metrics`).
+**Thí nghiệm chứng minh.** `scripts/bench_agent_loop.py` (đã viết, chưa chạy) tái
+dùng nguyên `scrape_prefix_cache_metrics`/`diff_prefix_cache_metrics` của
+`bench_skills.py` (không viết lại lần 2 phần vá tên metric `_total` của TASK H) —
+chạy với `--mixed-chat N` (traffic nền không share prefix) tăng dần trong lúc
+`--sessions`/`--turns` chính chạy trên prefix skills-pack, đọc hit-rate/TTFT hai
+phía từ cùng 1 lượt chạy. Lưu ý: `--mixed-chat` là traffic "chat ngắn bình thường",
+gần với kịch bản này nhưng chưa hẳn "lịch sử dài" như đề bài mô tả — nếu cần đúng
+hình dạng "nhiều phiên lịch sử dài không share prefix", phải tự dựng thêm noise
+bằng `--sessions` cấp 2 trỏ `--prefix-file` khác. **CHƯA ĐO** trên GPU thật.
 
 ### (5) Đa khách hàng, mỗi khách một prefix khác nhau tranh chỗ
 
@@ -208,10 +218,13 @@ là mở rộng kiểu (4a) ra N nhóm thay vì 2. (c) Không có đòn config r
 đây là giới hạn kiến trúc (không có API pin) — bất kỳ giải pháp "công bằng multi-tenant"
 nào đều phải làm ở tầng ứng dụng (rate limit theo tenant, ưu tiên theo hợp đồng SLA).
 
-**Thí nghiệm chứng minh.** CHƯA ĐO — chưa có bench nào đo multi-prefix contention.
-Cần `scripts/bench_agent_loop.py --prefix-set <N files>` gửi round-robin nhiều
-prefix riêng, đo hit-rate tổng hợp và (nếu tự thêm log tenant-id) hit-rate từng
-prefix theo tỉ lệ N × kích thước / ngân sách pool.
+**Thí nghiệm chứng minh.** CHƯA ĐO — chưa có bench nào đo multi-prefix contention
+thật (`scripts/bench_agent_loop.py` hiện chỉ nhận MỘT `--prefix-file` mỗi lần
+chạy; không có cờ multi-prefix). Cách gần nhất có thể làm ngay: chạy nhiều tiến
+trình `bench_agent_loop.py` song song, mỗi tiến trình trỏ `--prefix-file` khác
+nhau vào CÙNG server, rồi tự đối chiếu `prefix_cache_hit_rate` báo cáo riêng của
+từng tiến trình. Muốn đo gọn trong 1 lượt chạy cần bổ sung cờ kiểu
+`--prefix-set <N files>` vào script — chưa có, liệt kê ở mục cuối.
 
 ## Nhóm B — Lịch trình & độ trễ
 
@@ -239,7 +252,10 @@ nguyên, xem kịch bản 16). Nếu tool chậm thường xuyên và lịch s�
 cứng + fallback trả lời "đang xử lý" để tránh phiên treo vô thời hạn ở tầng ứng
 dụng (không phải vấn đề vLLM).
 
-**Thí nghiệm chứng minh.** Trùng với A-1 (`--tool-think-time`).
+**Thí nghiệm chứng minh.** Trùng với A-1 (`scripts/bench_agent_loop.py --resume-probe`,
+đã viết/chưa chạy) — hoặc `--tool-latency-tail 'P:SEC'` trong lượt chạy nhiều phiên
+bình thường, để mô phỏng đúng "P% lượt tool chậm bất thường" thay vì mọi tool đều
+chậm đều.
 
 ### (7) Tool lỗi/timeout → thử lại
 
@@ -256,7 +272,12 @@ breaker khi tool lỗi liên tục (dừng retry sau N lần, trả lỗi rõ r�
 Kiểm soát tải bằng client-side/gateway (bài học N1, mục 17), KHÔNG dùng cap phía
 server để "chặn" retry storm — đã chứng minh cap server làm đuôi trễ tệ hơn.
 
-**Thí nghiệm chứng minh.** CHƯA ĐO.
+**Thí nghiệm chứng minh.** `scripts/bench_agent_loop.py --toolcall-invalid-rate P`
+mô phỏng đúng chi phí "P% lượt tool-call bị coi là hỏng, buộc 1 request retry thêm"
+(đã viết, chưa chạy) — đo được chi phí round-trip thừa, nhưng đây là retry do LỖI
+CÚ PHÁP JSON (khác kịch bản C-11 hơn là "tool ngoài lỗi/timeout"). Retry-storm do
+tool ngoài lỗi đồng loạt (nhiều phiên retry CÙNG LÚC) trùng cơ chế với (8) —
+dùng `--burst-sync` để mô phỏng phần "đồng loạt". **CHƯA ĐO** trên GPU thật.
 
 ### (8) Dồn cục đồng bộ (mọi phiên cùng vào lượt mới sau một API chung)
 
@@ -280,9 +301,11 @@ throughput server đạt 387,8 tok/s @conc32 theo TASK P1) — kiểm soát tạ
 server mns rộng rãi.
 
 **Thí nghiệm chứng minh.** TASK N1 (đã có, chứng minh phần "cap server thua").
-CHƯA ĐO hình dạng cụ thể "burst đồng bộ sau 1 sự kiện chung của agent" — cần
-`scripts/bench_agent_loop.py --burst-mode --burst-size N` (tất cả N phiên gửi lượt
-đầu trong cùng 1 khoảnh khắc) so với cùng N request rải Poisson.
+`scripts/bench_agent_loop.py --burst-sync` (đã viết, chưa chạy) đúng hình dạng
+này — mọi phiên trong 1 mức `--sessions` họp nhau trên một `threading.Barrier`
+trước MỖI lượt thay vì trôi tự nhiên, mô phỏng "tool của mọi người xong cùng lúc,
+mọi phiên đập vào server cùng lúc". So kết quả có/không `--burst-sync` cùng mức
+`--sessions` để cô lập hiệu ứng đồng bộ hoá. **CHƯA ĐO** trên GPU thật.
 
 ### (9) Phiên đuôi dài 20 lượt chiếm tài nguyên
 
@@ -309,9 +332,11 @@ so với các lượt agent ngắn khác — CHƯA ĐO, chỉ suy ra từ cơ ch
 dài hội thoại thật — đây là chi phí cấu trúc của việc giữ ngữ cảnh dài.
 
 **Thí nghiệm chứng minh.** Số decode-per-user-theo-context đã có (TASK N6). CHƯA ĐO
-tích luỹ 20 lượt thật (không phải 1 lượt dài): cần
-`scripts/bench_agent_loop.py --turns 20 --history-mode accumulate`, đo TTFT/decode
-mỗi lượt theo số thứ tự lượt, và ảnh hưởng lan sang phiên khác cùng batch.
+tích luỹ 20 lượt thật (không phải 1 lượt dài): dùng `scripts/bench_agent_loop.py
+--turns 20` (đã viết, chưa chạy — mặc định transcript chỉ nối dài qua từng lượt,
+đúng tính chất tích luỹ cần đo), đọc TTFT mỗi lượt theo tool-gap đã bucket sẵn
+trong record của script, và ảnh hưởng lan sang phiên khác cùng batch qua
+`--mixed-chat`.
 
 ### (10) Trộn traffic agent với chat tương tác trên cùng GPU
 
@@ -337,10 +362,11 @@ mục 19 cho 9B). Nếu không đủ VRAM cho 2 instance, fallback duy nhất c�
 số liệu cụ thể cho fallback này.
 
 **Thí nghiệm chứng minh.** Số 2-instance đã có (`STATUS.md`, mục "Cô lập chat khỏi
-prefill tài liệu"). CHƯA ĐO: đúng cặp "agent loop nhiều lượt" vs "chat tương tác"
-(số hiện có là "chat" vs "tài liệu dài", tương tự nhưng chưa phải agent thật) — cần
-`scripts/bench_agent_loop.py` chạy song song với traffic chat ngắn, đo cả 1-instance
-và 2-instance.
+prefill tài liệu"). `scripts/bench_agent_loop.py --mixed-chat N` (đã viết, chưa
+chạy) đo đúng cặp "agent loop nhiều lượt" vs "chat tương tác ngắn" trong 1 lượt
+chạy (N worker chat chạy nền song song với các phiên agent, script báo 2 phân phối
+TTFT riêng) — chạy 1 lần trên 1 instance trộn, 1 lần trên 2 instance tách, so trực
+tiếp. **CHƯA ĐO** trên GPU thật.
 
 ## Nhóm C — Nội dung & đúng đắn
 
@@ -382,10 +408,14 @@ qua `--structured-outputs-config.backend xgrammar`. Đây gần như luôn rẻ 
 nhận retry, vì retry tốn nguyên 1 round-trip còn grammar chỉ tốn vài % decode mỗi
 bước.
 
-**Thí nghiệm chứng minh.** CHƯA ĐO. Cần `scripts/bench_agent_loop.py
---json-mode {none,response_format,structured_outputs}`, đo (a) decode tok/s chênh
-lệch do overhead grammar, (b) tỉ lệ lượt-thừa do JSON hỏng ở chế độ `none` so với có
-ràng buộc.
+**Thí nghiệm chứng minh.** Nửa sau (chi phí retry khi KHÔNG dùng ràng buộc) đã có
+cờ sẵn: `scripts/bench_agent_loop.py --toolcall-invalid-rate P` định lượng đúng
+"chi phí thật của việc không dùng guided decoding" (nguyên văn docstring script) —
+P% lượt tool-call bị coi hỏng, buộc 1 request retry thêm, đã viết nhưng CHƯA CHẠY.
+Nửa còn thiếu: script hiện **không có** cờ bật `response_format`/`structured_outputs`
+để so decode tok/s có/không ràng buộc — cần bổ sung cờ kiểu
+`--json-mode {none,response_format,structured_outputs}` (liệt kê ở mục cuối) rồi
+mới so sánh trọn vẹn "chi phí grammar" vs "chi phí retry" trên cùng 1 hạ tầng đo.
 
 ### (12) Model lặp vô hạn cùng một lời gọi tool
 
@@ -418,8 +448,9 @@ còn quan trọng hơn ở chat.
 
 **Thí nghiệm chứng minh.** TASK 9 (đã có, xác nhận hiện tượng ở cấp model, không
 riêng agent loop). CHƯA ĐO: bộ dò "tool-call lặp cùng chữ ký" cụ thể cho workload
-agent — cần `scripts/bench_agent_loop.py` với probe tool cố ý mơ hồ (kết quả tool
-không đủ để model tự tin chốt), đếm tỉ lệ lặp theo từng bậc bit.
+agent — `scripts/bench_agent_loop.py` hiện chưa có probe tool cố ý mơ hồ hay bộ dò
+lặp chữ ký; đây là phần cần bổ sung riêng (không map được vào cờ hiện có của
+script), chạy lặp lại qua các bậc bit đã có sẵn checkpoint từ TASK 9.
 
 ### (13) Lịch sử vượt max-model-len — chính sách cắt/tóm tắt và HỆ QUẢ LÊN PREFIX CACHE
 
@@ -467,10 +498,15 @@ thời với các sự kiện trim của nhiều phiên, nghi ngờ (c) đang x�
 
 **Thí nghiệm chứng minh.** Baseline correctness/cost cho context dài đã có: TASK N6
 (128K, prefix 120.036 token, cache-hit byte-identical, cold 62,9s vs warm cùng
-prompt 3,06s). CHƯA ĐO trực tiếp 3 chính sách trim/tóm tắt trên phiên vượt
-max-model-len — cần `scripts/bench_agent_loop.py
---context-policy {slide,summarize,truncate-head-naive}`, đo TTFT/hit-rate trước và
-sau mỗi sự kiện trim cho từng chính sách.
+prompt 3,06s). `scripts/bench_agent_loop.py --context-overflow-policy
+{error,truncate-oldest,summarize-stub} --context-limit-tokens N` (đã viết, chưa
+chạy) đo ĐÚNG bài này: khi transcript ước tính vượt ngưỡng, `truncate-oldest`/
+`summarize-stub` **cố tình phá vỡ** tính chất "prompt lượt sau luôn là tiền tố của
+prompt lượt trước" từ đúng lượt đó trở đi — mỗi record tự đánh dấu
+`context_overflow_applied=True`, nên có thể đối chiếu trực tiếp TTFT/hit-rate ngay
+trước và sau sự kiện trim mà không cần tự suy luận. Chính docstring script gọi đây
+là "chính sách duy nhất đã CHỨNG MINH phá huỷ prefix cache của phiên". **CHƯA ĐO**
+trên GPU thật — cần chạy và ghi số vào `STATUS.md`.
 
 ### (14) Kết quả tool khổng lồ (20K+ token) chen giữa hội thoại
 
@@ -507,9 +543,14 @@ TTFT/ITL của các request khác cùng tăng đúng lúc `num_requests_running`
   đường duy nhất còn hiệu quả.
 
 **Thí nghiệm chứng minh.** TASK F2b/F2c (đã có, cùng cơ chế, kích thước suffix nhỏ
-hơn). CHƯA ĐO đúng kích thước 20K+ chèn giữa hội thoại — cần
-`scripts/bench_agent_loop.py --tool-result-size 20000 --tool-result-position mid`,
-quét `--max-num-batched-tokens` quanh sàn 1088 và so với mặc định 8192.
+hơn). `scripts/bench_agent_loop.py --tool-result-spike 'P:20000'` (đã viết, chưa
+chạy) mô phỏng đúng "P% kết quả tool là văn bản khổng lồ chen giữa hội thoại" (cờ
+`--tool-result-tokens` điều khiển kích thước tool-result BÌNH THƯỜNG, `--tool-result-spike`
+là phần đột biến) — không có khái niệm "position" riêng vì bản chất mỗi lượt tool-result
+LUÔN nằm giữa hội thoại (đúng hình dạng agent loop thật, khác giả định
+`--tool-result-position` từng đề xuất). Quét thêm `--max-num-batched-tokens` quanh
+sàn 1088 so với mặc định 8192 khi chạy `vllm serve` để đối chiếu đòn bẩy F2c trên
+đúng kích thước 20K. **CHƯA ĐO** trên GPU thật.
 
 ## Nhóm D — Vận hành
 
@@ -579,10 +620,15 @@ lượt (theo ngân sách TTFT+decode kỳ vọng) và THỰC SỰ hủy HTTP re
 dụng, propagate huỷ xuống tận HTTP client library đang gọi vLLM. Timeout tích cực
 là AN TOÀN và có lợi — giải phóng GPU ngay, không chỉ tiết kiệm băng thông.
 
-**Thí nghiệm chứng minh.** CHƯA ĐO — chưa có bench nào trong repo đo độ trễ từ lúc
-hủy client tới lúc block KV thật sự được giải phóng (`/metrics` `kv_cache_usage_perc`
-giảm). Cần script client tự ngắt kết nối có kiểm soát, đối chiếu thời điểm hủy với
-metric.
+**Thí nghiệm chứng minh.** `scripts/bench_agent_loop.py --abandon-rate P` (đã viết,
+chưa chạy) — P% phiên bị đóng kết nối thật giữa chừng ở một lượt ngẫu nhiên
+(`requests.Response.close()`, tức TCP-level, đúng cơ chế `http.disconnect` mà
+`with_cancellation()` lắng nghe — không phải chỉ ngừng đọc client-side), và record
+tự ghi việc hủy có thật sự xảy ra hay không. Vẫn thiếu: đối chiếu trực tiếp với
+`/metrics kv_cache_usage_perc` để đo ĐỘ TRỄ từ lúc hủy tới lúc block được giải
+phóng — script hiện chưa tự scrape mốc thời gian đó, cần thêm poll `/metrics` quanh
+thời điểm `--abandon-rate` kích hoạt nếu muốn số độ trễ chính xác thay vì chỉ xác
+nhận "có hủy hay không". **CHƯA ĐO** trên GPU thật.
 
 ### (17) Rate-limit/admission phải đặt ở gateway chứ không phải server (bài học N1)
 
@@ -751,28 +797,44 @@ Xếp theo ưu tiên triển khai (rủi ro cao + giải pháp rẻ trước):
 - Long-context correctness (128K, cascade attention) → phương pháp TASK N6 (chưa đóng gói script riêng)
 - Offline batch mode cho automation theo lô → phương pháp TASK P1 (LLM.chat() trong-tiến-trình, chưa đóng gói script riêng)
 
-**CHƯA CÓ bench — cần viết `scripts/bench_agent_loop.py` (chưa tồn tại trong repo),
-đề xuất bộ cờ tối thiểu để phủ các kịch bản CHƯA ĐO ở trên:**
+**Đã có bench chuyên dụng cho agent loop, VIẾT XONG NHƯNG CHƯA CHẠY TRÊN GPU
+THẬT** — `scripts/bench_agent_loop.py` (+ `scripts/test_bench_agent_loop.py`,
+`scripts/prepare_agent_workload.py`). Đây là phần lớn nhất còn thiếu để đóng cẩm
+nang này: mọi kịch bản dưới đây có cờ sẵn, chỉ còn thiếu bước chạy trên GPU thật và
+ghi số vào `STATUS.md`.
 
 ```
---tool-think-time <dist>          # A-1, B-6: phân phối thời gian chờ tool mỗi lượt
---competing-noise-sessions N      # A-1, A-4: traffic nền cạnh tranh pool/LRU
---num-sessions N --turns T
-  --history-mode {accumulate,slide,summarize}
-                                   # A-2, A-3, B-9, C-13: tích luỹ lịch sử nhiều lượt/phiên
---context-policy {slide,summarize,truncate-head-naive}
-                                   # C-13: đo hệ quả từng chính sách trim lên hit-rate/TTFT
---json-mode {none,response_format,structured_outputs}
-                                   # C-11: chi phí grammar vs chi phí lượt-thừa
---tool-result-size N --tool-result-position {start,mid,end}
-                                   # C-14: tool-result khổng lồ chen giữa hội thoại
---burst-mode --burst-size N       # B-8: dồn cục đồng bộ vs Poisson rải đều
---retry-on-error --retry-jitter   # B-7: retry storm
---prefix-set <files...>           # A-5: nhiều prefix riêng biệt tranh chỗ
+--resume-probe --resume-probe-gaps 0.5,2,5,15,60
+                                        # A-1, B-6: đường cong TTFT(T) theo thời gian chờ tool
+--sessions 1,4,8,16 --turns K          # A-2, A-3, B-9: nhiều phiên × lịch sử tích luỹ theo lượt
+--mixed-chat N                         # A-4 (một phần), B-10, E-19: traffic chat nền cạnh tranh
+--context-overflow-policy {error,truncate-oldest,summarize-stub}
+  --context-limit-tokens N             # C-13: hệ quả từng chính sách trim lên prefix cache
+--toolcall-invalid-rate P              # C-11 (nửa retry-cost), B-7: chi phí round-trip thừa
+--tool-latency-tail 'P:SEC'            # B-6: P% tool chậm bất thường thay vì đều
+--tool-result-spike 'P:TOKENS'         # C-14: tool-result khổng lồ chen giữa hội thoại
+--burst-sync                           # B-8: mọi phiên đồng bộ hoá trước mỗi lượt (rendezvous barrier)
+--abandon-rate P                       # D-16: P% phiên bị đóng kết nối TCP giữa chừng
 ```
 
-Ưu tiên viết trước (theo đúng thứ tự bảng (a)): `--json-mode` (C-11, rẻ và độc lập,
-tận dụng lại phần scrape `/metrics` đã có trong `bench_skills.py`), rồi
-`--competing-noise-sessions` (A-4, kịch bản rủi ro cao nhất chưa có số đo), rồi
-`--tool-result-size`/`--max-num-batched-tokens` sweep (C-14, tái dùng gần như
-nguyên vẹn hạ tầng `bench_sla_prefix.py` đã có).
+**Vẫn CHƯA CÓ trong script, cần bổ sung nếu muốn phủ trọn 20 kịch bản:**
+- `--json-mode {none,response_format,structured_outputs}` — nửa còn thiếu của C-11
+  (so decode tok/s có/không guided-decoding, hiện script chỉ đo được nửa "chi phí
+  retry khi KHÔNG dùng" qua `--toolcall-invalid-rate`, không tự bật
+  `response_format`/`structured_outputs` để so đối chứng).
+- `--prefix-set <files...>` — A-5 (nhiều prefix khác nhau tranh chỗ trong 1 lượt
+  chạy; hiện phải tự chạy nhiều tiến trình song song để mô phỏng, không gọn).
+- Probe "tool-call lặp cùng chữ ký" + bộ đếm tỉ lệ lặp theo bậc bit — C-12, chưa có
+  hình dạng tương ứng nào trong script hiện tại.
+- Đối chiếu `/metrics kv_cache_usage_perc` quanh thời điểm `--abandon-rate` kích
+  hoạt để đo ĐỘ TRỄ giải phóng block (D-16 hiện chỉ xác nhận có-hủy-hay-không, chưa
+  đo thời gian).
+
+**Thứ tự chạy đề xuất** (theo đúng ưu tiên bảng (a)): (1) `--mixed-chat` cạnh
+skills-pack traffic (A-4, rủi ro cao nhất chưa có số đo) → (2) `--resume-probe`
+(A-1/B-6, "phép đo quyết định nhất" theo chính docstring script) → (3)
+`--context-overflow-policy` (C-13, cái bẫy lớn nhất nhóm C) → (4) `--tool-result-spike`
+kết hợp quét `--max-num-batched-tokens` (C-14, tái dùng đòn bẩy đã chứng minh ở
+F2c) → (5) `--burst-sync` và `--abandon-rate` (D/B, xác nhận hành vi đã đọc đúng từ
+source). Sau khi có số, cập nhật lại các mục "CHƯA ĐO" tương ứng trong cẩm nang này
+và vào `STATUS.md`.
