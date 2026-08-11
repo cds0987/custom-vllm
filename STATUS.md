@@ -624,6 +624,29 @@ served mới chuẩn), 74 câu tuyển từ public-test, bench_skills.py:
 - conc32 p95 3,03s — sát trần 3s; "max conc trong SLA" giờ ~28-32.
 - Kết quả: out_skills/bench_skills_champion_graft.jsonl (Colab-local).
 
+## TASK Q1 (2026-08-11): đường cong NỐI LẠI sau khi tool chạy — cache SỐNG DAI
+
+champion v2 + production flags, `--resume-probe`, gap 0,5/2/5/15/60s × 5 lần:
+
+    gap tool    TTFT lượt kế tiếp
+    0,5s        ~1,34s  (KHÔNG phải cache miss — xem dưới)
+    2s          ~0,33s
+    5s          ~0,33s
+    15s         ~0,33s
+    60s         ~0,34s
+
+- **Cache KHÔNG bị thu hồi trong cửa sổ 60 giây** — TTFT phẳng lì bất kể
+  nghỉ bao lâu. Đây là tin RẤT tốt cho workload agent: phiên ngủ đông chờ
+  tool vẫn được nhớ, nối lại gần như miễn phí. (Chưa đo quá 60s.)
+- Bất thường ở gap 0,5s là do **hàng đợi**, không phải cache: log cho thấy
+  lượt trước còn đang decode ("Running: 1 reqs") khi lượt sau tới.
+- **Bẫy cấu hình quan trọng phát hiện gián tiếp**: 400 Bad Request tái lập
+  đúng ở trial 0 và 3 của MỌI mức gap. Giả thuyết mạnh: prefix ~28,7K token
+  + lịch sử tích lũy vượt `--max-model-len 32768` (chỉ còn ~4K dư địa!).
+  → **Workload agent PHẢI serve với max-model-len lớn hơn nhiều so với
+  chat một lượt** (khuyến nghị 65536+ khi prefix 30K), vì lịch sử lớn dần
+  theo từng lượt. Đây là khác biệt cấu hình cốt lõi agent-vs-chat.
+
 ## TASK P2 (2026-08-11): kernel GDN chunk size — lần đầu chạm 42% Amdahl, ăn nhẹ
 
 `FLA_CHUNK_SIZE` là HẰNG SỐ module-level tại
