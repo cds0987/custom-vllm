@@ -624,6 +624,32 @@ served mới chuẩn), 74 câu tuyển từ public-test, bench_skills.py:
 - conc32 p95 3,03s — sát trần 3s; "max conc trong SLA" giờ ~28-32.
 - Kết quả: out_skills/bench_skills_champion_graft.jsonl (Colab-local).
 
+## TASK N6 (2026-08-11): 128K context trên champion v2 — ĐẬU correctness, cascade KHÔNG khả dụng
+
+- Rope native: max_position_embeddings=262144, theta=1e7, không scaling
+  → 128K nằm trong native, không phải nới gì.
+- Serve 131072 (production flags, **max-num-seqs phải hạ xuống 4** mới
+  fit): KV pool 470.258 token, max concurrency 3,59×, VRAM 17,7/23,0GB.
+- **CORRECTNESS GATE PASS**: prefix 120.036 token, temp=0 — output
+  cache-hit BYTE-IDENTICAL với cold, ở 128K. Cold prefill 62,9s
+  (~1.908 tok/s hiệu dụng); warm cùng prompt 3,06s.
+- Warm TTFT suffix 4K: ~1,0s ổn định (run đầu 1,75s do compile).
+  Decode per-user: conc1 28,9 / conc4 21,7 tok/s (−25% khi 4 luồng cùng
+  quét KV 120K).
+- **Cascade attention: KHÔNG KHẢ DỤNG trên stack này** — hai tầng khóa
+  độc lập: (a) ModelConfig.disable_cascade_attn mặc định True (cờ
+  --no-disable-cascade-attn để opt-in); (b) kể cả opt-in,
+  FlashInferBackend.use_cascade_attention() HARDCODE return False
+  (comment upstream "Cascade attention doesn't work, disable it for
+  now", flashinfer.py ~1518-1524). FlashAttention backend có cascade
+  thật nhưng không hợp lệ với fp8 KV (đã đóng ở A/B trước). → cột 128K
+  không có phép chia-sẻ-đọc-prefix; theo dõi upstream khi họ mở lại.
+- HỆ QUẢ CHO KỊCH BẢN "132K tổng, prefix chung": số phiên ACTIVE đồng
+  thời hiện bị chặn ở max-num-seqs=4 (artifact profiling worst-case của
+  vLLM theo max-model-len?), KHÔNG phải hết KV (pool còn 350K sau prefix
+  — đủ ~87 suffix 4K). N6b (chưa chạy): thử ép mns 16/32 ở 131072 xem
+  nạp nổi không — quyết định con số user thật của kịch bản 132K.
+
 ## TASK N5a (2026-08-11): ngram speculative — LOẠI ở mọi mức tải
 
 bench_skills 74 câu, graft int8, so {OFF, MTP (N2), ngram}:
