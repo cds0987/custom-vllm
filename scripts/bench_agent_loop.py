@@ -77,6 +77,18 @@ the fake server in scripts/test_bench_agent_loop.py):
                                  way through a random turn, simulating a
                                  client that walked away; record whether the
                                  client-side abort actually happened.
+  --max-model-len N             optional: if set, validate that each turn's
+                                 estimated prompt + max_tokens does not exceed
+                                 this limit. If validation fails, skip that
+                                 turn (mark it skipped_reason="context_budget_exceeded"
+                                 in JSONL, issue a warning to stderr, and
+                                 exclude from level summary stats). Agent-loop
+                                 workload differs from single-turn bench: prompt
+                                 grows with each turn (system prefix + cumulative
+                                 history). Example: prefix ~30K tokens + 10 turns
+                                 × ~800-token tool results = ~38K cumulative by
+                                 turn 10; thus a 32K max-model-len will fail
+                                 late turns. Default: None (no budget check).
   --mixed-chat N                N background short ordinary-chat workers run
                                  for the duration of the level, so the level
                                  summary also reports how much noise the
@@ -375,6 +387,7 @@ def run_session(session_id: int, level_sessions: int, question: dict, prefix: st
     turn_records = []
     pending_gap = None
     abandoned = False
+    budget_warning_issued = False
 
     do_abandon = cfg.abandon_rate > 0 and rng.random() * 100 < cfg.abandon_rate
     abandon_turn = rng.randint(1, turns) if do_abandon else None
@@ -410,6 +423,40 @@ def run_session(session_id: int, level_sessions: int, question: dict, prefix: st
 
         messages = [{"role": "system", "content": prefix}, {"role": "user", "content": transcript}]
         max_tok = cfg.final_max_tokens if is_final else cfg.toolcall_max_tokens
+
+        # Budget check: estimate whether prompt + max_tokens exceeds max_model_len
+        if cfg.max_model_len is not None and cfg.max_model_len > 0:
+            user_content = messages[1]["content"]
+            est_prompt_tokens = est_tokens(user_content)
+            total_est = est_prompt_tokens + max_tok
+            if total_est > cfg.max_model_len:
+                # Skip this turn due to budget overflow
+                if not budget_warning_issued:
+                    print(
+                        f"WARNING: session {session_id} turn {turn_idx}: "
+                        f"estimated {total_est} tokens exceeds max-model-len {cfg.max_model_len} "
+                        f"-- serve with larger max-model-len (agent prompt grows with each turn)",
+                        file=sys.stderr,
+                    )
+                    budget_warning_issued = True
+                turn_records.append(
+                    {
+                        "ok": False,
+                        "error": "context_budget_exceeded",
+                        "skipped_reason": "context_budget_exceeded",
+                        "est_prompt_tokens": est_prompt_tokens,
+                        "max_tokens": max_tok,
+                        "max_model_len": cfg.max_model_len,
+                        "session_id": session_id,
+                        "level_sessions": level_sessions,
+                        "turn_index": turn_idx,
+                        "turns_total": turns,
+                        "turn_role": "final" if is_final else "toolcall",
+                        "question_id": question.get("id"),
+                        "prior_tool_gap_s": pending_gap,
+                    }
+                )
+                break
 
         abort_after = abandon_after_tokens if (do_abandon and turn_idx == abandon_turn) else None
         rec = run_one_turn(messages, max_tok, abort_after_tokens=abort_after)
@@ -611,6 +658,7 @@ def summarize_level(sessions_n, turn_records, session_summaries, wall_elapsed, c
     completed_sessions = [s for s in session_summaries if s.get("completed")]
     abandoned_sessions = [s for s in session_summaries if s.get("abandoned")]
     overflow_sessions = [s for s in session_summaries if s.get("context_overflow")]
+    budget_exceeded_turns = [r for r in turn_records if r.get("skipped_reason") == "context_budget_exceeded"]
 
     total_completion_tokens = sum(r.get("completion_tokens") or 0 for r in ok_turns)
     total_prompt_tokens = sum(r.get("prompt_tokens") or 0 for r in ok_turns)
@@ -637,6 +685,7 @@ def summarize_level(sessions_n, turn_records, session_summaries, wall_elapsed, c
         "n_sessions_completed": len(completed_sessions),
         "n_sessions_abandoned": len(abandoned_sessions),
         "n_sessions_context_overflow": len(overflow_sessions),
+        "n_turns_skipped_budget_exceeded": len(budget_exceeded_turns),
         "wall_elapsed_s": wall_elapsed,
         "tasks_per_hour": (len(completed_sessions) / wall_elapsed * 3600.0) if wall_elapsed > 0 else None,
         "total_throughput_tok_s": (total_completion_tokens / wall_elapsed) if wall_elapsed > 0 else None,
@@ -767,6 +816,7 @@ def build_cfg(args) -> SimpleNamespace:
         burst_sync=args.burst_sync,
         abandon_rate=args.abandon_rate,
         mixed_chat=args.mixed_chat,
+        max_model_len=args.max_model_len,
     )
 
 
@@ -812,6 +862,7 @@ def main():
     ap.add_argument("--toolcall-invalid-rate", type=float, default=0.0, help="%% of tool-call turns forced to retry once")
     ap.add_argument("--burst-sync", action="store_true", help="sessions rendezvous on a barrier before each turn instead of drifting")
     ap.add_argument("--abandon-rate", type=float, default=0.0, help="%% of sessions whose connection is closed mid-stream")
+    ap.add_argument("--max-model-len", type=int, default=None, help="optional: validate budget per turn (skip if exceeds this limit)")
     ap.add_argument("--mixed-chat", type=int, default=0, help="N background ordinary short-chat workers run alongside each level")
 
     ap.add_argument("--resume-probe", action="store_true", help="dedicated TTFT-vs-tool-gap curve mode; ignores --sessions/--turns")
@@ -887,11 +938,18 @@ def main():
                 f"  completed={level_summary['n_sessions_completed']}/{n} "
                 f"abandoned={level_summary['n_sessions_abandoned']} "
                 f"overflow={level_summary['n_sessions_context_overflow']} "
+                f"budget_exceeded={level_summary['n_turns_skipped_budget_exceeded']} "
                 f"tasks/hr={level_summary['tasks_per_hour']} "
                 f"throughput={level_summary['total_throughput_tok_s']} tok/s "
                 f"cache_hit_rate={level_summary['prefix_cache_hit_rate']}",
                 flush=True,
             )
+            if level_summary['n_turns_skipped_budget_exceeded'] > 0:
+                print(
+                    f"    WARNING: {level_summary['n_turns_skipped_budget_exceeded']} turn(s) skipped due to context budget exceeded -- "
+                    f"consider increasing --max-model-len or reducing --turns/--tool-result-tokens",
+                    flush=True,
+                )
             for row in level_summary["ttft_vs_tool_gap_curve"]:
                 print(f"    gap~{row['tool_gap_bucket_s']}s n={row['n']} ttft_mean={row['ttft_mean_s']:.3f}s ttft_p95={row['ttft_p95_s']:.3f}s")
 

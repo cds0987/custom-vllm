@@ -172,6 +172,7 @@ def make_cfg(**overrides):
         burst_sync=False,
         abandon_rate=0.0,
         mixed_chat=0,
+        max_model_len=None,
     )
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -519,6 +520,117 @@ class TestResumeProbe(unittest.TestCase):
             contents = [next(m["content"] for m in b["messages"] if m["role"] == "user") for b in gap_bodies]
             for i in range(0, len(contents), 2):
                 self.assertTrue(contents[i + 1].startswith(contents[i]))
+        finally:
+            srv.shutdown()
+
+
+class TestMaxModelLenBudget(unittest.TestCase):
+    def test_no_budget_check_when_not_specified(self):
+        """Default behavior: no budget checking."""
+        srv = FakeAgentServer(n_chunks=2)
+        point_module_at(srv)
+        try:
+            import random
+
+            cfg = make_cfg(turns=3, tool_latency_range=(0.05, 0.05))
+            # Note: cfg has max_model_len=None by default (see make_cfg)
+            rng = random.Random(20)
+            turn_records, summary = bal.run_session(0, 1, one_question(), "PREFIX", bal.est_tokens("PREFIX"), cfg, rng)
+            # All turns should succeed or fail only on network issues, not budget
+            skipped = [r for r in turn_records if r.get("skipped_reason") == "context_budget_exceeded"]
+            self.assertEqual(len(skipped), 0, "no turns should be skipped when max_model_len is None")
+            # Transcript should grow normally
+            self.assertTrue(summary["completed"] or summary["abandoned"], "session should complete or be abandoned, not budget-blocked")
+        finally:
+            srv.shutdown()
+
+    def test_budget_exceeded_skips_turn_and_records_skip_reason(self):
+        """When max_model_len is set and exceeded, turn is skipped."""
+        srv = FakeAgentServer(n_chunks=2)
+        point_module_at(srv)
+        try:
+            import random
+
+            # Small max_model_len to trigger budget check early
+            cfg = make_cfg(turns=4, tool_latency_range=(0.05, 0.05), tool_result_tokens_range=(50, 50))
+            cfg.max_model_len = 70  # Very small limit (forces skip on turn 2+)
+            rng = random.Random(21)
+            turn_records, summary = bal.run_session(0, 1, one_question(), "PREFIX", bal.est_tokens("PREFIX"), cfg, rng)
+
+            # At least one turn should be skipped due to budget
+            skipped = [r for r in turn_records if r.get("skipped_reason") == "context_budget_exceeded"]
+            self.assertGreater(len(skipped), 0, "at least one turn should be skipped with small max_model_len")
+
+            # Skipped record should have budget details
+            for r in skipped:
+                self.assertEqual(r["error"], "context_budget_exceeded")
+                self.assertIn("est_prompt_tokens", r)
+                self.assertIn("max_tokens", r)
+                self.assertIn("max_model_len", r)
+                self.assertFalse(r.get("ok"), "skipped turn should have ok=False")
+
+            # Session should not be marked completed (stopped early)
+            self.assertFalse(summary["completed"], "session with budget overflow should not be marked completed")
+        finally:
+            srv.shutdown()
+
+    def test_budget_check_does_not_send_http_request_for_skipped_turn(self):
+        """When a turn is skipped, no HTTP request is sent."""
+        srv = FakeAgentServer(n_chunks=2)
+        point_module_at(srv)
+        try:
+            import random
+
+            cfg = make_cfg(turns=3, tool_latency_range=(0.05, 0.05), tool_result_tokens_range=(50, 50))
+            cfg.max_model_len = 70  # Very small, will trigger early
+            rng = random.Random(22)
+            turn_records, summary = bal.run_session(0, 1, one_question(), "PREFIX", bal.est_tokens("PREFIX"), cfg, rng)
+
+            # Count how many turns succeeded vs were skipped
+            ok_turns = [r for r in turn_records if r.get("ok")]
+            skipped_turns = [r for r in turn_records if r.get("skipped_reason") == "context_budget_exceeded"]
+
+            # Each skipped turn means one fewer HTTP request
+            # Requests to server = ok turns + retries (none here)
+            expected_requests = len(ok_turns)
+            actual_requests = len(srv.captured)
+
+            self.assertEqual(
+                actual_requests, expected_requests,
+                f"HTTP requests sent ({actual_requests}) should match ok turns ({len(ok_turns)}), "
+                f"not including skipped turns ({len(skipped_turns)})"
+            )
+        finally:
+            srv.shutdown()
+
+    def test_level_summary_counts_budget_exceeded_turns(self):
+        """Level summary includes count of budget-exceeded turns."""
+        srv = FakeAgentServer(n_chunks=2)
+        point_module_at(srv)
+        try:
+            questions = [one_question(f"b{i}") for i in range(2)]
+            cfg = make_cfg(turns=3, tool_latency_range=(0.05, 0.05), tool_result_tokens_range=(50, 50))
+            cfg.max_model_len = 70  # Small limit
+
+            turn_records, session_summaries, level_summary, _mixed = bal.run_level(
+                2, questions, "PREFIX", bal.est_tokens("PREFIX"), cfg, seed=23
+            )
+
+            # Level summary should report budget-exceeded turns
+            self.assertIn("n_turns_skipped_budget_exceeded", level_summary)
+            budget_exceeded = level_summary["n_turns_skipped_budget_exceeded"]
+
+            # Count manually from turn records
+            manual_count = sum(1 for r in turn_records if r.get("skipped_reason") == "context_budget_exceeded")
+            self.assertEqual(budget_exceeded, manual_count)
+
+            # If there are budget-exceeded turns, session(s) should not all be completed
+            if budget_exceeded > 0:
+                self.assertLess(
+                    level_summary["n_sessions_completed"],
+                    2,
+                    "sessions with budget overflow should not all complete"
+                )
         finally:
             srv.shutdown()
 
