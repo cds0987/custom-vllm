@@ -624,6 +624,27 @@ served mới chuẩn), 74 câu tuyển từ public-test, bench_skills.py:
 - conc32 p95 3,03s — sát trần 3s; "max conc trong SLA" giờ ~28-32.
 - Kết quả: out_skills/bench_skills_champion_graft.jsonl (Colab-local).
 
+## TASK N5b (2026-08-11): lm_head int8 — ĐÓNG, giới hạn kiến trúc vLLM thật
+
+scripts/graft_lm_head_int8.py (9e5caba) quantize lm_head 248320×4096
+xuống int8 g32 thành công về toán (RMS 0,0055) — nhưng serve chết:
+`There is no module or parameter named 'lm_head.weight_packed'`.
+Nguyên nhân gốc đọc từ source: ParallelLMHead kế thừa
+VocabParallelEmbedding (họ Embedding, chỉ có `weight` phẳng), KHÔNG phải
+họ Linear mà compressed-tensors WNA16 nhắm — vLLM bản này không có code
+path lượng tử hóa cho lm_head/embed dạng Embedding. Muốn làm phải sửa
+vLLM (thêm quant method cho VocabParallelEmbedding) — ứng viên danh sách
+upstream, không phải việc config. Đóng mục; byte lm_head fp16 (~2GB) là
+chi phí decode không gỡ được trên stack hiện tại.
+
+## TASK N5c (một nửa): cờ async-scheduling TỒN TẠI và ĐANG BẬT mặc định
+
+`--async-scheduling/--no-async-scheduling`, default None = tự bật cho
+backend hỗ trợ — log production xưa nay đã có "Asynchronous scheduling
+is enabled", tức MỌI số đo production đều là async ON. A/B ON-vs-OFF
+(bench_skills conc16/32) đang chờ transfer skills; nếu wipe lần nữa thì
+đóng mục theo điều kiện dừng, vì mặc định đã đúng chiều.
+
 ## TASK N6 (2026-08-11): 128K context trên champion v2 — ĐẬU correctness, cascade KHÔNG khả dụng
 
 - Rope native: max_position_embeddings=262144, theta=1e7, không scaling
