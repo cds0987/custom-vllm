@@ -624,6 +624,47 @@ served mới chuẩn), 74 câu tuyển từ public-test, bench_skills.py:
 - conc32 p95 3,03s — sát trần 3s; "max conc trong SLA" giờ ~28-32.
 - Kết quả: out_skills/bench_skills_champion_graft.jsonl (Colab-local).
 
+## TRANH LUẬN VÒNG 1 (2026-08-12): phán quyết trên 3 "trần" đã đóng vội
+
+Hai agent độc lập (CÔNG: docs/debate-attack.md · THỦ: docs/debate-defense.md).
+
+### Trần 1 — prefill 1.433 tok/s "là vật lý" → **MỞ LẠI. Kết luận cũ SAI.**
+- Phép tính cũ dùng 58% GEMM — con số này chỉ có trong tài liệu giảng dạy;
+  **số đo thật là 47,9%**, và bản thân nó đo ở chế độ eager chưa fusion nên
+  còn thổi phồng phần non-GEMM. Nền của kết luận "vật lý" là cát.
+- **int8 trên Ada L4 THẬT SỰ gấp đôi fp16** (datasheet: 242 TOPS INT8 vs
+  121 TFLOPS FP16 dense). Khác bản chất với thất bại fp8 trước đây: fp8
+  thua ở DECODE (nghẽn băng thông, compute không giúp gì), còn **prefill
+  nghẽn compute — đúng chế độ int8 có cửa**. MFU thực và chi phí quantize
+  activation động thì CHƯA AI ĐO.
+- `fp8_per_tensor` đã chứng minh chạy sạch trên stack này nhưng **chưa từng
+  đo cho prefill/long-context** — một lượt đo còn thiếu, gần như miễn phí.
+- Trần điện 72W: xác nhận CỨNG (TDP thiết kế + Colab không cho quyền root).
+- ⇒ **Ưu tiên số 1 khi GPU trở lại: đo W8A8/int8 và fp8_per_tensor cho
+  prefill.** Đây là viên đạn thật, không phải hy vọng suông.
+
+### Trần 2 — chunk GDN ≤64 → **KHẢ THI nhưng VÔ NGHĨA. Đổi hướng.**
+- Cả hai bên đồng ý: assert không phải ràng buộc toán học, cũng không phải
+  giới hạn shared memory (chunk 128 chỉ cần ~36-40KB < 100KB/SM); chỉ là
+  kernel `merge_*_to_128x128` chưa ai viết (~1 buổi việc cơ học).
+- NHƯNG bằng chứng thực nghiệm đi NGƯỢC: TASK P2 cho chunk **32 thắng 64**.
+  Xu hướng chỉ về phía NHỎ HƠN, không phải lớn hơn.
+- ⇒ **Bỏ ý định viết kernel 128. Thay bằng thí nghiệm MIỄN PHÍ: thử
+  chunk=16** (đã được hỗ trợ sẵn) — đúng chiều bằng chứng, tốn 10 phút.
+
+### Trần 3 — cascade attention → **ĐÓNG, nhưng bằng lý do TỐT HƠN.**
+- Bên thủ truy ra PR gốc (vllm #26130): lỗi là **TREO dưới tải nhiều
+  request + prefix cache hit**, tác giả tự nhận chưa truy được nguyên nhân
+  — tức đúng điều kiện production của ta.
+- **Lỗ hổng quy trình phát hiện được**: cổng byte-identical của dự án
+  (TASK F/N6) chỉ kiểm MỘT request tuần tự → **không thể bắt loại lỗi
+  treo-dưới-tải-đồng-thời**. Cần bổ sung cổng kiểm ở chế độ đồng thời.
+- Lợi ích thật cho kiến trúc lai: attention chỉ chiếm 0,4-0,6% thời gian
+  decode (vì 75% layer là GDN) ⇒ cascade cứu được **dưới 1%** — quá nhỏ
+  so với rủi ro treo.
+- ⇒ Đóng vĩnh viễn, ghi rõ lý do là *lợi ích nhỏ + rủi ro treo*, KHÔNG
+  phải "vì upstream hardcode" như lý do cũ.
+
 ## TASK Q1 (2026-08-11): đường cong NỐI LẠI sau khi tool chạy — cache SỐNG DAI
 
 champion v2 + production flags, `--resume-probe`, gap 0,5/2/5/15/60s × 5 lần:
