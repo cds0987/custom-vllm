@@ -641,9 +641,17 @@ chi phí decode không gỡ được trên stack hiện tại.
 
 `--async-scheduling/--no-async-scheduling`, default None = tự bật cho
 backend hỗ trợ — log production xưa nay đã có "Asynchronous scheduling
-is enabled", tức MỌI số đo production đều là async ON. A/B ON-vs-OFF
-(bench_skills conc16/32) đang chờ transfer skills; nếu wipe lần nữa thì
-đóng mục theo điều kiện dừng, vì mặc định đã đúng chiều.
+is enabled", tức MỌI số đo production đều là async ON.
+
+A/B TƯƠI (bench_skills 74 câu, champion v2, chỉ khác 1 cờ):
+
+    conc   ON: p95/decode/thr          OFF: p95/decode/thr
+     16    1,58s / 19,65 / 281,7       1,51s / 18,34 / 264,2
+     32    2,81s / 14,62 / 387,8       2,73s / 13,79 / 360,5
+
+ON thắng throughput +6,6-7,6% và decode/user +6-7%, trả giá TTFT nhỏ
+(~30-40ms). **Verdict: giữ ON (đã là mặc định, không cần cờ).** Đóng
+trọn chuỗi N5: a=ngram loại, b=lm_head bất khả (upstream), c=async ON.
 
 ## TASK N6 (2026-08-11): 128K context trên champion v2 — ĐẬU correctness, cascade KHÔNG khả dụng
 
