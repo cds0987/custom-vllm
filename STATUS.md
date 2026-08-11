@@ -624,6 +624,27 @@ served mới chuẩn), 74 câu tuyển từ public-test, bench_skills.py:
 - conc32 p95 3,03s — sát trần 3s; "max conc trong SLA" giờ ~28-32.
 - Kết quả: out_skills/bench_skills_champion_graft.jsonl (Colab-local).
 
+## TASK P2 (2026-08-11): kernel GDN chunk size — lần đầu chạm 42% Amdahl, ăn nhẹ
+
+`FLA_CHUNK_SIZE` là HẰNG SỐ module-level tại
+`vllm/third_party/flash_linear_attention/ops/utils.py:31`, không có env var,
+được ~7 file import lúc load → chỉ đổi được bằng cách vá nguồn TRƯỚC khi
+tiến trình import vllm.
+
+    chunk   conc1 decode/thr        conc32 decode/thr     conc32 p95
+    64 (mặc định)  31,45 / 31,2     14,62 / 387,8         2,81s
+    **32**  **33,85 / 33,6 (+7,6%)**  14,59 / 383,8 (~0%)  2,84s
+    128     VỠ CỨNG: solve_tril.py `assert A.shape[-1] in [16,32,64]`
+
+- chunk=32 thắng ~+7,6% ở conc1 (tải thấp/độ trễ đơn luồng), trung tính ở
+  conc32 (đã bão hòa song song). Biên nhỏ nhưng THẬT — và là lần đầu tiên
+  một tối ưu chạm được vào phần 42% non-GEMM của Amdahl.
+- chunk=128 bị chặn bởi kernel Triton solve_tril (chỉ nhận 16/32/64) —
+  trần kiến trúc, muốn vượt phải sửa kernel thật. **Ứng viên cho hàng đợi
+  tấn công**: chunk lớn hơn = ít lần phóng kernel + cường độ số học cao
+  hơn cho GDN; đáng điều tra xem sửa solve_tril khó tới đâu.
+- Đã revert nguồn về bản gốc sau A/B.
+
 ## TASK P1 (2026-08-11): OFFLINE BATCH MODE — +34,8%, chế độ đúng cho automation
 
 Champion v2, LLM class trong-tiến-trình (không HTTP/SSE/scheduler phục vụ),
