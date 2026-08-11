@@ -644,11 +644,17 @@ served mới chuẩn), 74 câu tuyển từ public-test, bench_skills.py:
   now", flashinfer.py ~1518-1524). FlashAttention backend có cascade
   thật nhưng không hợp lệ với fp8 KV (đã đóng ở A/B trước). → cột 128K
   không có phép chia-sẻ-đọc-prefix; theo dõi upstream khi họ mở lại.
-- HỆ QUẢ CHO KỊCH BẢN "132K tổng, prefix chung": số phiên ACTIVE đồng
-  thời hiện bị chặn ở max-num-seqs=4 (artifact profiling worst-case của
-  vLLM theo max-model-len?), KHÔNG phải hết KV (pool còn 350K sau prefix
-  — đủ ~87 suffix 4K). N6b (chưa chạy): thử ép mns 16/32 ở 131072 xem
-  nạp nổi không — quyết định con số user thật của kịch bản 132K.
+- N6b (đã chạy): mns=4 KHÔNG phải trần — mns 16 và 32 đều nạp sạch ở
+  131072, KV pool gần như không đổi (470K→461K, <2%), VRAM không tăng.
+  Giới hạn bộ nhớ thật là KV pool theo gpu-memory-utilization, không
+  phụ thuộc mns.
+- Nhưng trần TRẢI NGHIỆM đến sớm hơn trần bộ nhớ: probe 16 request đồng
+  thời (prefix 120K cached + suffix 3K riêng): TTFT p50 5,4s / p95 7,55s,
+  decode per-user ~7,9 tok/s (vs 28,9 conc1 / 21,7 conc4). Quét KV 120K
+  × nhiều luồng là chi phí chi phối.
+- **Chốt kịch bản "132K tổng, prefix chung": bộ nhớ chịu 16-32; trải
+  nghiệm tốt (TTFT<3s, decode >= tốc độ đọc) dừng ở ~6-10 đồng thời;
+  kiểm soát ở CLIENT (bài học N1), server cứ để mns 32.**
 
 ## TASK N5a (2026-08-11): ngram speculative — LOẠI ở mọi mức tải
 
