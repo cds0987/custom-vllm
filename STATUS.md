@@ -624,6 +624,28 @@ served mới chuẩn), 74 câu tuyển từ public-test, bench_skills.py:
 - conc32 p95 3,03s — sát trần 3s; "max conc trong SLA" giờ ~28-32.
 - Kết quả: out_skills/bench_skills_champion_graft.jsonl (Colab-local).
 
+## DRIFT MÔI TRƯỜNG (2026-08-12): vLLM đã lên 0.27.1 — MỌI SỐ CŨ ĐO Ở 0.26
+
+Tái thiết sau wipe #8 phát hiện `pip install vllm` giờ kéo **0.27.1**:
+- **CẢNH BÁO PHƯƠNG PHÁP**: toàn bộ số đo của chiến dịch (champion 388,7
+  tok/s, ppl 4,778, SLA 0,3 QPS, P1 522 tok/s...) đo trên **0.26**. So
+  trực tiếp số mới với số cũ là KHÔNG HỢP LỆ — phải đo lại baseline trên
+  0.27.1 trước mọi kết luận. (Đúng bài học "baseline phải đo tươi".)
+- `torchaudio`/`torchvision` đi kèm lệch CUDA build (torch cu13.0 vs
+  torchaudio cu12.8) → transformers hard-import torchaudio → crash lúc
+  import. **Fix: `pip uninstall -y torchaudio torchvision`** (không cần
+  cho serving text-only). Nên thêm vào setup_env.sh.
+- **Hai bug của ta ĐÃ ĐƯỢC UPSTREAM SỬA** (patch thành no-op):
+  (a) `patch_vllm_qwen35_hybrid` — 0.27.1 đã thêm `IsHybrid` vào base
+  class Qwen3_5ForCausalLMBase; (b) `patch_gguf_override_signature` —
+  plugin đã tự có fix. → Cập nhật hồ sơ upstream/: đánh dấu "đã sửa
+  upstream, KHÔNG gửi".
+- `patch_fla_ada_shmem` skip: đường dẫn
+  `vllm/third_party/flash_linear_attention/ops/utils.py` không còn ở vị
+  trí cũ → **phải dò lại vị trí `FLA_CHUNK_SIZE` trong 0.27.1** trước khi
+  làm thí nghiệm chunk.
+- 16/19 patch còn lại áp sạch; `_C_gguf` import OK (kernel CUDA thật).
+
 ## TRANH LUẬN VÒNG 1 (2026-08-12): phán quyết trên 3 "trần" đã đóng vội
 
 Hai agent độc lập (CÔNG: docs/debate-attack.md · THỦ: docs/debate-defense.md).
