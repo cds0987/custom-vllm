@@ -12,3 +12,8 @@ dist/
 public-test.jsonl
 skills_pack/
 out_skills/
+
+# Downloaded eval datasets (never commit)
+datasets/
+bfcl/
+out_agent/
