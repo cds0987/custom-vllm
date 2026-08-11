@@ -624,6 +624,24 @@ served mới chuẩn), 74 câu tuyển từ public-test, bench_skills.py:
 - conc32 p95 3,03s — sát trần 3s; "max conc trong SLA" giờ ~28-32.
 - Kết quả: out_skills/bench_skills_champion_graft.jsonl (Colab-local).
 
+## TASK P1 (2026-08-11): OFFLINE BATCH MODE — +34,8%, chế độ đúng cho automation
+
+Champion v2, LLM class trong-tiến-trình (không HTTP/SSE/scheduler phục vụ),
+cùng config production (prefix caching, fp8 KV, mnbt1088, 32K), 74 câu thật:
+
+    đường            wall     completion tok   throughput
+    server conc32    —        —                387,8 tok/s (N5c)
+    offline 74 câu   135,4s   70.759           **522,6 (+34,8%)**
+    offline 74×4     568,5s   284.280          500,0 (+29,0%) = trần thực
+
+- Batch lớn hơn KHÔNG tăng thêm → trần compute thật ~500-520 tok/s; ở batch
+  74 đã gần bão hòa, KV pool không phải nút thắt.
+- **Quy đổi vận hành: ~0,55 câu/s ⇒ ~1.970 câu/giờ ⇒ ca đêm 16h ≈ 31.500
+  tác vụ, ~28,8 triệu token sinh mới** (số đo thật, không phải ngoại suy).
+- Khuyến nghị: workload automation theo lô (phân loại, tổng hợp, xử lý
+  ticket) chạy bằng script Python gọi LLM.chat() trực tiếp — KHÔNG dựng
+  server. Server chỉ dành cho traffic tương tác thời gian thực.
+
 ## TASK N5b (2026-08-11): lm_head int8 — ĐÓNG, giới hạn kiến trúc vLLM thật
 
 scripts/graft_lm_head_int8.py (9e5caba) quantize lm_head 248320×4096
