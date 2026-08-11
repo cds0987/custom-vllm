@@ -640,12 +640,18 @@ champion v2 + production flags, `--resume-probe`, gap 0,5/2/5/15/60s × 5 lần:
   tool vẫn được nhớ, nối lại gần như miễn phí. (Chưa đo quá 60s.)
 - Bất thường ở gap 0,5s là do **hàng đợi**, không phải cache: log cho thấy
   lượt trước còn đang decode ("Running: 1 reqs") khi lượt sau tới.
-- **Bẫy cấu hình quan trọng phát hiện gián tiếp**: 400 Bad Request tái lập
-  đúng ở trial 0 và 3 của MỌI mức gap. Giả thuyết mạnh: prefix ~28,7K token
-  + lịch sử tích lũy vượt `--max-model-len 32768` (chỉ còn ~4K dư địa!).
-  → **Workload agent PHẢI serve với max-model-len lớn hơn nhiều so với
-  chat một lượt** (khuyến nghị 65536+ khi prefix 30K), vì lịch sử lớn dần
-  theo từng lượt. Đây là khác biệt cấu hình cốt lõi agent-vs-chat.
+- **Bẫy cấu hình — GIẢ THUYẾT ĐÃ XÁC NHẬN 100%**: 400 Bad Request tái lập
+  ở trial 0 và 3 mọi mức gap là do prefix ~28,7K + lịch sử tích lũy vượt
+  `--max-model-len 32768` (chỉ ~4K dư địa). Chạy lại y hệt với **65536**:
+  **25/25 lượt sạch, 0 lỗi**, TTFT vẫn phẳng 0,31-0,32s ở mọi gap.
+  → **Luật cấu hình agent-vs-chat**: workload agent PHẢI có max-model-len
+  lớn hơn nhiều vì prompt LỚN DẦN mỗi lượt (chat một lượt thì cố định).
+  Công thức thô: prefix + số_lượt × cỡ_kết_quả_tool + biên an toàn.
+- **Cái giá của context lớn**: max concurrency 9,66× @32K → **5,80× @64K**
+  — gấp đôi context thì số phiên chứa được giảm gần một nửa. Đây là đánh
+  đổi trung tâm khi quy hoạch hệ agent.
+- Bench đã được vá để tự chặn trước và cảnh báo thay vì để server trả 400
+  (`--max-model-len` trong bench_agent_loop.py, commit f573896).
 
 ## TASK P2 (2026-08-11): kernel GDN chunk size — lần đầu chạm 42% Amdahl, ăn nhẹ
 
