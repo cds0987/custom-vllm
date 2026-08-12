@@ -752,6 +752,37 @@ Cùng runtime/config với Q2c (mml=65536, baseline 329,5 tasks/hr):
   est chỉ +~1K; --context-limit-tokens so với EST chứ không phải token thật.
   Cần sửa harness: dùng cùng một thang (ưu tiên real qua usage) — TODO.
 
+## TASK R2b (2026-08-13): chunk=32 TRUNG TÍNH trên 0.27.1 — khai tử con số +7,6%
+
+Cùng runtime, cùng seed, bench_skills synthetic 30K prefix, conc 1 và 32:
+
+    chunk    conc1 decode/thr    conc32 decode/thr
+    64       34,34 / 32,7        16,10 / 262,0
+    32       34,33 / 32,7        16,09 / 261,8
+
+GIỐNG HỆT (lệch <0,1%). Cộng với R2 (chunk16 identical): FLA_CHUNK_SIZE không còn
+ảnh hưởng chế độ server-decode trên 0.27.1. Con số +7,6% của chunk=32 là di sản
+0.26 + đo offline, KHÔNG ghi thành khuyến nghị. Serve config chuẩn giữ mặc định.
+
+## TASK P7 (2026-08-13): CPU KHÔNG nghẽn — hoàn toàn GPU-bound
+
+Đo trong lúc bench conc32 (tải nặng nhất): GPU util phẳng **100%** (17 mẫu, min=max=100),
+tiến trình vLLM (API server + engine) ăn trung bình **8% một core**, đỉnh 65%, máy 12
+core. Kết luận: không có đòn tối ưu nào nằm ở CPU trên L4 Colab; mọi cải thiện phải
+đến từ GPU (kernel/quant/batching). Đóng P7.
+
+## KIỂM ĐỊNH ĐÚNG ĐẮN CHẾ ĐỘ ĐỒNG THỜI (2026-08-13) — PASS với chú thích
+
+8 prompt greedy (temp=0, seed=0): chạy riêng lẻ làm chuẩn → chạy đồng thời cả 8:
+- Khớp tuyệt đối 3/8; 5/8 phân kỳ ở ký tự 135-764 (sâu trong generation, KHÔNG có
+  cái nào hỏng từ đầu; mọi output mạch lạc, đúng chủ đề).
+- Quyết định: chạy đồng thời 2 lần → conc-vs-conc cũng chỉ 3/8 khớp ⇒ phân kỳ do
+  **dynamic batching đổi thành phần batch → đổi thứ tự reduction số học** — tính chất
+  cố hữu của vLLM (không batch-invariant), KHÔNG phải bệnh của graft/Marlin/fp8 KV.
+- Cổng đúng đắn đồng thời: **PASS** (không garbage, không hỏng cấu trúc). Audit top-5
+  mục "concurrent correctness gate" đóng. Ai cần bitwise-repro phải tắt dynamic
+  batching (không đáng ở production).
+
 ## TASK R2 (2026-08-12): chunk=16 — TRUNG TÍNH, đóng nhánh. 32 là điểm ngọt cục bộ
 
 `FLA_CHUNK_SIZE` trong 0.27.1 vẫn ở `vllm/third_party/flash_linear_attention/

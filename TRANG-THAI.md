@@ -45,10 +45,15 @@ Cập nhật: 2026-08-12.
 4. ✅ Q4 — chốt policy tràn context: summarize-stub (giữ 8/8 việc, −30% tasks/hr,
    TTFT p95 ×1,9); error mất trắng 0/8. Lưới an toàn, không phải chiến lược.
    + Bẫy harness 3 thang token (est từ / token thật / yêu cầu) — TODO sửa.
-5. R2b — recheck chunk32 trên 0.27.1
-6. P7 — nghẽn CPU
-7. P5 — ablation nguồn graft (bf16 / Q4_K_M / UD-Q4_K_XL) → có thể champion v3
-8. P6 — mở rộng graft --modules ra toàn model (converter GGUF→compressed-tensors đầy đủ)
+5. ✅ R2b — chunk=32 GIỐNG HỆT 64 trên 0.27.1; con số +7,6% khai tử; giữ mặc định.
+6. ✅ P7 — CPU không nghẽn: GPU 100% phẳng @ conc32, vLLM ăn 8% một core. Đóng.
+6b. ✅ Cổng kiểm định đồng thời — PASS: không garbage; phân kỳ 5/8 là batch
+    non-invariance cố hữu của vLLM (conc-vs-conc lặp lại cũng 3/8 khớp).
+7. **TIẾP THEO: transfer sang Qwen3.5-27B-GGUF** (lệnh user 2026-08-13). Việc đầu:
+   khảo sát frame W4A16 cho 27B trên HF (RedHatAI có không? nếu không → phương án
+   GGUF-only qua plugin, hoặc tự quantize frame — 27B bf16 54GB KHÔNG vừa L4).
+8. (Hoãn, chưa hủy) P5 ablation nguồn graft; P6 converter toàn-model — cân nhắc gộp
+   vào chiến dịch 27B vì 27B chính là bài test thật của P6.
 
 ## Quyết định chờ user
 
