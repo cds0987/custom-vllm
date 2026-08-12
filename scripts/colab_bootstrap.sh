@@ -36,17 +36,27 @@ bash scripts/setup_env.sh 2>&1 | tail -25
 
 export HF_HUB_ENABLE_HF_TRANSFER=1
 
-# A prebuilt champion turns download+graft into a single pull. This is the
-# payoff for `huggingface-cli login` + one upload; see the note at the bottom.
-if [ -n "${CHAMPION_REPO:-}" ]; then
-  step "Pulling prebuilt champion from $CHAMPION_REPO"
-  python - <<EOF
-import os
+# A prebuilt champion turns download+graft into a single pull: 13.8 GB of
+# downloads plus a 5-minute CPU graft collapse into one 9.1 GB fetch. Try it
+# first and fall back to building from source, so a missing/private repo costs
+# nothing but a failed lookup.
+CHAMPION_REPO="${CHAMPION_REPO:-gunnybd01/qwen35-9b-champion}"
+PREBUILT_OK=0
+if [ -n "$CHAMPION_REPO" ]; then
+  step "Trying prebuilt champion: $CHAMPION_REPO"
+  if python - <<EOF
 from huggingface_hub import snapshot_download
-p = snapshot_download("$CHAMPION_REPO", local_dir="$OUT")
-print("champion at", p)
+snapshot_download("$CHAMPION_REPO", local_dir="$OUT")
 EOF
-else
+  then
+    echo "Pulled prebuilt champion — skipping download + graft"
+    PREBUILT_OK=1
+  else
+    echo "Prebuilt champion unavailable; building from source"
+  fi
+fi
+
+if [ "$PREBUILT_OK" = "0" ]; then
   step "Downloading frame + GGUF IN PARALLEL"
   # Sequential downloads leave the link idle while the other file waits; these
   # two are independent, so overlap them and wait for both.
