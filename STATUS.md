@@ -650,10 +650,41 @@ sẻ** (bản chạy đầu dùng prefix ~1K là ĐO SAI KỊCH BẢN, đã bỏ
 - pct_time_prefill_reconnect tăng mạnh theo tải: nhẹ 9→22%, thường
   20,6→42%, nặng 21,4→**57,4%**. Ở tải cao, hơn nửa thời gian phiên là
   chờ/tính lại prefill.
-- CÂU HỎI MỞ QUAN TRỌNG: prefix chung có THẬT SỰ tiết kiệm KV không?
-  Nếu chia sẻ đúng, KV usage phải tăng DƯỚI TUYẾN TÍNH theo số phiên
-  (30K dùng chung + phần riêng). Cần bảng KV usage ở sessions 1/4/8/16
-  để kiểm — đây là kiểm chứng cốt lõi của cả kiến trúc.
+### Q2b (đo TỪNG mức riêng lẻ, không chồng pha) — ba kết quả quyết định:
+
+**(1) PREFIX CHUNG ĐƯỢC CHIA SẺ THẬT — kiến trúc được xác nhận bằng số:**
+
+    sessions   KV usage đỉnh   ≈ token      mô hình "30K chung + 16K/phiên"
+    1          11,5%           46.530       46.000  ✓
+    4          24,0%           97.107       94.000  ✓
+    8          39,8%           160.632      158.000 ✓
+    16         70,4%           284.850      286.000 ✓
+
+Khớp 4/4 điểm. Con số 97% hoảng hồn ở lượt trước là **artifact chồng pha**
+(phiên mức trước chưa giải phóng khi mức sau bắt đầu) — không phải bệnh.
+⇒ Giả định nền của cả dự án ĐÚNG.
+
+**(2) VÙNG DƯỚI TRẦN: bộ lập lịch RESERVE theo worst-case max-model-len.**
+sessions=4: KV usage chỉ 24% (còn 76% trống) mà `waiting_by_reason{capacity}`
+đã = 2, preemption = 0. ⇒ scheduler từ chối nhận request mới dù cache dư
+dả — vì nó phải chừa chỗ cho MỖI request có thể phình tới max-model-len.
+Điều này giải thích chính con số "6,17× @65536" = 404.613 / 65.536.
+**⇒ ĐÒN TỐI ƯU MỚI, rẻ và rõ: hạ max-model-len xuống ĐÚNG nhu cầu thật**
+(prefix 30K + lượt × kết quả tool + biên ≈ 40K) thay vì 65536 → dung
+lượng đồng thời tăng ~1,6× mà KHÔNG mất gì. Chưa đo — xem Q2c.
+
+**(3) THƯỚC ĐO ĐÚNG: điểm vận hành là 8 PHIÊN, không phải 1.**
+
+    sessions   tasks/hr     thời gian 1 tác vụ   TTFT p95
+    1          81,0         44,4s                2,4s
+    4          271,7        52,4s                6,4s
+    **8**      **328,1 ⬅ đỉnh**  82,8s           12,5s
+    16         189,2 (sụt)  293,4s (+254%)       73,2s
+
+Với vòng lặp agent, user vốn đã chờ tool 0,5-5s/lượt nên TTFT từng lượt
+ít quan trọng; cái đáng chọn là thông lượng tác vụ. **16 phiên là lỗ vốn
+rõ ràng** (tasks/hr −42%, thời gian mỗi tác vụ ×3,5) — dấu hiệu kinh điển
+của việc vượt điểm bão hoà và đốt GPU vào hàng đợi.
 
 ## TASK R2 (2026-08-12): chunk=16 — TRUNG TÍNH, đóng nhánh. 32 là điểm ngọt cục bộ
 
