@@ -19,13 +19,25 @@ echo "=== Fixing torchaudio/torchvision CUDA-build mismatch (see STATUS.md drift
 pip uninstall -q -y torchaudio torchvision || true
 pip install -q --no-deps torchvision || echo "WARNING: torchvision reinstall failed; qwen3_5.py import may break"
 
-echo "=== Installing llmcompressor + datasets (quantize_*.py / eval_quality_swebench.py's lazy load_dataset) ==="
-# Light guard, not a hard dependency of serving itself: several scripts/ tools
-# (quantize_gptq_9b.py, quantize_awq_*.py, bench_serving.py, bench_swebench.py,
-# eval_quality_swebench.py's lazy `from datasets import load_dataset`) need
-# these but the core serve/patch path does not, so failures here must not
-# abort setup for a pure-serving session.
-pip install -q llmcompressor datasets || echo "WARNING: llmcompressor/datasets install failed (non-fatal for serving-only sessions)"
+# hf_transfer: Rust-backed parallel chunk downloader. The frame (8 GB) + GGUF
+# (5.8 GB) dominate rebuild wall-clock and huggingface_hub's default single
+# stream leaves most of Colab's bandwidth on the table. Costs seconds to
+# install, saves minutes on every download.
+echo "=== Installing hf_transfer (parallel HF downloads) ==="
+pip install -q hf_transfer || echo "WARNING: hf_transfer install failed; downloads stay single-stream"
+export HF_HUB_ENABLE_HF_TRANSFER=1
+
+# llmcompressor + datasets are only needed by the quantize_*.py tools and by
+# eval_quality_swebench.py's lazy `from datasets import load_dataset`. They are
+# a multi-minute install that also drags huggingface_hub backwards (see the
+# re-pin below), so a serve/bench-only session should skip them entirely.
+# Opt in with CUSTOM_VLLM_TOOLS=1.
+if [ "${CUSTOM_VLLM_TOOLS:-0}" = "1" ]; then
+  echo "=== Installing llmcompressor + datasets (CUSTOM_VLLM_TOOLS=1) ==="
+  pip install -q llmcompressor datasets || echo "WARNING: llmcompressor/datasets install failed (non-fatal for serving-only sessions)"
+else
+  echo "=== Skipping llmcompressor + datasets (set CUSTOM_VLLM_TOOLS=1 if you need quantize_*.py or eval_quality_swebench.py) ==="
+fi
 # datasets pins an older huggingface_hub (observed: downgraded to 1.23.0,
 # which predates the `ResolvedRevision` symbol) and silently overwrites the
 # newer huggingface_hub vllm/vllm_gguf_plugin need -- vllm_gguf_plugin's
@@ -41,13 +53,26 @@ echo "=== Installing vllm-gguf-plugin (GGUF moved out-of-tree as of vllm 0.26) =
 # patches below always apply to pristine sources
 pip install -q vllm-gguf-plugin
 
-echo "=== Rebuilding plugin from sdist so _C_gguf matches this torch ABI ==="
-# The prebuilt wheel's _C_gguf.abi3.so was compiled against a different torch
-# ABI (ImportError: undefined symbol torch_exception_get_what_without_backtrace
-# on torch 2.11.0+cu128), silently dropping every GGUF matmul to the Triton
-# fallback — which has no GEMV path and cost 3.9x at conc1 (TEST 8). Building
-# the sdist locally against the installed torch fixes the import. Fall back to
-# the wheel if the build fails so the environment still comes up.
+# The prebuilt wheel's _C_gguf.abi3.so was, on some torch builds, compiled
+# against a different torch ABI (ImportError: undefined symbol
+# torch_exception_get_what_without_backtrace on torch 2.11.0+cu128), silently
+# dropping every GGUF matmul to the Triton fallback -- no GEMV path, 3.9x cost
+# at conc1 (TEST 8). Rebuilding from sdist fixes it, but that compile is the
+# single most expensive step in this script (minutes of nvcc), and as of
+# vllm 0.27.1 the published wheel imports fine. So: TEST FIRST, BUILD ONLY IF
+# BROKEN. Observed 2026-08-12 on a fresh Colab runtime: the sdist build failed,
+# fell back to the wheel, and the wheel's _C_gguf imported cleanly anyway --
+# i.e. the whole compile was pure waste.
+echo "=== Checking whether the prebuilt wheel's _C_gguf matches this torch ABI ==="
+if python -c "from vllm_gguf_plugin import _C_gguf" 2>/dev/null; then
+  echo "_C_gguf import OK from prebuilt wheel — skipping sdist rebuild (saves minutes)"
+  SKIP_SDIST=1
+else
+  echo "_C_gguf broken in prebuilt wheel — rebuilding from sdist against this torch"
+  SKIP_SDIST=0
+fi
+
+if [ "$SKIP_SDIST" = "0" ]; then
 SDIST_URL=$(python - <<'EOF'
 import json, urllib.request
 d = json.load(urllib.request.urlopen("https://pypi.org/pypi/vllm-gguf-plugin/json"))
@@ -62,6 +87,7 @@ else
   echo "WARNING: sdist build failed; falling back to prebuilt wheel (Triton-only kernels)"
   pip install -q --force-reinstall --no-deps vllm-gguf-plugin
 fi
+fi   # SKIP_SDIST
 python - <<'EOF'
 try:
     from vllm_gguf_plugin import _C_gguf  # noqa: F401
