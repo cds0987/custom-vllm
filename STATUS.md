@@ -686,6 +686,35 @@ Với vòng lặp agent, user vốn đã chờ tool 0,5-5s/lượt nên TTFT t�
 rõ ràng** (tasks/hr −42%, thời gian mỗi tác vụ ×3,5) — dấu hiệu kinh điển
 của việc vượt điểm bão hoà và đốt GPU vào hàng đợi.
 
+## TASK Q2c (2026-08-13): quét max-model-len — GIẢ THUYẾT "+1,6× capacity" BỊ BÁC Ở ĐIỂM VẬN HÀNH
+
+Runtime mới A (e27f78d34f93, vLLM 0.27.1), bootstrap 5,9 phút bằng champion prebuilt
+(sanity PASS: output mạch lạc, 36,3 tok/s conc1 — bản HF nguyên vẹn). Cả 3 điểm đo
+CÙNG runtime, prefix tổng hợp 30K (thực tokenize ~24,5K), 5 lượt, sessions 4/8/16:
+
+    tasks/hr          mml=40960        mml=49152     mml=65536
+    sessions=4        (invalid)        197,1         197,4
+    sessions=8        (invalid)        312,3         **329,5 ⬅ đỉnh giữ nguyên**
+    sessions=16       (invalid)        **207,7 (+9,4%)**  189,8
+    TTFT p95 @16      —                53,2s (−23%)  69,4s
+
+- **Tái lập Q2b xuất sắc**: 65536 hôm nay 329,5/189,8 vs hôm qua 328,1/189,2
+  (khác runtime, lệch <0,5%) — bench này đáng tin.
+- **mml=40960 HỎNG workload**: 6/28 phiên 400 Bad Request ở lượt cuối. Nguyên nhân
+  đo được: prefix "30K ước lượng" = ~24,5K token thật, nhưng context phình
+  2,2-5,5K token THẬT mỗi lượt (turn1 24.533 → turn4 36.977; lượt 5 ≈ 41K > 40960).
+  Nhu cầu thật của workload 5 lượt ≈ 42-43K. Bẫy: ước lượng theo từ đánh giá
+  THẤP hơn tokenizer thật đáng kể ở cả hai chiều.
+- **Giả thuyết Q2b(2) "hạ mml → +1,6× dung lượng, không mất gì" BỊ BÁC ở điểm
+  vận hành**: tại 8 phiên, 49152 KÉM hơn 5,2% (312,3 vs 329,5) dù admission
+  tăng 6,17→8,23 chỗ. Lý giải: ở 8 phiên, nghẽn thật là GPU compute chứ không
+  phải admission — scheduler bắt chờ chỉ đổi thứ tự việc, GPU vẫn bận. Hàng
+  đợi capacity ≠ GPU lãng phí.
+- Hạ mml CHỈ có ích ở vùng quá bão hòa: 16 phiên +9,4% tasks/hr, TTFT p95 −23%.
+- **KHUYẾN NGHỊ CHỐT: giữ 65536 cho điểm vận hành 8 phiên** (an toàn overflow,
+  throughput cao nhất); nếu buộc chạy 16 phiên thì 49152 tốt hơn. Không có
+  free lunch từ mml.
+
 ## TASK R2 (2026-08-12): chunk=16 — TRUNG TÍNH, đóng nhánh. 32 là điểm ngọt cục bộ
 
 `FLA_CHUNK_SIZE` trong 0.27.1 vẫn ở `vllm/third_party/flash_linear_attention/
