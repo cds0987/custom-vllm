@@ -20,6 +20,20 @@ STATUS.md TASK F/H) and are simply pointed to at run time:
         --questions-file skills_pack/selected_questions.jsonl \\
         --concurrency 1,8,16,32 --mode concurrent
 
+SYNTHETIC MODE (for throughput measurement without private data):
+    python scripts/bench_skills.py \\
+        --synthetic-prefix-tokens 10000 \\
+        --synthetic-questions 100 \\
+        --concurrency 1,8,16,32 --mode concurrent
+
+When using --synthetic-prefix-tokens and/or --synthetic-questions, the script
+generates deterministic synthetic text (seeded by --seed, default 0) in place
+of reading from files. This is useful for measuring *throughput* when no real
+dataset is available — throughput depends only on token counts, not semantic
+content. However, synthetic mode should NEVER be used to measure or report
+*quality* metrics. Throughput numbers from synthetic and real-data modes are
+not directly comparable.
+
 Questions-file schema (JSONL, one object per line): {"id", "question",
 "choices"?, "domain"?}. `choices` is an optional list/dict of MCQ options; if
 present the client formats them into the user turn and appends an
@@ -55,6 +69,7 @@ prefix is that everyone *after* the first request should pay less than this.
 import argparse
 import json
 import os
+import random
 import re
 import statistics
 import sys
@@ -72,6 +87,55 @@ CHAT_URL = URL + "/v1/chat/completions"
 METRICS_URL = URL + "/metrics"
 CONNECT_TIMEOUT = 10.0
 READ_TIMEOUT = float(os.environ.get("BENCH_TIMEOUT", "300"))
+
+
+# --------------------------------------------------------------------------
+# Synthetic data generation (for throughput measurement without real datasets)
+# --------------------------------------------------------------------------
+
+# Fixed vocabulary for deterministic synthetic generation
+_VOCAB = [
+    "The", "quick", "brown", "fox", "jumps", "over", "lazy", "dog",
+    "Python", "code", "benchmark", "throughput", "token", "processing",
+    "machine", "learning", "model", "inference", "server", "request",
+    "system", "prompt", "question", "answer", "completion", "generation",
+    "efficient", "fast", "reliable", "scalable", "robust", "optimal",
+    "compute", "memory", "latency", "concurrent", "stream", "pipeline",
+    "cache", "prefix", "data", "algorithm", "optimization", "performance",
+]
+
+
+def generate_synthetic_prefix(n_tokens: int, seed: int = 0) -> str:
+    """Generate deterministic synthetic text approximately n_tokens in length.
+    Uses ~4 chars per token (matching bench_skills.py's estimation convention)."""
+    rng = random.Random(seed)
+    n_words = (n_tokens * 4) // 5  # ~5 chars/word on average, so ~4 chars/token -> ~5/4 tokens/word
+    words = [rng.choice(_VOCAB) for _ in range(n_words)]
+    return " ".join(words)
+
+
+def generate_synthetic_questions(n_questions: int, min_tokens: int = 50, max_tokens: int = 150, seed: int = 0) -> list:
+    """Generate n_questions distinct synthetic questions, each approximately
+    min_tokens to max_tokens tokens in length. Returns list of dicts with
+    id and question fields."""
+    rng = random.Random(seed)
+    questions = []
+    for i in range(n_questions):
+        n_tokens = rng.randint(min_tokens, max_tokens)
+        n_words = (n_tokens * 4) // 5
+        # Shuffle vocabulary differently for each question to avoid exact duplication
+        vocab_shuffled = _VOCAB.copy()
+        rng.shuffle(vocab_shuffled)
+        # Pick words, cycling through shuffled vocab to ensure variety
+        words = []
+        for j in range(n_words):
+            words.append(vocab_shuffled[j % len(vocab_shuffled)])
+        question_text = " ".join(words)
+        questions.append({
+            "id": f"synthetic_{i:06d}",
+            "question": question_text,
+        })
+    return questions
 
 
 # --------------------------------------------------------------------------
@@ -371,7 +435,7 @@ def run_warmup(questions: list, prefix: str, max_tokens: int) -> dict:
 # Dry run (no server contact): validate inputs + one request payload
 # --------------------------------------------------------------------------
 
-def dry_run(prefix: str, questions: list, max_tokens: int) -> None:
+def dry_run(prefix: str, questions: list, max_tokens: int, synthetic_mode: dict = None) -> None:
     q0 = questions[0]
     messages = build_messages(prefix, q0)
     # ~4 chars/token: crude estimate, matches bench_serving.py's convention
@@ -379,7 +443,10 @@ def dry_run(prefix: str, questions: list, max_tokens: int) -> None:
     prefix_tok_est = len(prefix) // 4
     user_tok_est = len(messages[1]["content"]) // 4
     print("=== dry run (no server contact) ===")
-    print(f"prefix file: {len(prefix)} chars, ~{prefix_tok_est} tokens (est.)")
+    if synthetic_mode:
+        print(f"SYNTHETIC MODE: prefix ~{synthetic_mode['prefix_tokens']} tokens (est.), "
+              f"{synthetic_mode['n_questions']} questions, seed={synthetic_mode['seed']}")
+    print(f"prefix: {len(prefix)} chars, ~{prefix_tok_est} tokens (est.)")
     print(f"questions loaded: {len(questions)}")
     print(f"first question id: {q0['id']}")
     print(f"first user-turn: {len(messages[1]['content'])} chars, ~{user_tok_est} tokens (est.)")
@@ -399,10 +466,14 @@ def parse_concurrency(spec: str) -> list:
 def main():
     ap = argparse.ArgumentParser(
         description="Shared-prefix (skills-pack) benchmark for an OpenAI-compatible vLLM endpoint. "
-        "Dataset-free: content comes entirely from --prefix-file/--questions-file."
+        "Dataset-free: content comes entirely from --prefix-file/--questions-file or synthetic mode."
     )
-    ap.add_argument("--prefix-file", required=True, help="path to the system-prompt text file")
-    ap.add_argument("--questions-file", required=True, help="path to a JSONL file with id/question/choices/domain fields")
+    ap.add_argument("--prefix-file", default=None, help="path to the system-prompt text file (mutually exclusive with --synthetic-prefix-tokens)")
+    ap.add_argument("--questions-file", default=None, help="path to a JSONL file with id/question/choices/domain fields (mutually exclusive with --synthetic-questions)")
+    ap.add_argument("--synthetic-prefix-tokens", type=int, default=None, help="generate synthetic prefix of ~N tokens instead of reading --prefix-file")
+    ap.add_argument("--synthetic-questions", type=int, default=None, help="generate N synthetic questions instead of reading --questions-file")
+    ap.add_argument("--synthetic-question-tokens", default="50-150", help="token range per synthetic question (min-max, default 50-150)")
+    ap.add_argument("--seed", type=int, default=0, help="random seed for synthetic data generation (default 0, ensures deterministic output)")
     ap.add_argument("--model", default=None, help="overrides env VLLM_MODEL")
     ap.add_argument("--url", default=None, help="overrides env VLLM_URL (default http://localhost:8000)")
     ap.add_argument("--max-tokens", type=int, default=1024)
@@ -410,14 +481,79 @@ def main():
     ap.add_argument("--mode", choices=["sequential", "concurrent"], default="concurrent")
     ap.add_argument("--output", default=None, help="output JSONL path (default: out_skills/bench_skills_<ts>.jsonl)")
     ap.add_argument("--timeout", type=float, default=None, help="per-chunk read timeout seconds (env BENCH_TIMEOUT)")
-    ap.add_argument("--dry-run", action="store_true", help="load files, build the first request payload, print token estimates, exit — no server contact")
+    ap.add_argument("--dry-run", action="store_true", help="load/generate data, build the first request payload, print token estimates, exit — no server contact")
     args = ap.parse_args()
 
-    prefix = load_prefix(args.prefix_file)
-    questions = load_questions(args.questions_file)
+    # Validate synthetic vs file mode
+    has_prefix_file = args.prefix_file is not None
+    has_questions_file = args.questions_file is not None
+    has_synthetic_prefix = args.synthetic_prefix_tokens is not None
+    has_synthetic_questions = args.synthetic_questions is not None
+
+    if (has_prefix_file or has_questions_file) and (has_synthetic_prefix or has_synthetic_questions):
+        print("ERROR: cannot mix file-based (--prefix-file/--questions-file) and synthetic (--synthetic-*) modes",
+              file=sys.stderr)
+        sys.exit(1)
+
+    # Check that either both files or both synthetic flags are provided
+    if has_prefix_file != has_questions_file:
+        print("ERROR: must provide both --prefix-file and --questions-file together (or use synthetic mode)",
+              file=sys.stderr)
+        sys.exit(1)
+
+    if has_synthetic_prefix != has_synthetic_questions:
+        print("ERROR: must provide both --synthetic-prefix-tokens and --synthetic-questions together (or use file mode)",
+              file=sys.stderr)
+        sys.exit(1)
+
+    if not has_prefix_file and not has_synthetic_prefix:
+        print("ERROR: must specify either (--prefix-file and --questions-file) or (--synthetic-prefix-tokens and --synthetic-questions)",
+              file=sys.stderr)
+        sys.exit(1)
+
+    # Parse question token range
+    if args.synthetic_question_tokens:
+        parts = args.synthetic_question_tokens.split("-")
+        if len(parts) != 2:
+            print(f"ERROR: --synthetic-question-tokens must be MIN-MAX (got {args.synthetic_question_tokens})",
+                  file=sys.stderr)
+            sys.exit(1)
+        try:
+            min_q_tokens = int(parts[0])
+            max_q_tokens = int(parts[1])
+        except ValueError:
+            print(f"ERROR: --synthetic-question-tokens must be numeric MIN-MAX",
+                  file=sys.stderr)
+            sys.exit(1)
+    else:
+        min_q_tokens = 50
+        max_q_tokens = 150
+
+    # Load or generate prefix and questions
+    synthetic_mode = None
+    if args.synthetic_prefix_tokens is not None or args.synthetic_questions is not None:
+        synthetic_mode = {}
+        if args.synthetic_prefix_tokens is not None:
+            prefix = generate_synthetic_prefix(args.synthetic_prefix_tokens, seed=args.seed)
+            synthetic_mode['prefix_tokens'] = args.synthetic_prefix_tokens
+        else:
+            # Need to load prefix file
+            prefix = load_prefix(args.prefix_file)
+
+        if args.synthetic_questions is not None:
+            questions = generate_synthetic_questions(args.synthetic_questions, min_q_tokens, max_q_tokens, seed=args.seed)
+            synthetic_mode['n_questions'] = args.synthetic_questions
+        else:
+            # Need to load questions file
+            questions = load_questions(args.questions_file)
+
+        synthetic_mode['seed'] = args.seed
+    else:
+        prefix = load_prefix(args.prefix_file)
+        questions = load_questions(args.questions_file)
 
     if args.dry_run:
-        dry_run(prefix, questions, args.max_tokens)
+        dry_run(prefix, questions, args.max_tokens, synthetic_mode)
         return
 
     global MODEL, URL, CHAT_URL, METRICS_URL, READ_TIMEOUT
@@ -437,10 +573,31 @@ def main():
     out_path = Path(args.output) if args.output else REPO_ROOT / "out_skills" / f"bench_skills_{ts}.jsonl"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    print(f"=== skills-prefix benchmark: model={MODEL} questions={len(questions)} mode={args.mode} concurrency={args.concurrency} ===\n")
+    if synthetic_mode:
+        prefix_tok_est = synthetic_mode.get('prefix_tokens', len(prefix) // 4)
+        n_q = synthetic_mode.get('n_questions', len(questions))
+        seed = synthetic_mode.get('seed', 0)
+        print(f"=== skills-prefix benchmark (SYNTHETIC MODE) ===")
+        print(f"prefix ~{prefix_tok_est} tokens, {n_q} questions, seed={seed}")
+        print(f"model={MODEL} mode={args.mode} concurrency={args.concurrency}")
+        print(f"WARNING: synthetic mode measures throughput only, NOT quality. "
+              "Do not use these results to evaluate model capabilities.\n")
+    else:
+        print(f"=== skills-prefix benchmark: model={MODEL} questions={len(questions)} mode={args.mode} concurrency={args.concurrency} ===\n")
 
     all_summaries = []
     with out_path.open("w", encoding="utf-8") as f:
+        # Write benchmark metadata at the start
+        if synthetic_mode:
+            metadata = {
+                "type": "metadata",
+                "mode": "synthetic",
+                "prefix_tokens": synthetic_mode.get('prefix_tokens'),
+                "n_questions": synthetic_mode.get('n_questions'),
+                "seed": synthetic_mode.get('seed', 0),
+            }
+            f.write(json.dumps(metadata, default=str) + "\n")
+
         warmup_rec = run_warmup(questions, prefix, args.max_tokens)
         f.write(json.dumps(warmup_rec, default=str) + "\n")
 
