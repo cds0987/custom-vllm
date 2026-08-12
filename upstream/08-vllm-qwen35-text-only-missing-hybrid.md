@@ -1,5 +1,14 @@
 # [Bug] Text-only Qwen3_5ForCausalLMBase is missing IsHybrid + mamba-state classmethods, present only on the multimodal class
 
+## Tóm tắt cho người không chuyên
+
+Qwen3.5 là mô hình "lai" giữa hai kiểu ghi nhớ ngữ cảnh khác nhau, và phần
+mềm quản lý bộ nhớ đặc biệt đó chỉ được khai báo cho phiên bản có hình ảnh,
+không có cho phiên bản chỉ-văn-bản — dù cả hai dùng chung cơ chế lai này.
+Hậu quả là ngay khi lỗi ở báo cáo trước được sửa, phiên bản chỉ-văn-bản vẫn
+sập vì thiếu khai báo. Cách sửa là chuyển khai báo đó lên lớp cha dùng
+chung.
+
 **Target repo:** vllm-project/vllm
 **Severity:** High (crash; only reachable after fixing report 07's registration gap)
 **Affected versions:** vllm 0.26

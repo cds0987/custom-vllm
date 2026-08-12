@@ -1,5 +1,16 @@
 # [Observed behavior] CUDA_MPS_* environment variables are not propagated from the API server process to spawned EngineCore workers, preventing MPS SM-partitioning
 
+## Tóm tắt cho người không chuyên
+
+Có một cơ chế của NVIDIA (MPS) cho phép "chia phần cứng GPU" để nhiều tiến
+trình dùng chung card mà không giành nhau tài nguyên — hữu ích khi muốn tách
+riêng traffic chat (cần trả lời nhanh) với traffic xử lý tài liệu dài (cần
+thông lượng cao) trên cùng một GPU. Nhóm phát hiện cấu hình chia phần cứng
+này không có tác dụng với vLLM: tiến trình con thực sự giữ GPU không nhận
+được các thiết lập đó do cách phần mềm tự tách tiến trình. Đây là quan sát
+báo lại cho dự án, chưa có bản vá cụ thể vì nhóm chưa xác định chắc chắn
+điểm cần sửa trong mã nguồn.
+
 **Target repo:** vllm-project/vllm
 **Severity:** Low (not a crash; forecloses an optimization rather than breaking functionality — filed as an observed-behavior report, not a bug, since we have not fully traced whether this is fixable without a code change or is an inherent consequence of the multiprocessing spawn boundary)
 **Affected versions:** vllm 0.26

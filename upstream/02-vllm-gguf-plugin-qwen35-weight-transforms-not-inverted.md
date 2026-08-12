@@ -1,5 +1,16 @@
 # [Bug] Qwen3.5 GGUF checkpoints are not byte-faithful HF weights — llama.cpp's conversion-time transforms are never inverted on load
 
+## Tóm tắt cho người không chuyên
+
+Công cụ tạo file GGUF (llama.cpp) không chỉ nén số mà còn lặng lẽ "biến đổi"
+một số con số trong lúc lưu file — ví dụ đảo dấu, cộng thêm 1, hay sắp xếp
+lại thứ tự — vì bản thân nó cần lưu như vậy để chạy nhanh. Phần mềm nạp file
+này vào vLLM lại không biết phải "giải mã ngược" các phép biến đổi đó trước
+khi dùng, nên các con số bị sai lệch nghiêm trọng và mô hình trả lời hoàn
+toàn vô nghĩa dù không hề báo lỗi. Cách sửa là thêm đúng 4 phép tính ngược
+tương ứng lúc nạp file, và nhóm nghiên cứu đã đối chiếu số học để xác nhận
+kết quả khớp với bản gốc.
+
 **Target repo:** vllm-project/vllm-gguf-plugin
 **Severity:** Critical (silent correctness failure — model loads and runs, output is garbage)
 **Affected versions:** vllm-gguf-plugin 0.0.4, vllm 0.26, gguf 0.19.0

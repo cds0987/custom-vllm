@@ -1,5 +1,15 @@
 # [Bug] Qwen3.5 GGUF support: six correctness/compatibility gaps (naming, vision config, multimodality detection, weight naming, tensor layout, RoPE config)
 
+## Tóm tắt cho người không chuyên
+
+Đây là một chùm bảy lỗi nhỏ, khác nhau, nhưng đều phải sửa hết thì file GGUF
+của dòng mô hình Qwen3.5 mới nạp và chạy được: sai tên kiến trúc, đọc nhầm
+tên trường cấu hình, nhận diện sai "có ảnh hay không", sai hình dạng một lớp
+mạng, thiếu một quy tắc đổi tên, thiếu danh sách cho phép với phần không có
+trong bản chỉ-văn-bản, và bật nhầm một cơ chế xử lý ảnh không cần thiết. Từng
+lỗi một đều nhỏ và có bản vá cụ thể, nhưng gộp chung một báo cáo vì không lỗi
+nào có ích nếu tách riêng — phải sửa đủ cả bảy thì mô hình mới chạy được.
+
 **Target repo:** vllm-project/vllm-gguf-plugin
 **Severity:** High (each individually blocks Qwen3.5 GGUF loading or serving; none is reachable in isolation from the others, since Qwen3.5 support requires clearing all of them)
 **Affected versions:** vllm-gguf-plugin 0.0.4, vllm 0.26, transformers 5.13.1

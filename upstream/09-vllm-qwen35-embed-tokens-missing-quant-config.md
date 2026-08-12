@@ -1,5 +1,14 @@
 # [Bug] Qwen3_5Model.embed_tokens is constructed without quant_config, breaking quantized (GGUF) token-embedding loading
 
+## Tóm tắt cho người không chuyên
+
+Lớp "bảng tra từ vựng" (chuyển token thành vector số) của mô hình được tạo ra
+mà không được cho biết checkpoint đang dùng có nén hay không. Với hầu hết
+trường hợp không sao vì bảng này thường lưu ở dạng không nén, nhưng nếu một
+ai đó dùng checkpoint có nén cả bảng từ vựng, phần mềm sẽ sập ngay lúc khởi
+động. Cách sửa là truyền đúng thông tin cấu hình nén khi tạo lớp này, giống
+mọi lớp khác trong mô hình đã làm.
+
 **Target repo:** vllm-project/vllm
 **Severity:** Medium (crash, but only for checkpoints whose embedding happens to be stored in a quantized ggml type rather than F16/F32)
 **Affected versions:** vllm 0.26

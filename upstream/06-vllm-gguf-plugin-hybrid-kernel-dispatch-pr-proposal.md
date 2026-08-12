@@ -1,5 +1,16 @@
 # [PR proposal] Dispatch GGUF matmuls by shape — fused Triton kernels for decode, dequant+cuBLAS for prefill
 
+## Tóm tắt cho người không chuyên
+
+Có hai cách để nhân các ma trận đã nén 4-bit trong lúc chạy mô hình, và cách
+nào nhanh hơn phụ thuộc vào việc máy đang "đọc một câu hỏi dài" (prefill) hay
+"sinh từng chữ trả lời" (decode) — thử nghiệm cho thấy chênh lệch tới 2,5 lần
+tuỳ tình huống, và không có cách nào thắng cả hai trường hợp cùng lúc. Đề
+xuất này là thêm một cờ tuỳ chọn để phần mềm tự chọn đúng cách nhân theo độ
+lớn của phép tính đang chạy, thay vì bắt người vận hành phải đoán và cấu
+hình cứng một cách cho toàn bộ máy chủ. Đã đo và xác nhận cách chọn tự động
+này đạt gần như tốt nhất ở cả hai tình huống cùng lúc.
+
 **Target repo:** vllm-project/vllm-gguf-plugin
 **Type:** Performance enhancement (PR proposal, not a bug report)
 **Affected versions:** vllm-gguf-plugin 0.0.4, vllm 0.26

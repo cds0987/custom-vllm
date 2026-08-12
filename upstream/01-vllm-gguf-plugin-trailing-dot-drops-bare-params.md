@@ -1,5 +1,16 @@
 # [Bug] `find_hf_name_in_tensor_map()` appends a trailing dot to bare (suffixless) parameters, silently dropping them — breaks every SSM/hybrid architecture
 
+## Tóm tắt cho người không chuyên
+
+Khi nạp một số tệp mô hình định dạng GGUF, phần mềm ghép nhầm một dấu chấm
+thừa vào tên của vài tham số đặc biệt (không có đuôi ".weight"/".bias"), nên
+các tham số đó không bao giờ được nạp — chúng âm thầm giữ giá trị "trắng"
+mặc định. Hậu quả: mô hình vẫn khởi động và trả lời bình thường về mặt kỹ
+thuật, nhưng câu trả lời suy thoái thành chuỗi ký tự "!!!!!!" lặp vô nghĩa,
+vì phần "cổng nhớ" quan trọng của mạng đã bị vô hiệu hoá mà không có cảnh
+báo lỗi nào. Cách sửa chỉ là một dòng mã: chỉ ghép dấu chấm khi thực sự có
+hậu tố.
+
 **Target repo:** vllm-project/vllm-gguf-plugin
 **Severity:** Critical (silent correctness failure, not a crash — affects every SSM/hybrid GGUF model the plugin claims to support)
 **Affected versions:** vllm-gguf-plugin 0.0.4, vllm 0.26, gguf 0.19.0

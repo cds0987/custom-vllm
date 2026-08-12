@@ -1,5 +1,15 @@
 # [Bug] Tuple shard-ids collapse per-shard GGUF weight types into one, mis-decoding some shards with the wrong quant type (Q5_K read as Q4_K)
 
+## Tóm tắt cho người không chuyên
+
+Một lớp mạng "gộp" của mô hình được ghép từ nhiều mảnh nhỏ, mỗi mảnh có thể
+được nén theo một kiểu nén khác nhau. Phần mềm nạp file lại đôi khi gộp
+nhầm nhãn "kiểu nén" của nhiều mảnh vào chung một ô nhớ, khiến một mảnh dữ
+liệu được đọc bằng công thức giải nén SAI (ví dụ đọc dữ liệu nén 5-bit như
+thể nó là dữ liệu nén 4-bit). Kết quả nhẹ thì báo lỗi ngay lúc chạy, nặng thì
+suy ra sai số âm thầm nếu người dùng chỉ vá một nửa lỗi. Bản vá đảm bảo mỗi
+mảnh luôn giữ đúng nhãn kiểu nén của riêng nó.
+
 **Target repo:** vllm-project/vllm-gguf-plugin
 **Severity:** High (crash on some fused-layer configs; silent wrong-dtype decode on others)
 **Affected versions:** vllm-gguf-plugin 0.0.4, vllm 0.26

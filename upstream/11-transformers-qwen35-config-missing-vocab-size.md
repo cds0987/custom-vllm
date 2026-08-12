@@ -1,5 +1,15 @@
 # [Bug] Qwen3_5Config does not expose vocab_size at the top level, breaking any code that constructs a model from the composite config directly
 
+## Tóm tắt cho người không chuyên
+
+Cấu hình của Qwen3.5 giấu kích thước từ vựng bên trong một cấu hình con
+(phần "văn bản"), nhưng đoạn mã dựng mô hình lại đi tìm nó ở cấp ngoài cùng
+— chỗ không tồn tại — nên bị lỗi ngay khi ai đó dựng mô hình theo cách thông
+thường nhất (đưa cả cấu hình tổng vào hàm dựng có sẵn). Cách sửa đơn giản là
+thêm một "cổng chuyển tiếp" để cấp ngoài cùng cũng đọc được giá trị từ cấu
+hình con, nhưng bản vá gặp thêm rắc rối kỹ thuật vì kiểu dữ liệu dataclass
+chặt chẽ không cho thêm thuộc tính kiểu đó dễ dàng.
+
 **Target repo:** huggingface/transformers
 **Severity:** Medium (crash for any external caller that follows the otherwise-normal pattern of building `AutoModelForCausalLM.from_config(the_full_config)`)
 **Affected versions:** transformers 5.13.1

@@ -1,5 +1,15 @@
 # [Bug] BF16 (unquantized) GGUF branch is broken — loads ~0.03 GiB instead of full weights, then crashes inside torch.compile at a zero-sized split
 
+## Tóm tắt cho người không chuyên
+
+Khi dùng phiên bản file GGUF "không nén" (BF16, để giữ độ chính xác gốc),
+phần mềm chỉ đọc được một mẩu rất nhỏ của mô hình (0,03 GiB thay vì vài GiB
+cần thiết) rồi bị lỗi ngay khi khởi động, trên cả hai loại GPU khác nhau đã
+thử. Nói cách khác, tính năng "dùng GGUF không nén" hoàn toàn không dùng
+được — người dùng buộc phải chọn bản đã nén hoặc định dạng khác. Nhóm chưa
+tìm ra nguyên nhân gốc (cần đào sâu vào mã nạp trọng số) nên báo cáo này chỉ
+mô tả lỗi kèm cách tái hiện, để ai quen mã nguồn có thể sửa nhanh hơn.
+
 **Target repo:** vllm-project/vllm-gguf-plugin
 **Severity:** High (feature is advertised — GGUF's F16/BF16/F32 storage types are meant to be "unquantized" passthroughs — but is unusable; no workaround short of using a quantized GGUF or a non-GGUF checkpoint)
 **Affected versions:** vllm-gguf-plugin 0.0.4, vllm 0.26, gguf 0.19.0

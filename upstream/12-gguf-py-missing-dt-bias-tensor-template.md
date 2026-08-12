@@ -1,5 +1,14 @@
 # [Bug] gguf-py's tensor_mapping.py has no template for Qwen3.5's linear_attn.dt_bias (only qwen3next's dt_proj is covered)
 
+## Tóm tắt cho người không chuyên
+
+Thư viện xử lý tên tensor của định dạng GGUF có một "từ điển" các tên tham số
+đã biết cho từng kiến trúc mô hình, dùng để đối chiếu qua lại giữa tên HuggingFace
+và tên GGUF. Kiến trúc Qwen3.5 dùng một cái tên tham số mà từ điển này chưa
+từng được dạy, nên các công cụ dựa vào nó báo "không tìm thấy tham số" dù
+tham số đó thực sự tồn tại trong file. Cách sửa là thêm đúng một dòng tên
+mới vào từ điển.
+
 **Target repo:** ggml-org/llama.cpp (gguf-py, the `gguf` PyPI package's source)
 **Severity:** Medium (blocks GGUF weight-name mapping for one tensor family per layer; the symptom is a generic "unmapped parameter" error, not a crash inside gguf-py itself)
 **Affected versions:** gguf 0.19.0

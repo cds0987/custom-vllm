@@ -1,5 +1,14 @@
 # [Bug] Qwen3_5ForCausalLM / Qwen3_5MoeForCausalLM classes exist but are never registered — architecture silently rewritten to the multimodal class, crashing with an empty vision tower
 
+## Tóm tắt cho người không chuyên
+
+Phần mềm có sẵn hai "công thức" đúng để chạy phiên bản chỉ-văn-bản của
+Qwen3.5, nhưng quên đăng ký chúng vào danh sách công thức được phép dùng.
+Kết quả là hệ thống tự động chọn nhầm sang công thức dành cho phiên bản có
+xử lý hình ảnh, rồi sập với thông báo lỗi gây hiểu lầm (nhắc tới "tháp thị
+giác trống rỗng") khiến người dùng khó đoán ra nguyên nhân thật. Cách sửa là
+thêm hai dòng đăng ký còn thiếu.
+
 **Target repo:** vllm-project/vllm
 **Severity:** Critical (crash; and the crash traceback is misleading about the actual cause)
 **Affected versions:** vllm 0.26
