@@ -782,8 +782,11 @@ Sanity 27B PASS: toán/tiếng Việt/code đều mạch lạc.
 đúng bộ đề của 9B; chạy eval qua HTTP trên server đang sống, mnbt 512 chặn peak
 logprob). So sánh: 9B champion 4,7637 / 9B bf16 5,13 → 27B W4A16 tốt hơn 9B champion
 12,3% — đúng kỳ vọng model to hơn, frame cộng đồng KHÔNG hỏng. Không cần graft.
-CÒN NỢ nhỏ: bench mini phù hợp KV 12K (27B trên L4 = single-user chất lượng cao,
-không phải multi-session).
+Bench mini (prefix 4K, cùng ngày): conc1 TTFT p50 **0,24s** (prefix cache hit 95,3%),
+decode 15,8; conc2 thr 29,5 (scale gần tuyến tính); conc4 thr 36,6 nhưng TTFT p95
+nổ lên 21,2s (KV 12K cạn → hàng đợi). **Điểm vận hành 27B trên L4: 1-2 người dùng,
+chất lượng cao hơn 9B 12,3% ppl** — đúng vai "single-user quality tier" bên cạnh
+9B "multi-session throughput tier". 27B ngày 1 ĐÓNG TRỌN VẸN.
 
 ## TASK R2b (2026-08-13): chunk=32 TRUNG TÍNH trên 0.27.1 — khai tử con số +7,6%
 
