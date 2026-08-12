@@ -2,12 +2,20 @@
   "mcpServers": {
     "colab-mcp": {
       "command": "C:\\Users\\TOMAP\\AppData\\Local\\Programs\\Python\\Python313\\Scripts\\uvx.exe",
-      "args": ["git+https://github.com/googlecolab/colab-mcp"],
+      "args": ["--from", "D:\\Training\\AI_Module\\colab-mcp", "colab-mcp"],
+      "env": { "COLAB_MCP_NOTEBOOK": "/drive/134iXTgK_uXdwx4-yZerjkfhyZJTW4dgs" },
       "timeout": 1800000
     },
     "colab-mcp-2": {
       "command": "C:\\Users\\TOMAP\\AppData\\Local\\Programs\\Python\\Python313\\Scripts\\uvx.exe",
-      "args": ["git+https://github.com/googlecolab/colab-mcp"],
+      "args": ["--from", "D:\\Training\\AI_Module\\colab-mcp", "colab-mcp"],
+      "env": { "COLAB_MCP_NOTEBOOK": "/drive/1qzdKjAo44KB_Q-nrPurGbo-IOY8ZsqpW" },
+      "timeout": 1800000
+    },
+    "colab-mcp-3": {
+      "command": "C:\\Users\\TOMAP\\AppData\\Local\\Programs\\Python\\Python313\\Scripts\\uvx.exe",
+      "args": ["--from", "D:\\Training\\AI_Module\\colab-mcp", "colab-mcp"],
+      "env": { "COLAB_MCP_NOTEBOOK": "/drive/1dhgbZejNZ9_t0ddBIzcGVlvMjFYV6HGV" },
       "timeout": 1800000
     }
   }

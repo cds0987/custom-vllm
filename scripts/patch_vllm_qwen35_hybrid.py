@@ -73,8 +73,27 @@ path = matches[0]
 with open(path, encoding="utf-8") as f:
     src = f.read()
 
+UPSTREAM_FIXED_ANCHOR = """class Qwen3_5ForCausalLMBase(
+    nn.Module,
+    HasInnerState,
+    IsHybrid,
+    SupportsEagle3,
+    SupportsLoRA,
+    SupportsPP,
+):
+"""
+
 if PATCH_MARKER in src:
     print(f"Already patched: {path}")
+elif UPSTREAM_FIXED_ANCHOR in src and "def get_mamba_state_dtype_from_config" in src.split(
+    "class Qwen3_5ForConditionalGeneration"
+)[0]:
+    # As of some vllm version, upstream itself added IsHybrid to the base
+    # class's bases and gave Qwen3_5ForCausalLMBase its own copies of the
+    # three mamba-state classmethods (rather than only defining them on the
+    # multimodal Qwen3_5ForConditionalGeneration subclass). That's exactly
+    # what this patch used to add by hand, so there's nothing left to do.
+    print(f"Upstream already fixed (IsHybrid + mamba-state methods present natively): {path}")
 elif BASES_ANCHOR not in src:
     raise SystemExit(f"Class-bases anchor not found in {path}; vllm source may have changed")
 else:
