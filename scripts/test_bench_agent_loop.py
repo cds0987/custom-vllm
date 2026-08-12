@@ -635,6 +635,75 @@ class TestMaxModelLenBudget(unittest.TestCase):
             srv.shutdown()
 
 
+class TestSyntheticPrefixTokens(unittest.TestCase):
+    def test_no_synthetic_prefix_tokens_flag_uses_small_schema_only_prefix(self):
+        """Without --synthetic-prefix-tokens, prefix should be small (schema + instructions only)."""
+        prefix_small = bal.synthetic_prefix(n_tools=12, n_padding_tokens=0, seed=42)
+        token_est = bal.est_tokens(prefix_small)
+        # Schema-only prefix is ~200-300 tokens (12 tools + instructions, word-count estimated)
+        self.assertLess(token_est, 500, "schema-only prefix should be small (<500 tokens)")
+        self.assertGreater(token_est, 100, "schema-only prefix should be at least 100 tokens")
+
+    def test_synthetic_prefix_tokens_flag_adds_padding(self):
+        """With --synthetic-prefix-tokens N, prefix should reach approximately N tokens."""
+        target_tokens = 5000
+        prefix_padded = bal.synthetic_prefix(n_tools=12, n_padding_tokens=target_tokens, seed=42)
+        token_est = bal.est_tokens(prefix_padded)
+        # Allow ±30% variance in estimation due to word-count approximation
+        lower_bound = target_tokens * 0.7
+        upper_bound = target_tokens * 1.3
+        self.assertGreaterEqual(
+            token_est, lower_bound,
+            f"prefix with {target_tokens} token target should estimate >= {lower_bound}, got {token_est}"
+        )
+        self.assertLessEqual(
+            token_est, upper_bound,
+            f"prefix with {target_tokens} token target should estimate <= {upper_bound}, got {token_est}"
+        )
+
+    def test_same_seed_same_prefix(self):
+        """Same seed should produce identical prefix (deterministic)."""
+        target_tokens = 3000
+        prefix1 = bal.synthetic_prefix(n_tools=12, n_padding_tokens=target_tokens, seed=42)
+        prefix2 = bal.synthetic_prefix(n_tools=12, n_padding_tokens=target_tokens, seed=42)
+        prefix3 = bal.synthetic_prefix(n_tools=12, n_padding_tokens=target_tokens, seed=99)
+        self.assertEqual(prefix1, prefix2, "same seed should produce identical prefix")
+        self.assertNotEqual(prefix1, prefix3, "different seeds should produce different prefixes")
+
+    def test_prefix_identical_across_all_sessions_in_run(self):
+        """Prefix must be identical for all sessions within one run (shared cache scenario)."""
+        srv = FakeAgentServer(n_chunks=2)
+        point_module_at(srv)
+        try:
+            target_tokens = 2000
+            prefix = bal.synthetic_prefix(n_tools=12, n_padding_tokens=target_tokens, seed=42)
+            questions = [one_question(f"q{i}") for i in range(2)]
+            cfg = make_cfg(turns=2, tool_latency_range=(0.02, 0.05))
+            bal.run_level(2, questions, prefix, bal.est_tokens(prefix), cfg, seed=99)
+
+            # All captured requests must have the exact same system message (prefix)
+            all_system_msgs = []
+            for c in srv.captured:
+                sys_msg = next(m["content"] for m in c["body"]["messages"] if m["role"] == "system")
+                all_system_msgs.append(sys_msg)
+
+            # They should all be identical
+            for msg in all_system_msgs:
+                self.assertEqual(msg, prefix, "all sessions must see the exact same prefix")
+        finally:
+            srv.shutdown()
+
+    def test_padding_contains_marker_and_vocab_words(self):
+        """Padding should contain the marker string and vocabulary words."""
+        prefix = bal.synthetic_prefix(n_tools=12, n_padding_tokens=3000, seed=42)
+        # Check for marker
+        self.assertIn("[SHARED PREFIX PADDING FOR CACHE SIMULATION]", prefix)
+        # Check that some vocab words appear in the padding
+        vocab_words = ["Python", "benchmark", "cache", "model", "inference"]
+        found_vocab = sum(1 for word in vocab_words if word in prefix)
+        self.assertGreater(found_vocab, 0, "padding should contain vocabulary words")
+
+
 class TestCliSmoke(unittest.TestCase):
     def test_synthetic_dry_run_does_not_touch_network(self):
         import contextlib
@@ -659,6 +728,32 @@ class TestCliSmoke(unittest.TestCase):
         finally:
             sys.argv = argv_backup
         self.assertIn("payload constructed OK", buf.getvalue())
+
+    def test_synthetic_prefix_tokens_dry_run_prints_info(self):
+        """--synthetic-prefix-tokens should print info in dry run."""
+        import contextlib
+        import io
+
+        argv_backup = sys.argv
+        sys.argv = [
+            "bench_agent_loop.py",
+            "--synthetic",
+            "--synthetic-prefix-tokens",
+            "5000",
+            "--dry-run",
+            "--turns",
+            "2",
+        ]
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                bal.main()
+        finally:
+            sys.argv = argv_backup
+        output = buf.getvalue()
+        self.assertIn("synthetic prefix: ~5000 tokens", output)
+        self.assertIn("shared across all sessions", output)
+        self.assertIn("payload constructed OK", output)
 
 
 if __name__ == "__main__":

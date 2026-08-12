@@ -203,7 +203,46 @@ def make_filler_text(rng: random.Random, n_tokens: int, tag: str = "tool") -> st
 # Synthetic data (used when --synthetic or when files are not supplied)
 # --------------------------------------------------------------------------
 
-def synthetic_prefix(n_tools: int = 12) -> str:
+# Fixed vocabulary for deterministic synthetic prefix padding (same as bench_skills.py)
+_VOCAB = [
+    "The", "quick", "brown", "fox", "jumps", "over", "lazy", "dog",
+    "Python", "code", "benchmark", "throughput", "token", "processing",
+    "machine", "learning", "model", "inference", "server", "request",
+    "system", "prompt", "question", "answer", "completion", "generation",
+    "efficient", "fast", "reliable", "scalable", "robust", "optimal",
+    "compute", "memory", "latency", "concurrent", "stream", "pipeline",
+    "cache", "prefix", "data", "algorithm", "optimization", "performance",
+]
+
+
+def generate_synthetic_padding(n_tokens: int, seed: int = 0) -> str:
+    """Generate deterministic synthetic padding text approximately n_tokens in length.
+    Uses ~4 chars per token (matching bench_skills.py's estimation convention)."""
+    if n_tokens <= 0:
+        return ""
+    rng = random.Random(seed)
+    n_words = (n_tokens * 4) // 5  # ~5 chars/word on average, so ~4 chars/token -> ~5/4 tokens/word
+    words = [rng.choice(_VOCAB) for _ in range(n_words)]
+    return " ".join(words)
+
+
+def synthetic_prefix(n_tools: int = 12, n_padding_tokens: int = 0, seed: int = 0) -> str:
+    """Generate synthetic system prefix with tool schemas and optional padding.
+
+    Args:
+        n_tools: number of tool JSON schemas to include (default 12)
+        n_padding_tokens: if >0, add deterministic padding text to reach ~N total tokens.
+                          Padding is added after the tool schemas, for simulation of
+                          large real-world shared prefixes (~30K tokens in production).
+        seed: random seed for padding generation (enables reproducibility)
+
+    Returns:
+        System prefix string: tool schemas + optional padding text.
+
+    Note: when n_padding_tokens > 0, prefix must be generated ONCE and shared across
+    all sessions to simulate a true shared-prefix cache scenario (the entire point of
+    prefix caching is that multiple requests see the same large prefix in the KV cache).
+    """
     tools = []
     for i in range(n_tools):
         tools.append(
@@ -221,6 +260,16 @@ def synthetic_prefix(n_tools: int = 12) -> str:
         "\n\nKhi can them thong tin, goi MOT cong cu bang JSON ngan gon (khong giai thich). "
         "Khi da du thong tin, tra loi bang ngon ngu tu nhien, day du.\n"
     )
+
+    # Add padding if requested
+    if n_padding_tokens > 0:
+        # Estimate current token count and add padding to reach the target
+        current_tokens = est_tokens(body)
+        padding_needed = max(0, n_padding_tokens - current_tokens)
+        if padding_needed > 0:
+            padding = generate_synthetic_padding(padding_needed, seed)
+            body = body + "\n\n[SHARED PREFIX PADDING FOR CACHE SIMULATION]\n" + padding
+
     return body
 
 
@@ -820,11 +869,13 @@ def build_cfg(args) -> SimpleNamespace:
     )
 
 
-def dry_run(prefix: str, questions: list, cfg: SimpleNamespace) -> None:
+def dry_run(prefix: str, questions: list, cfg: SimpleNamespace, synthetic_prefix_tokens: int = None) -> None:
     q0 = questions[0]
     prefix_tok_est = est_tokens(prefix)
     print("=== dry run (no server contact) ===")
     print(f"prefix: {len(prefix)} chars, ~{prefix_tok_est} tokens (est., word-count)")
+    if synthetic_prefix_tokens is not None:
+        print(f"synthetic prefix: ~{synthetic_prefix_tokens} tokens (estimated), shared across all sessions")
     print(f"questions loaded: {len(questions)}, first id: {q0['id']}")
     print(f"turns={cfg.turns} tool_latency_range={cfg.tool_latency_range} tool_result_tokens_range={cfg.tool_result_tokens_range}")
     print(f"toolcall_max_tokens={cfg.toolcall_max_tokens} final_max_tokens={cfg.final_max_tokens}")
@@ -847,6 +898,9 @@ def main():
     ap.add_argument("--synthetic", action="store_true", help="ignore --prefix-file/--questions-file, generate fake data")
     ap.add_argument("--synthetic-tools", type=int, default=12)
     ap.add_argument("--synthetic-questions", type=int, default=20)
+    ap.add_argument("--synthetic-prefix-tokens", type=int, default=None,
+                    help="generate synthetic prefix of ~N tokens instead of small default. "
+                         "Used to simulate production's ~30K shared prefix (default: None = small schema-only prefix)")
 
     ap.add_argument("--sessions", type=parse_int_list, default=[1], help="comma-separated concurrent-session levels, e.g. 1,4,8,16")
     ap.add_argument("--turns", type=int, default=5, help="K: turns per session, last turn is the final natural-language answer")
@@ -876,7 +930,11 @@ def main():
     args = ap.parse_args()
 
     if args.synthetic or not (args.prefix_file and args.questions_file):
-        prefix = synthetic_prefix(args.synthetic_tools)
+        prefix = synthetic_prefix(
+            n_tools=args.synthetic_tools,
+            n_padding_tokens=args.synthetic_prefix_tokens or 0,
+            seed=args.seed
+        )
         questions = synthetic_questions(args.synthetic_questions, args.seed)
     else:
         prefix = bsk.load_prefix(args.prefix_file)
@@ -886,7 +944,7 @@ def main():
     prefix_est_tokens = est_tokens(prefix)
 
     if args.dry_run:
-        dry_run(prefix, questions, cfg)
+        dry_run(prefix, questions, cfg, args.synthetic_prefix_tokens)
         return
 
     global MODEL, URL, CHAT_URL, METRICS_URL, READ_TIMEOUT
@@ -907,6 +965,10 @@ def main():
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     random.seed(args.seed)
+
+    # Print synthetic prefix info if applicable
+    if args.synthetic_prefix_tokens is not None:
+        print(f"synthetic prefix: ~{args.synthetic_prefix_tokens} tokens (estimated), shared across all sessions", flush=True)
 
     with out_path.open("w", encoding="utf-8") as f:
         if args.resume_probe:
