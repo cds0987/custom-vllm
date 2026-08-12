@@ -49,11 +49,14 @@ Cập nhật: 2026-08-12.
 6. ✅ P7 — CPU không nghẽn: GPU 100% phẳng @ conc32, vLLM ăn 8% một core. Đóng.
 6b. ✅ Cổng kiểm định đồng thời — PASS: không garbage; phân kỳ 5/8 là batch
     non-invariance cố hữu của vLLM (conc-vs-conc lặp lại cũng 3/8 khớp).
-7. **TIẾP THEO: transfer sang Qwen3.5-27B-GGUF** (lệnh user 2026-08-13). Việc đầu:
-   khảo sát frame W4A16 cho 27B trên HF (RedHatAI có không? nếu không → phương án
-   GGUF-only qua plugin, hoặc tự quantize frame — 27B bf16 54GB KHÔNG vừa L4).
-8. (Hoãn, chưa hủy) P5 ablation nguồn graft; P6 converter toàn-model — cân nhắc gộp
-   vào chiến dịch 27B vì 27B chính là bài test thật của P6.
+7. ✅ 27B PHASE 1 — Qwen3.5-27B LÊN SÓNG trên L4: frame apolo13x w4a16 18,6GB (GDN
+   đã quantize sẵn, KHÔNG cần graft), decode 15,8 tok/s conc1 (sát trần băng thông).
+   Config chốt: mml 8192, mnbt 512, max-num-seqs 8, graphs [1,2,4,8], util 0.97,
+   fp8 KV, align. Chi tiết leo thang 5 bước: STATUS.md "CHIẾN DỊCH 27B PHASE 1".
+8. **TIẾP: 27B PHASE 2** — (a) ppl/chất lượng frame cộng đồng (chưa ai kiểm);
+   (b) bench mini phù hợp KV 12K (single-user); (c) nếu ppl kém → graft GGUF
+   (cần mở rộng graft sang frame đã-quantize-GDN = một phần P6).
+9. (Hoãn, chưa hủy) P5 ablation nguồn graft 9B; P6 converter toàn-model.
 
 ## Quyết định chờ user
 

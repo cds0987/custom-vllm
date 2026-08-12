@@ -752,6 +752,35 @@ Cùng runtime/config với Q2c (mml=65536, baseline 329,5 tasks/hr):
   est chỉ +~1K; --context-limit-tokens so với EST chứ không phải token thật.
   Cần sửa harness: dùng cùng một thang (ưu tiên real qua usage) — TODO.
 
+## CHIẾN DỊCH 27B — PHASE 1 (2026-08-13): Qwen3.5-27B LÊN SÓNG TRÊN L4, 15,8 tok/s
+
+Khảo sát frame (RedHatAI KHÔNG có 27B w4a16):
+- **`apolo13x/Qwen3.5-27B-quantized.w4a16`** (18,6GB, compressed-tensors W4A16 g128):
+  ĐÃ QUANTIZE SẴN CẢ GDN (in_proj_qkv/z, out_proj đều weight_packed; chỉ in_proj_a/b
+  bf16 trong ignore — 207 mục). KHÁC 9B RedHat (GDN bf16 → ta phải graft). Vì thế
+  graft_gguf_gdn.py báo "no in_proj_qkv weights" (nó tìm `.weight` bf16) — với frame
+  này KHÔNG CẦN graft. Cũng là frame duy nhất vừa L4.
+- Loại: Qwen/Qwen3.5-27B-GPTQ-Int4 chính chủ (30,2GB), QuantTrio AWQ (21,9GB) —
+  không vừa 22,5GB.
+- GGUF nguồn có đủ nếu sau này cần graft chất lượng: unsloth 27B Q4_K_M (16,7GB),
+  UD-Q4_K_XL (17,6GB). Tải frame+GGUF song song: 35GB / 1,7 phút (Xet).
+
+Leo thang config để vừa VRAM (mỗi bước một lỗi thật, đều đo được):
+1. util 0.85 + graphs mặc định (capture tới 512) → OOM khi profile (còn 95MB).
+2. `--enforce-eager` + mnbt 512 + util 0.95 → CHẠY, KV 14.336 tok, decode **8,4 tok/s**
+   (eager giết decode — overhead phóng kernel).
+3. graphs nhỏ [1,2,4,8] + util 0.95 → KV còn 0,48GiB < 0,57 cần cho mml 8192.
+4. util 0.97 → lỗi mới: **max_num_seqs mặc định 256 > 19 block Mamba cache** (bài học
+   hybrid: mỗi seq decode cần 1 block Mamba; model to → block ít).
+5. **CHỐT: mml 8192 + mnbt 512 + max-num-seqs 8 + graphs [1,2,4,8] + util 0.97
+   + fp8 KV + align + prefix caching** → READY 140s, VRAM 19,9GB, KV 12.288 tok,
+   decode **15,8 tok/s conc1** (+88% vs eager; sát trần băng thông ~16 = 300GB/s ÷ 18,6GB).
+
+Sanity 27B PASS: toán/tiếng Việt/code đều mạch lạc. CÒN NỢ phase 2: ppl (frame
+cộng đồng, chưa có ai kiểm), bench agent-loop mini (KV 12K chỉ đủ ~1 phiên prefix
+lớn — 27B trên L4 là single-user phục vụ chất lượng, không phải multi-session),
+cân nhắc graft GGUF nếu ppl kém.
+
 ## TASK R2b (2026-08-13): chunk=32 TRUNG TÍNH trên 0.27.1 — khai tử con số +7,6%
 
 Cùng runtime, cùng seed, bench_skills synthetic 30K prefix, conc 1 và 32:
