@@ -645,9 +645,34 @@ nhỏ) trên vLLM 0.27.1, cùng runtime:
   TASK F (2.228 tok/s ở prefix 60K, khi đó bị coi là bất thường). ⇒ Mốc
   1.433 nhiều khả năng đo dưới cấu hình bị giới hạn (chunk/mnbt?) hoặc sai
   phương pháp. **Mọi con số dung lượng dựa trên 1.433 phải tính lại.**
-- CHƯA ĐO (bắt buộc trước khi kết luận gì thêm): decode + ppl + dung lượng
-  KV của cấu hình fp8 — nó là model 8-bit nên chắc chắn decode chậm hơn
-  champion 4-bit; đây là ĐÁNH ĐỔI, không phải thắng tuyệt đối.
+### R1b — bảng đánh đổi đầy đủ (cùng runtime, cùng config production):
+
+    metric                    champion (int4)   fp8_per_tensor   thắng
+    prefill 4K/16K/30K        2921/2934/2789    3973/4061/3754   fp8 +35%
+    decode conc1 (tok/s)      34,1              23,2             champion +47%
+    decode conc8 (thr)        201,2             145,6            champion +38%
+    decode conc16 (thr)       276,8             230,1            champion +20%
+    decode conc32 (thr)       365,5             320,7            champion +14%
+    TTFT p50/p95 @conc32      1,49s / 10,2s     1,18s / 7,89s    fp8 nhỉnh
+    ppl (99 đề, đo tươi)      4,7637            5,4383 (1,142)   champion RÕ
+    KV @32768                 367K tok, 11,21×  254K tok, 7,76×  champion +44%
+    VRAM phục vụ              18.650 MiB        18.634 MiB       ngang
+
+**PHÁN QUYẾT: fp8 KHÔNG phong champion — là công cụ CHUYÊN DỤNG.**
+- fp8 chỉ thắng ở prefill thuần. Champion thắng decode, sức chứa phiên
+  (+44%), và chất lượng (fp8 rơi vùng WARN 1,142 — sát FAIL).
+- ⇒ **Hai cấu hình cho hai loại việc**: fp8 cho workload prefill-nặng
+  (đọc tài liệu lạ một lượt, tóm tắt hàng loạt, ít phiên); champion cho
+  chat/agent nhiều lượt nhiều phiên — tức workload chính của dự án.
+- **Bài học đo lường (lại một lần nữa)**: ghi chép cũ nói fp8 "sạch 3/3"
+  — nhưng đó là smoke test 2 câu trên model 2B. Ở 9B với ppl 99 đề, cái
+  giá chất lượng lộ rõ. **Smoke test không bao giờ thay được cổng ppl.**
+- `int8_per_channel_weight_only`: CRASH OOM lúc load (21,68/22,03 GiB
+  trước khi cấp KV — đường quant online này giữ cả bản bf16 tạm thời).
+  Bỏ qua: weight-only vẫn dequant về fp16 để compute nên không ăn được
+  INT8 TOPS thật.
+- CÂU HỎI MỞ đáng theo đuổi sau: có scheme **W4A8** nào (trọng số 4-bit +
+  activation 8-bit) để ăn CẢ HAI đầu không? Chưa khảo sát.
 - Danh mục quantization online của 0.27.1 có `int8_per_channel_weight_only`
   (áp được ngay, không cần calibrate) nhưng là weight-only → nhiều khả
   năng KHÔNG kích hoạt đường INT8 TOPS gấp đôi của Ada. W8A8 thật phải
