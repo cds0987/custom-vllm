@@ -7,6 +7,18 @@ set -e
 echo "=== Installing vllm ==="
 pip install -q vllm requests
 
+# vLLM 0.27.1 (2026-08-12) pulls a torchaudio built against a different CUDA
+# minor than the torch it installs (torch cu13.0 vs torchaudio cu12.8).
+# transformers/loss/loss_rnnt.py hard-imports torchaudio, so `import
+# transformers` dies before anything else runs. torchaudio is not needed for
+# text-only serving -- drop it.
+# BUT: removing it also drops torchvision, and vllm's qwen3_5.py imports the
+# multimodal branch (Qwen2VLImageProcessor) even for text-only use, so
+# torchvision must be put back WITHOUT letting pip drag torchaudio along.
+echo "=== Fixing torchaudio/torchvision CUDA-build mismatch (see STATUS.md drift 2026-08-12) ==="
+pip uninstall -q -y torchaudio torchvision || true
+pip install -q --no-deps torchvision || echo "WARNING: torchvision reinstall failed; qwen3_5.py import may break"
+
 echo "=== Installing llmcompressor + datasets (quantize_*.py / eval_quality_swebench.py's lazy load_dataset) ==="
 # Light guard, not a hard dependency of serving itself: several scripts/ tools
 # (quantize_gptq_9b.py, quantize_awq_*.py, bench_serving.py, bench_swebench.py,
