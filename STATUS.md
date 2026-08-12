@@ -776,10 +776,14 @@ Leo thang config để vừa VRAM (mỗi bước một lỗi thật, đều đo 
    + fp8 KV + align + prefix caching** → READY 140s, VRAM 19,9GB, KV 12.288 tok,
    decode **15,8 tok/s conc1** (+88% vs eager; sát trần băng thông ~16 = 300GB/s ÷ 18,6GB).
 
-Sanity 27B PASS: toán/tiếng Việt/code đều mạch lạc. CÒN NỢ phase 2: ppl (frame
-cộng đồng, chưa có ai kiểm), bench agent-loop mini (KV 12K chỉ đủ ~1 phiên prefix
-lớn — 27B trên L4 là single-user phục vụ chất lượng, không phải multi-session),
-cân nhắc graft GGUF nếu ppl kém.
+Sanity 27B PASS: toán/tiếng Việt/code đều mạch lạc.
+
+**PHASE 2 — CỔNG CHẤT LƯỢNG PASS (cùng ngày): ppl 27B = 4,1484** (99 đề SWE-bench,
+đúng bộ đề của 9B; chạy eval qua HTTP trên server đang sống, mnbt 512 chặn peak
+logprob). So sánh: 9B champion 4,7637 / 9B bf16 5,13 → 27B W4A16 tốt hơn 9B champion
+12,3% — đúng kỳ vọng model to hơn, frame cộng đồng KHÔNG hỏng. Không cần graft.
+CÒN NỢ nhỏ: bench mini phù hợp KV 12K (27B trên L4 = single-user chất lượng cao,
+không phải multi-session).
 
 ## TASK R2b (2026-08-13): chunk=32 TRUNG TÍNH trên 0.27.1 — khai tử con số +7,6%
 

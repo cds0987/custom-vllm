@@ -53,9 +53,9 @@ Cập nhật: 2026-08-12.
    đã quantize sẵn, KHÔNG cần graft), decode 15,8 tok/s conc1 (sát trần băng thông).
    Config chốt: mml 8192, mnbt 512, max-num-seqs 8, graphs [1,2,4,8], util 0.97,
    fp8 KV, align. Chi tiết leo thang 5 bước: STATUS.md "CHIẾN DỊCH 27B PHASE 1".
-8. **TIẾP: 27B PHASE 2** — (a) ppl/chất lượng frame cộng đồng (chưa ai kiểm);
-   (b) bench mini phù hợp KV 12K (single-user); (c) nếu ppl kém → graft GGUF
-   (cần mở rộng graft sang frame đã-quantize-GDN = một phần P6).
+8. ✅ 27B PHASE 2 — CỔNG CHẤT LƯỢNG PASS: ppl 4,1484 (99 đề, cùng bộ với 9B) —
+   tốt hơn 9B champion 12,3%, frame cộng đồng không hỏng, KHÔNG cần graft.
+   Còn nợ nhỏ: bench mini single-user cho 27B.
 9. (Hoãn, chưa hủy) P5 ablation nguồn graft 9B; P6 converter toàn-model.
 
 ## Quyết định chờ user
