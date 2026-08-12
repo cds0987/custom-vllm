@@ -715,6 +715,43 @@ CÙNG runtime, prefix tổng hợp 30K (thực tokenize ~24,5K), 5 lượt, sess
   throughput cao nhất); nếu buộc chạy 16 phiên thì 49152 tốt hơn. Không có
   free lunch từ mml.
 
+## TASK Q3 (2026-08-13): stress điểm vận hành 8 phiên — KHÔNG CÓ BỆNH LÝ
+
+Cùng runtime/config với Q2c (mml=65536, baseline 329,5 tasks/hr):
+
+- **Q3a abandon 25%**: server DỪNG generate NGAY khi client đóng kết nối. Test quyết
+  định: 1 request max_tokens=3000, client đóng sau vài token → `num_requests_running`
+  về 0 trong ≤3s, giữ 0 suốt 55s. KHÔNG có token chạy lậu, không GPU waste.
+  Bẫy metric: vLLM 0.27.1 KHÔNG đếm abort-do-disconnect vào `request_success_total`
+  (abort=0 vĩnh viễn) — đừng dùng metric đó để kết luận; suy luận ban đầu của tôi từ
+  metric này là SAI, test trực tiếp mới chuẩn.
+- **Q3b tool-latency tail 10%:30s**: vô hại — 8/8 xong, 334,8 tasks/hr (≈baseline),
+  hit 90,9%. Prefix SỐNG SÓT gap 30s dưới tải 8 phiên (khớp Q1 single-session 60s).
+- **Q3c burst-sync (thundering herd)**: −18,6% tasks/hr (268,2), TTFT p95 +14%
+  (14,2s), 8/8 hoàn thành — đau nhưng ổn định, không gãy.
+
+## TASK Q4 (2026-08-13): chính sách tràn context — summarize-stub/truncate giữ 100% việc, error mất trắng
+
+Ép tràn bằng --context-limit-tokens 26000 (8 phiên, mml=65536, overflow áp dụng
+13 lượt ở hai policy ghi đè):
+
+    policy            hoàn thành   tasks/hr        TTFT p95   hit rate
+    (baseline)        8/8          329,5           12,5s      90,9%
+    error             **0/8**      0 (mất trắng)   —          —
+    truncate-oldest   8/8          234,8 (−28,7%)  30,3s ×2,4 82,7%
+    summarize-stub    8/8          230,3 (−30,1%)  23,6s ×1,9 81,3%
+
+- Cơ chế giá phải trả: ghi đè transcript → miss prefix-cache phần bị viết lại →
+  re-prefill (TTFT p95 tăng vọt). Prefix hệ thống 30K vẫn cache (hit còn ~82%).
+- **KHUYẾN NGHỊ: summarize-stub** (p95 tốt hơn truncate 22%, tasks/hr tương đương);
+  overflow policy là LƯỚI AN TOÀN, không phải chiến lược — thiết kế đúng là chọn
+  mml ≥ nhu cầu thật (Q2c: ~42-43K cho 5 lượt).
+- Bẫy harness ghi lại (2 lượt đo đầu VÔ HIỆU vì trigger không nổ): 3 thang token
+  trộn lẫn — yêu cầu 30K → phát 24.000 TỪ (est) ≈ 24,5K token thật; filler
+  `tool%06d` tokenize 3-5 token/từ nên context THẬT phình 2,2-5,5K/lượt trong khi
+  est chỉ +~1K; --context-limit-tokens so với EST chứ không phải token thật.
+  Cần sửa harness: dùng cùng một thang (ưu tiên real qua usage) — TODO.
+
 ## TASK R2 (2026-08-12): chunk=16 — TRUNG TÍNH, đóng nhánh. 32 là điểm ngọt cục bộ
 
 `FLA_CHUNK_SIZE` trong 0.27.1 vẫn ở `vllm/third_party/flash_linear_attention/

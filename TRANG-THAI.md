@@ -40,8 +40,11 @@ Cập nhật: 2026-08-12.
    (49152 kém 65536 5,2%); chỉ có ích ở 16 phiên (+9,4%, TTFT p95 −23%);
    40960 hỏng workload (nhu cầu thật ~42-43K). CHỐT: giữ mml=65536 cho 8 phiên.
    Chi tiết: STATUS.md TASK Q2c.
-3. Q3 — stress: client bỏ đi server có ngừng generate không, tool-latency tail, burst
-4. Q4 — chính sách tràn context
+3. ✅ Q3 — KHÔNG bệnh lý: server dừng generate ≤3s khi client bỏ đi (không GPU waste);
+   tail 30s vô hại (prefix sống sót dưới tải); burst −18,6% nhưng ổn định.
+4. ✅ Q4 — chốt policy tràn context: summarize-stub (giữ 8/8 việc, −30% tasks/hr,
+   TTFT p95 ×1,9); error mất trắng 0/8. Lưới an toàn, không phải chiến lược.
+   + Bẫy harness 3 thang token (est từ / token thật / yêu cầu) — TODO sửa.
 5. R2b — recheck chunk32 trên 0.27.1
 6. P7 — nghẽn CPU
 7. P5 — ablation nguồn graft (bf16 / Q4_K_M / UD-Q4_K_XL) → có thể champion v3
