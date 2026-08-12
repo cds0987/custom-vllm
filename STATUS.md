@@ -624,6 +624,25 @@ served mới chuẩn), 74 câu tuyển từ public-test, bench_skills.py:
 - conc32 p95 3,03s — sát trần 3s; "max conc trong SLA" giờ ~28-32.
 - Kết quả: out_skills/bench_skills_champion_graft.jsonl (Colab-local).
 
+## TASK R2 (2026-08-12): chunk=16 — TRUNG TÍNH, đóng nhánh. 32 là điểm ngọt cục bộ
+
+`FLA_CHUNK_SIZE` trong 0.27.1 vẫn ở `vllm/third_party/flash_linear_attention/
+ops/utils.py:31` (chỉ đổi gốc import). Vá 64→16, đo trên champion cùng
+runtime với bảng R1b, revert ngay sau đo:
+
+    chunk        conc1 decode/thr    conc32 decode/thr
+    64 (đối chứng)  34,10 / 33,6      14,39 / 365,5
+    16              34,10 / 33,6      13,95 / 369,9
+
+- conc1 GIỐNG HỆT (sai lệch <0,01%) — không tiếp nối đà +7,6% mà chunk=32
+  từng cho ở TASK P2. conc32 trung tính (trong nhiễu).
+- ⇒ **Suy luận "xu hướng chỉ về phía nhỏ hơn" của coordinator SAI.** 32
+  là điểm ngọt CỤC BỘ (cân bằng số lần phóng kernel vs cường độ số học),
+  không phải điểm trên một đường dốc đơn điệu. Đóng nhánh chunk nhỏ.
+- CÒN NỢ: con số +7,6% của chunk=32 đo trên **0.26 + dữ liệu thật**; cần
+  một lượt tái kiểm trên 0.27.1 + bench tổng hợp trước khi ghi thành
+  khuyến nghị chính thức (rẻ, ~6 phút).
+
 ## TASK R1 (2026-08-12): fp8_per_tensor PHÁ TRẦN PREFILL +34-38% — "tường vật lý" SỤP
 
 Đo prefill thuần (prompt ngẫu nhiên duy nhất, tắt prefix caching, max_tokens
