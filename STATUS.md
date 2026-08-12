@@ -624,6 +624,37 @@ served mới chuẩn), 74 câu tuyển từ public-test, bench_skills.py:
 - conc32 p95 3,03s — sát trần 3s; "max conc trong SLA" giờ ~28-32.
 - Kết quả: out_skills/bench_skills_champion_graft.jsonl (Colab-local).
 
+## TASK Q2 (2026-08-12): workload agent nhiều phiên — trần là 1 PHIÊN trong SLA 3s
+
+champion, max-model-len 65536, production flags, prefix tổng hợp **30K chia
+sẻ** (bản chạy đầu dùng prefix ~1K là ĐO SAI KỊCH BẢN, đã bỏ).
+
+    TTFT p95 (s)      sessions=1   4      8       16
+    nhẹ  (3 lượt)     1,59        4,16   8,41    13,89
+    thường (5 lượt)   2,40        6,41   12,48   73,17
+    nặng (10 lượt)    3,19        8,60   15,27   165,05
+
+- **Chỉ sessions=1 giữ được p95<3s** (kịch bản nặng còn trượt luôn ở 1).
+- Hit rate v2 lành mạnh (63-95%), khác hẳn v1 prefix tí hon (5-39%) →
+  xác nhận hit thấp ở v1 là do prefix nhỏ, không phải bệnh lý.
+- **CHẨN ĐOÁN Ở sessions=16 (bằng /metrics, không suy luận)**:
+  `num_preemptions_total` = **0 tuyệt đối** → LOẠI TRỪ vòng xoáy
+  evict-reprefill. `kv_cache_usage_perc` đỉnh **97,2%**;
+  `num_requests_waiting_by_reason{capacity}` = 15 (deferred = 0).
+  ⇒ **Hàng đợi do HẾT DUNG LƯỢNG KV** — thuốc là giảm max-model-len /
+  giảm số phiên / thêm VRAM, KHÔNG phải chỉnh mnbt.
+- **NHƯNG chẩn đoán này KHÔNG giải thích sessions=4**: dung lượng lý
+  thuyết là 6,17 phiên @65536, nên 4 phiên còn DƯỚI trần mà TTFT p95 đã
+  4,16-8,60s. Cơ chế ở vùng dưới-trần chưa xác định — đây mới là vùng
+  đáng tối ưu (16 phiên vượt trần số học thì hỏng là đương nhiên).
+- pct_time_prefill_reconnect tăng mạnh theo tải: nhẹ 9→22%, thường
+  20,6→42%, nặng 21,4→**57,4%**. Ở tải cao, hơn nửa thời gian phiên là
+  chờ/tính lại prefill.
+- CÂU HỎI MỞ QUAN TRỌNG: prefix chung có THẬT SỰ tiết kiệm KV không?
+  Nếu chia sẻ đúng, KV usage phải tăng DƯỚI TUYẾN TÍNH theo số phiên
+  (30K dùng chung + phần riêng). Cần bảng KV usage ở sessions 1/4/8/16
+  để kiểm — đây là kiểm chứng cốt lõi của cả kiến trúc.
+
 ## TASK R2 (2026-08-12): chunk=16 — TRUNG TÍNH, đóng nhánh. 32 là điểm ngọt cục bộ
 
 `FLA_CHUNK_SIZE` trong 0.27.1 vẫn ở `vllm/third_party/flash_linear_attention/
