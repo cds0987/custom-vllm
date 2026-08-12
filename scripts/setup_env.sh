@@ -4,8 +4,20 @@
 # command, and so serving options can be varied without redoing the setup.
 set -e
 
+# `uv pip` resolves and installs in parallel and reuses a global wheel cache;
+# on this workload it consistently beats pip's serial download+install on the
+# vllm dependency tree (torch alone is ~2.5 GB). Costs ~15s to bootstrap and
+# falls back to pip if anything about it misbehaves, so there is no downside.
+PIP="pip install -q"
+if pip install -q uv 2>/dev/null && command -v uv >/dev/null 2>&1; then
+  PIP="uv pip install --system -q"
+  echo "=== Using uv for installs (parallel resolver + shared wheel cache) ==="
+else
+  echo "=== uv unavailable; falling back to pip ==="
+fi
+
 echo "=== Installing vllm ==="
-pip install -q vllm requests
+$PIP vllm requests
 
 # vLLM 0.27.1 (2026-08-12) pulls a torchaudio built against a different CUDA
 # minor than the torch it installs (torch cu13.0 vs torchaudio cu12.8).
@@ -17,14 +29,14 @@ pip install -q vllm requests
 # torchvision must be put back WITHOUT letting pip drag torchaudio along.
 echo "=== Fixing torchaudio/torchvision CUDA-build mismatch (see STATUS.md drift 2026-08-12) ==="
 pip uninstall -q -y torchaudio torchvision || true
-pip install -q --no-deps torchvision || echo "WARNING: torchvision reinstall failed; qwen3_5.py import may break"
+$PIP --no-deps torchvision || echo "WARNING: torchvision reinstall failed; qwen3_5.py import may break"
 
 # hf_transfer: Rust-backed parallel chunk downloader. The frame (8 GB) + GGUF
 # (5.8 GB) dominate rebuild wall-clock and huggingface_hub's default single
 # stream leaves most of Colab's bandwidth on the table. Costs seconds to
 # install, saves minutes on every download.
 echo "=== Installing hf_transfer (parallel HF downloads) ==="
-pip install -q hf_transfer || echo "WARNING: hf_transfer install failed; downloads stay single-stream"
+$PIP hf_transfer || echo "WARNING: hf_transfer install failed; downloads stay single-stream"
 export HF_HUB_ENABLE_HF_TRANSFER=1
 
 # llmcompressor + datasets are only needed by the quantize_*.py tools and by
@@ -34,7 +46,7 @@ export HF_HUB_ENABLE_HF_TRANSFER=1
 # Opt in with CUSTOM_VLLM_TOOLS=1.
 if [ "${CUSTOM_VLLM_TOOLS:-0}" = "1" ]; then
   echo "=== Installing llmcompressor + datasets (CUSTOM_VLLM_TOOLS=1) ==="
-  pip install -q llmcompressor datasets || echo "WARNING: llmcompressor/datasets install failed (non-fatal for serving-only sessions)"
+  $PIP llmcompressor datasets || echo "WARNING: llmcompressor/datasets install failed (non-fatal for serving-only sessions)"
 else
   echo "=== Skipping llmcompressor + datasets (set CUSTOM_VLLM_TOOLS=1 if you need quantize_*.py or eval_quality_swebench.py) ==="
 fi
@@ -46,12 +58,12 @@ fi
 # with ImportError before it even reaches gguf-specific code. Force the
 # newer huggingface_hub back after datasets has had its say; harmless if
 # datasets didn't touch it.
-pip install -q -U huggingface_hub || echo "WARNING: huggingface_hub re-pin failed"
+$PIP -U huggingface_hub || echo "WARNING: huggingface_hub re-pin failed"
 
 echo "=== Installing vllm-gguf-plugin (GGUF moved out-of-tree as of vllm 0.26) ==="
 # once for the dependencies (gguf, ...), then package-only so the in-place
 # patches below always apply to pristine sources
-pip install -q vllm-gguf-plugin
+$PIP vllm-gguf-plugin
 
 # The prebuilt wheel's _C_gguf.abi3.so was, on some torch builds, compiled
 # against a different torch ABI (ImportError: undefined symbol
