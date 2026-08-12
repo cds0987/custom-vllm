@@ -624,6 +624,35 @@ served mới chuẩn), 74 câu tuyển từ public-test, bench_skills.py:
 - conc32 p95 3,03s — sát trần 3s; "max conc trong SLA" giờ ~28-32.
 - Kết quả: out_skills/bench_skills_champion_graft.jsonl (Colab-local).
 
+## TASK R1 (2026-08-12): fp8_per_tensor PHÁ TRẦN PREFILL +34-38% — "tường vật lý" SỤP
+
+Đo prefill thuần (prompt ngẫu nhiên duy nhất, tắt prefix caching, max_tokens
+nhỏ) trên vLLM 0.27.1, cùng runtime:
+
+    độ dài   champion (graft int4)   bf16 gốc + fp8_per_tensor
+    4K       2.921 tok/s             **3.973 (+36,0%)**
+    16K      2.934 tok/s             **4.061 (+38,4%)**
+    30K      2.789 tok/s             **3.754 (+34,6%)**
+
+- Cấu hình fp8: `--quantization fp8_per_tensor` trên `Qwen/Qwen3.5-9B` bf16
+  gốc, chỉ cần `ignore: ["in_proj_ba"]`. Online, KHÔNG cần calibrate lại.
+- **Xác nhận đúng dự đoán của tranh luận vòng 1**: fp8 thua ở decode (nghẽn
+  băng thông) nhưng THẮNG ở prefill (nghẽn compute) — hai chế độ khác nhau,
+  không được suy diễn từ cái này sang cái kia. Sai lầm cũ của coordinator.
+- **CHẤN ĐỘNG PHỤ — con số nền của "tường 1.433 tok/s" SAI**: champion đo
+  ngay bây giờ cho **2.789-2.934 tok/s**, tức GẤP ĐÔI mốc 1.433 đã dùng
+  suốt chiến dịch để lập luận "trần vật lý". Khớp với dị thường từng ghi ở
+  TASK F (2.228 tok/s ở prefix 60K, khi đó bị coi là bất thường). ⇒ Mốc
+  1.433 nhiều khả năng đo dưới cấu hình bị giới hạn (chunk/mnbt?) hoặc sai
+  phương pháp. **Mọi con số dung lượng dựa trên 1.433 phải tính lại.**
+- CHƯA ĐO (bắt buộc trước khi kết luận gì thêm): decode + ppl + dung lượng
+  KV của cấu hình fp8 — nó là model 8-bit nên chắc chắn decode chậm hơn
+  champion 4-bit; đây là ĐÁNH ĐỔI, không phải thắng tuyệt đối.
+- Danh mục quantization online của 0.27.1 có `int8_per_channel_weight_only`
+  (áp được ngay, không cần calibrate) nhưng là weight-only → nhiều khả
+  năng KHÔNG kích hoạt đường INT8 TOPS gấp đôi của Ada. W8A8 thật phải
+  qua compressed-tensors + calibrate offline (~15-25 phút với recipe nhanh).
+
 ## DRIFT MÔI TRƯỜNG (2026-08-12): vLLM đã lên 0.27.1 — MỌI SỐ CŨ ĐO Ở 0.26
 
 Tái thiết sau wipe #8 phát hiện `pip install vllm` giờ kéo **0.27.1**:
