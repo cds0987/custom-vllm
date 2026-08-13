@@ -48,7 +48,7 @@ import numpy as np
 SCRIPTS_DIR = Path(__file__).resolve().parent
 REPO_DIR = SCRIPTS_DIR.parent
 PATCH_PATH = REPO_DIR / "models" / "qwen3_5" / "engine" / "vllm" / "patches" / "patch_gguf_auto_marlin.py"
-GGUF2MARLIN_PATH = REPO_DIR / "models" / "qwen3_5" / "load" / "legacy_gguf2marlin.py"
+GGUF2MARLIN_PATH = REPO_DIR / "models" / "qwen3_5" / "load" / "gguf" / "legacy_gguf2marlin.py"
 
 spec = importlib.util.spec_from_file_location("patch_gguf_auto_marlin", PATCH_PATH)
 pam = importlib.util.module_from_spec(spec)

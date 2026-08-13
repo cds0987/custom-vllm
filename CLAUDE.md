@@ -27,7 +27,7 @@ format), nhận một serving stack đã tối ưu, đã đo, dùng ngay.
 
 - **Champion v2**: frame `RedHatAI/Qwen3.5-9B-quantized.w4a16` + trọng số GDN trích từ
   `unsloth/Qwen3.5-9B-GGUF Q4_K_M`, requantize int4 group-size 32, compressed-tensors
-  (kernel Marlin). Build: `models/qwen3_5/load/gguf_to_marlin.py --bits 4 --group-size 32`.
+  (kernel Marlin). Build: `models/qwen3_5/load/gguf/gguf_to_marlin.py --bits 4 --group-size 32`.
   Prebuilt trên HF: `gunnybd01/qwen35-9b-champion` (pull ~1 phút).
 - ppl **4.7637** (baseline bf16: 5.13). Decode ~390 tok/s server / ~520 offline trên
   prefix 30K. Prefill 2789–2934 tok/s.

@@ -81,7 +81,7 @@ print('GGUF', hf_hub_download('$GGUF_REPO','$GGUF_FILE'))" &
   # NOTE: never run fix_qwen35_hf_checkpoint.py on the frame -- it is a
   # multimodal checkpoint and the fix corrupts it. RMS ~9.4% mean / 11.4% max
   # is the EXPECTED figure for --bits 4 (0.55% belongs to --bits 8).
-  python models/qwen3_5/load/gguf_to_marlin.py \
+  python models/qwen3_5/load/gguf/gguf_to_marlin.py \
       --frame "$FRAME" --gguf "$GGUF" --out "$OUT" --bits 4 --group-size 32
 fi
 

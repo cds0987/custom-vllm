@@ -430,9 +430,9 @@ def _custom_vllm_am_find_transcoder_script():
     candidates = [
         env_override,
         _CUSTOM_VLLM_AM_BAKED_GGUF2MARLIN_PATH,
-        "models/qwen3_5/load/legacy_gguf2marlin.py",
+        "models/qwen3_5/load/gguf/legacy_gguf2marlin.py",
         "scripts/gguf2marlin.py",
-        str(_CustomVllmAmPath.cwd() / "custom_vllm" / "models" / "qwen3_5" / "load" / "legacy_gguf2marlin.py"),
+        str(_CustomVllmAmPath.cwd() / "custom_vllm" / "models" / "qwen3_5" / "load" / "gguf" / "legacy_gguf2marlin.py"),
     ]
     for c in candidates:
         if c and _custom_vllm_am_os.path.isfile(c):
@@ -665,5 +665,5 @@ if __name__ == "__main__":
     args = ap.parse_args()
 
     target = find_target_path(args.site_packages)
-    baked_path = str((Path(__file__).resolve().parents[3] / "load" / "legacy_gguf2marlin.py"))
+    baked_path = str((Path(__file__).resolve().parents[3] / "load" / "gguf" / "legacy_gguf2marlin.py"))
     patch(target, PATCH_MARKER, ANCHOR, PATCH, append=_build_helpers(baked_path))
