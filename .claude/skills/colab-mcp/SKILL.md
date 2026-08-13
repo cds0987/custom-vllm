@@ -28,21 +28,21 @@ colab-mcp bản patch local (`D:\Training\AI_Module\colab-mcp`, nhận env
 
 - `run_code_cell` là **BLOCKING, timeout 30 phút**: gom lệnh dài vào 1 cell rồi chờ
   trong lượt. Không sleep/poll, không kết thúc lượt để "đợi".
-- Việc >30 phút: chạy nền trong cell (`nohup ... > /content/task.log 2>&1 &`) rồi tail
-  log bằng cell LOG ở các lần gọi sau.
-- Bố cục chuẩn đúng 5 cell — **cấm thêm cell mới**, việc mới ghi đè cell TASK:
-  1. `WHOAMI` 2. `BOOTSTRAP` 3. `SERVE` 4. `TASK` 5. `LOG`
+- Việc >30 phút: chạy nền (`nohup ... > /content/logs/x.log &`) rồi xem lại bằng
+  `bash run.sh status` / `logs` ở lần chạy cell sau.
 
-## Bootstrap runtime mới (~15 phút)
+## Bố cục notebook: ĐÚNG 1 CELL DUY NHẤT
 
-```bash
-git clone https://github.com/cds0987/custom-vllm.git /content/custom_vllm
-cd /content/custom_vllm && bash loading/colab_bootstrap.sh
+```
+!cd /content && (test -d custom_vllm || git clone -q https://github.com/cds0987/custom-vllm.git custom_vllm) \
+  && cd custom_vllm && git pull -q && bash run.sh serve 9b && bash run.sh status
 ```
 
-- `colab_bootstrap.sh`: env (uv, test-first sdist, skip llmcompressor trừ khi
-  `CUSTOM_VLLM_TOOLS=1`) → pull champion prebuilt `gunnybd01/qwen35-9b-champion`
-  (fallback: tải frame+GGUF song song rồi graft) → patch loader → in lệnh serve.
-- Rebuild env nhanh hơn nữa: `python utils/env_snapshot.py restore --repo <hf-repo>`
-  (có guard manifest python/CUDA; exit 2 = không có/không hợp → build thường).
+Cần gì THÊM LỆNH vào cell đó — cấm thêm cell. Mọi lệnh idempotent, chạy lại luôn an
+toàn. `bash run.sh help`: setup / serve 9b|27b / status / logs / bench <tên> / eval /
+registry --flat / stop. Đã đo: runtime mới → server 9B sẵn sàng ~6-8 phút; chạy lại
+(cache ấm) ~2,5 phút.
+
+- Đường cũ `loading/colab_bootstrap.sh` vẫn còn (fallback graft từ nguồn); run.sh là
+  giao diện chính.
 - Script vLLM offline: `LLM()` phải nằm trong `if __name__ == "__main__":` (vLLM spawn).

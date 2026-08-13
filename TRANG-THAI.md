@@ -9,11 +9,18 @@ Cập nhật: 2026-08-12.
 
 ## Trạng thái
 
-- **2026-08-13 (mới nhất): user ra lệnh DỪNG Colab, chuyển sang bước REFACTOR, chờ
-  lệnh từng bước.** GPU không có gì chạy (an toàn). Việc 27B đang dở: tối ưu spec
-  decoding chưa đo (runtime recycle lần 11 giữa chừng; frame 27B đã tải lại xong,
-  env đã dựng — bootstrap 3,0 phút). Khi quay lại: chạy cell SERVE (đã có config
-  ngram spec) rồi đo decode.
+- **2026-08-13: REFACTOR HOÀN THÀNH + test thật trên Colab PASS.** Cấu trúc mới
+  (khuôn transformers, user chốt qua 5 vòng thảo luận): `models/qwen3_5/{engine/vllm
+  (+19 patches), load (3 đường), hardware, utils}` + `sdk/ loading/ logging/ utils/
+  bench/ tests/`. **Registry đệ quy**: `python register.py --flat` (mỗi folder có
+  register.py; không có = vô hình). **`run.sh` = 1 lệnh kiểu vLLM**; notebook A giờ
+  ĐÚNG 1 CELL: clone + `bash run.sh serve 9b` → server READY 370s (fresh runtime,
+  KV 404.613 khớp lịch sử), chạy lại 140s, smoke completion trả lời đúng.
+  9 file test local xanh (26+14+16+29+8+6 case + 3 suite graft/marlin).
+  Commit: 54cb272 (git mv 54 file) + 9a8f0e3 (run.sh/registry/manifest/paths).
+- Việc 27B đang dở TRƯỚC refactor: đo ngram speculative decoding (chưa chạy —
+  runtime recycle lần 11). Làm tiếp bằng: sửa run.sh thêm cờ spec vào profile 27b
+  hoặc serve tay. Frame 27B pull lại bằng `bash run.sh serve 27b`.
 
 - **Lệnh hiện hành (2026-08-13)**: dứt điểm L4 + Qwen3.5-9B trên DUY NHẤT notebook A,
   không subagent (chỉ được dùng để discuss/phân việc), tự làm tự fix. Xong hẳn 9B thì

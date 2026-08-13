@@ -21,8 +21,8 @@
 ## Vận hành
 7. GPU đã duyệt chạy thì không ngồi chơi; bị chặn/lỗi báo ngay, không im lặng.
 8. Báo cáo tiếng Việt, hướng người mới (user là beginner CUDA/LLM), tuần tự, logic.
-9. Notebook giữ đúng 5 cell chuẩn (WHOAMI / BOOTSTRAP / SERVE / TASK / LOG). Việc mới
-   ghi đè cell TASK — cấm tích lũy cell.
+9. Notebook giữ ĐÚNG 1 CELL duy nhất chạy `bash run.sh <lệnh>` (kiểu vLLM). Cần gì
+   THÊM LỆNH vào cell đó (mọi lệnh idempotent) — cấm thêm cell. `run.sh help` liệt kê.
 10. `run_code_cell` là blocking 30 phút — gom lệnh dài vào 1 cell và chờ trong lượt;
     không sleep/poll, không kết thúc lượt để đợi.
 

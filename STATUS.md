@@ -752,6 +752,29 @@ Cùng runtime/config với Q2c (mml=65536, baseline 329,5 tasks/hr):
   est chỉ +~1K; --context-limit-tokens so với EST chứ không phải token thật.
   Cần sửa harness: dùng cùng một thang (ưu tiên real qua usage) — TODO.
 
+## REFACTOR (2026-08-13): kiến trúc sản phẩm theo khuôn transformers — TEST THẬT PASS
+
+User chốt qua 5 vòng thảo luận (lấy `out/transformers` làm tham chiếu):
+architecture-centric, engine mang patches riêng, registry đệ quy, utils 2 tầng.
+
+- Cấu trúc: `models/qwen3_5/{engine/vllm/(adapter.py+patches/×19), load/(gguf_to_marlin
+  = graft cũ, pure_gguf, pytorch_tensor), hardware/l4.py, utils/}` + `models/qwen3_5_moe`
+  (dummy thành thật) + `models/_template` (7 luật) + `sdk/ loading/ logging/ utils/
+  bench/ bench/workload/ tests/`. 54 file git mv thuần (lịch sử nguyên vẹn).
+- **Registry đệ quy** (`register.py` gốc + mỗi folder 1 cái): folder không có
+  register.py = vô hình (patches/ ẩn khỏi bề mặt sản phẩm có chủ đích); đọc
+  REGISTER/ADAPTER literal bằng ast, không import. `python register.py --flat`.
+- **`run.sh` = 1 lệnh kiểu vLLM**: setup / serve 9b|27b (config đã tune nhúng sẵn) /
+  status / logs / bench / eval / registry / stop — tất cả idempotent.
+- **Notebook A = ĐÚNG 1 CELL**: clone + `bash run.sh serve 9b && status`. Đo thật:
+  fresh-runtime → READY 370s (KV 404.613 tokens khớp lịch sử tuyệt đối), lần 2 (ấm)
+  140s, smoke completion trả lời đúng. Cần gì thêm LỆNH vào cell, không thêm cell.
+- Kiểm định: 9 file test local xanh, gồm test_structure.py mới (6 luật: cấm import
+  chéo model, utils không import models, ADAPTER bắt buộc, registry sạch, patch đặt
+  đúng chỗ, register.py đủ mặt).
+- Sửa path kéo theo: setup_env patch loop, colab_bootstrap, serve_test, 8 test,
+  baked path trong patch_gguf_auto_marlin, REPO_ROOT của workload scripts.
+
 ## CHIẾN DỊCH 27B — PHASE 1 (2026-08-13): Qwen3.5-27B LÊN SÓNG TRÊN L4, 15,8 tok/s
 
 Khảo sát frame (RedHatAI KHÔNG có 27B w4a16):
