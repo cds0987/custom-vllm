@@ -227,7 +227,7 @@ from safetensors import safe_open
 from safetensors.torch import save_file
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
-_spec = importlib.util.spec_from_file_location("gguf2marlin", SCRIPTS_DIR / "gguf2marlin.py")
+_spec = importlib.util.spec_from_file_location("gguf2marlin", SCRIPTS_DIR / "legacy_gguf2marlin.py")
 g2m = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(g2m)
 
@@ -912,3 +912,14 @@ def _print_report(out_dir, grafted_names, kept_names, error_report):
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+# Registry metadata (see models/auto/registry.py) — appended, no runtime effect.
+ADAPTER = {
+    "axis": "load",
+    "variant": "gguf_to_marlin",
+    "requires": {},
+    "input": "W4A16 frame dir + GGUF file (Q4_K_M proven; --bits 4 --group-size 32)",
+    "output": "compressed-tensors checkpoint (Marlin kernel), deterministic, CPU-only ~5min",
+    "proven": "9B champion ppl 4.7637 (beats bf16 5.13)",
+}

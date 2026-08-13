@@ -38,7 +38,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from types import SimpleNamespace
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "bench"))
 import bench_agent_loop as bal  # noqa: E402
 
 

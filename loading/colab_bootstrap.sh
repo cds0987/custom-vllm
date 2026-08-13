@@ -3,7 +3,7 @@
 # champion. Written after nine runtime wipes, each costing ~40 minutes of
 # sequential setup.
 #
-#   bash scripts/colab_bootstrap.sh
+#   bash loading/colab_bootstrap.sh
 #
 # Where the old ~40 minutes went, and what this changes:
 #
@@ -32,7 +32,7 @@ step "Cloning repo"
 cd "$REPO_DIR"
 
 step "Environment"
-bash scripts/setup_env.sh 2>&1 | tail -25
+bash loading/setup_env.sh 2>&1 | tail -25
 
 export HF_HUB_ENABLE_HF_TRANSFER=1
 
@@ -81,12 +81,12 @@ print('GGUF', hf_hub_download('$GGUF_REPO','$GGUF_FILE'))" &
   # NOTE: never run fix_qwen35_hf_checkpoint.py on the frame -- it is a
   # multimodal checkpoint and the fix corrupts it. RMS ~9.4% mean / 11.4% max
   # is the EXPECTED figure for --bits 4 (0.55% belongs to --bits 8).
-  python scripts/graft_gguf_gdn.py \
+  python models/qwen3_5/load/gguf_to_marlin.py \
       --frame "$FRAME" --gguf "$GGUF" --out "$OUT" --bits 4 --group-size 32
 fi
 
 step "Patching vLLM loader"
-python scripts/patch_vllm_gdn_quant_load.py
+python models/qwen3_5/engine/vllm/patches/patch_vllm_gdn_quant_load.py
 
 step "DONE in $(( ($(date +%s) - START) / 60 )) min $(( ($(date +%s) - START) % 60 ))s"
 cat <<EOF
@@ -102,5 +102,5 @@ Serve with:
 To make the next rebuild ~3 minutes instead of ~9, upload this champion once:
   huggingface-cli login
   huggingface-cli upload <you>/qwen35-9b-champion $OUT
-then rebuild with:  CHAMPION_REPO=<you>/qwen35-9b-champion bash scripts/colab_bootstrap.sh
+then rebuild with:  CHAMPION_REPO=<you>/qwen35-9b-champion bash loading/colab_bootstrap.sh
 EOF

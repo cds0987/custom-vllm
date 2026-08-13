@@ -108,9 +108,19 @@ except ImportError as e:
     print(f"_C_gguf NOT available ({e}); Triton fallback in use")
 EOF
 
+# Patches live NEXT TO the thing they patch (see models/_template/MANIFEST.md):
+# engine-specific ones under models/qwen3_5/engine/vllm/patches/, engine-neutral
+# ones (transformers) under models/qwen3_5/utils/. Run engine-neutral first —
+# vLLM's config parsing goes through transformers.
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PATCHES_VLLM="$REPO_DIR/models/qwen3_5/engine/vllm/patches"
+PATCHES_NEUTRAL="$REPO_DIR/models/qwen3_5/utils"
+
+echo "=== patch_transformers_qwen35 (engine-neutral) ==="
+python "$PATCHES_NEUTRAL/patch_transformers_qwen35.py"
+
 for s in \
   patch_gguf_plugin \
-  patch_transformers_qwen35 \
   patch_gguf_tensor_mapping \
   patch_vllm_qwen35_embed \
   patch_gguf_weight_type_loader \
@@ -131,7 +141,7 @@ for s in \
   patch_gguf_auto_marlin
 do
   echo "=== $s ==="
-  python "scripts/$s.py"
+  python "$PATCHES_VLLM/$s.py"
 done
 
 echo "=== Ensuring CUDA runtime libs are on the loader path ==="

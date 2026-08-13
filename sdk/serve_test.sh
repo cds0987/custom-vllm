@@ -19,27 +19,27 @@ if [ -n "$GGUF_QUANT" ]; then
   pip install -q vllm-gguf-plugin
   pip install -q --force-reinstall --no-deps vllm-gguf-plugin
   echo "=== Patching vllm-gguf-plugin for qwen3.5 model_type naming mismatch ==="
-  python scripts/patch_gguf_plugin.py
+  python models/qwen3_5/engine/vllm/patches/patch_gguf_plugin.py
   echo "=== Patching transformers Qwen3_5Config.vocab_size ==="
-  python scripts/patch_transformers_qwen35.py
+  python models/qwen3_5/utils/patch_transformers_qwen35.py
   echo "=== Patching gguf tensor_mapping.py for qwen3.5 tensor names ==="
-  python scripts/patch_gguf_tensor_mapping.py
+  python models/qwen3_5/engine/vllm/patches/patch_gguf_tensor_mapping.py
   echo "=== Patching vllm Qwen3_5Model to pass quant_config to embed_tokens ==="
-  python scripts/patch_vllm_qwen35_embed.py
+  python models/qwen3_5/engine/vllm/patches/patch_vllm_qwen35_embed.py
   echo "=== Patching vllm-gguf-plugin weight-type loader for fused layers ==="
-  python scripts/patch_gguf_weight_type_loader.py
+  python models/qwen3_5/engine/vllm/patches/patch_gguf_weight_type_loader.py
   echo "=== Patching vllm-gguf-plugin conv1d weight shape for SSM layers ==="
-  python scripts/patch_gguf_conv1d_shape.py
+  python models/qwen3_5/engine/vllm/patches/patch_gguf_conv1d_shape.py
   echo "=== Patching vllm registry to expose text-only Qwen3.5 architectures ==="
-  python scripts/patch_vllm_qwen35_registry.py
+  python models/qwen3_5/engine/vllm/patches/patch_vllm_qwen35_registry.py
   echo "=== Patching vllm-gguf-plugin to drop M-RoPE for text-only GGUF ==="
-  python scripts/patch_gguf_drop_mrope.py
+  python models/qwen3_5/engine/vllm/patches/patch_gguf_drop_mrope.py
   echo "=== Patching vllm to mark text-only Qwen3.5 as a hybrid model ==="
-  python scripts/patch_vllm_qwen35_hybrid.py
+  python models/qwen3_5/engine/vllm/patches/patch_vllm_qwen35_hybrid.py
   echo "=== Patching vllm-gguf-plugin trailing-dot bug for bare parameters (A_log) ==="
-  python scripts/patch_gguf_empty_suffix.py
+  python models/qwen3_5/engine/vllm/patches/patch_gguf_empty_suffix.py
   echo "=== Patching vllm-gguf-plugin to undo llama.cpp's Qwen3.5 weight transforms ==="
-  python scripts/patch_gguf_qwen35_transforms.py
+  python models/qwen3_5/engine/vllm/patches/patch_gguf_qwen35_transforms.py
 fi
 
 echo "=== Ensuring CUDA runtime libs are on the loader path ==="
@@ -113,6 +113,6 @@ if [ "$READY" -ne 1 ]; then
 fi
 
 echo "=== Running inference test ==="
-VLLM_MODEL="$SERVE_TARGET" python scripts/test_inference.py
+VLLM_MODEL="$SERVE_TARGET" python bench/test_inference.py
 
 echo "=== Server left running on port 8000 (pid $SERVER_PID) ==="

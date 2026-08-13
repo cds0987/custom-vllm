@@ -44,7 +44,8 @@ import numpy as np
 import torch
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
-GRAFT_PATH = SCRIPTS_DIR / "graft_gguf_gdn.py"
+REPO_DIR = SCRIPTS_DIR.parent
+GRAFT_PATH = REPO_DIR / "models" / "qwen3_5" / "load" / "gguf_to_marlin.py"
 
 spec = importlib.util.spec_from_file_location("graft_gguf_gdn", GRAFT_PATH)
 graft = importlib.util.module_from_spec(spec)

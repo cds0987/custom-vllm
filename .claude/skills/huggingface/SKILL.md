@@ -33,7 +33,7 @@ login(token="<token do user cấp>")   # chạy trong cell, token không lưu v�
 | Repo | Nội dung | Dùng |
 |---|---|---|
 | `gunnybd01/qwen35-9b-champion` | Champion v2 dựng sẵn (9.1GB) | `snapshot_download(...)` — thay cho tải 13.8GB + graft 5 phút |
-| `gunnybd01/qwen35-9b-env` (nếu đã save) | Tarball dist-packages | `python scripts/env_snapshot.py restore --repo ...` (guard manifest; exit 2 = build thường) |
+| `gunnybd01/qwen35-9b-env` (nếu đã save) | Tarball dist-packages | `python utils/env_snapshot.py restore --repo ...` (guard manifest; exit 2 = build thường) |
 
 Upload checkpoint mới:
 

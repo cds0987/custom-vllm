@@ -33,10 +33,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "bench", "workload"))
 import prepare_agent_workload as paw  # noqa: E402
 
-SCRIPT_PATH = Path(__file__).resolve().parent / "prepare_agent_workload.py"
+SCRIPT_PATH = Path(__file__).resolve().parent.parent / "bench" / "workload" / "prepare_agent_workload.py"
 
 
 def _write_jsonl(path: Path, rows: list) -> None:

@@ -28,7 +28,8 @@ import time
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "bench"))
+BENCH_SKILLS = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "bench", "bench_skills.py")
 import bench_skills as bs  # noqa: E402
 
 
@@ -181,7 +182,7 @@ class TestCLIValidation(unittest.TestCase):
                 f.write('{"id": "q1", "question": "what is this?"}\n')
             try:
                 result = subprocess.run(
-                    [sys.executable, __file__.replace("test_", ""),
+                    [sys.executable, BENCH_SKILLS,
                      "--prefix-file", path,
                      "--synthetic-questions", "10",
                      "--dry-run"],
@@ -199,7 +200,7 @@ class TestCLIValidation(unittest.TestCase):
     def test_error_no_input_specified(self):
         """Not specifying any input (files or synthetic) should error."""
         result = subprocess.run(
-            [sys.executable, __file__.replace("test_", ""),
+            [sys.executable, BENCH_SKILLS,
              "--dry-run"],
             capture_output=True,
             text=True,
@@ -225,7 +226,7 @@ class TestFileModeStillWorks(unittest.TestCase):
 
         try:
             result = subprocess.run(
-                [sys.executable, __file__.replace("test_", ""),
+                [sys.executable, BENCH_SKILLS,
                  "--prefix-file", path,
                  "--questions-file", qpath,
                  "--dry-run"],
@@ -245,7 +246,7 @@ class TestSyntheticModeEndToEnd(unittest.TestCase):
     def test_synthetic_dry_run(self):
         """Synthetic mode dry-run should work without any files."""
         result = subprocess.run(
-            [sys.executable, __file__.replace("test_", ""),
+            [sys.executable, BENCH_SKILLS,
              "--synthetic-prefix-tokens", "1000",
              "--synthetic-questions", "5",
              "--seed", "42",
@@ -264,7 +265,7 @@ class TestSyntheticModeEndToEnd(unittest.TestCase):
     def test_synthetic_prefix_only(self):
         """Using only --synthetic-prefix-tokens without --synthetic-questions should fail."""
         result = subprocess.run(
-            [sys.executable, __file__.replace("test_", ""),
+            [sys.executable, BENCH_SKILLS,
              "--synthetic-prefix-tokens", "1000",
              "--dry-run"],
             capture_output=True,
@@ -277,7 +278,7 @@ class TestSyntheticModeEndToEnd(unittest.TestCase):
     def test_synthetic_questions_only(self):
         """Using only --synthetic-questions without --synthetic-prefix-tokens should fail."""
         result = subprocess.run(
-            [sys.executable, __file__.replace("test_", ""),
+            [sys.executable, BENCH_SKILLS,
              "--synthetic-questions", "10",
              "--dry-run"],
             capture_output=True,
@@ -295,7 +296,7 @@ class TestSyntheticModeEndToEnd(unittest.TestCase):
             f.write("prefix")
         try:
             result = subprocess.run(
-                [sys.executable, __file__.replace("test_", ""),
+                [sys.executable, BENCH_SKILLS,
                  "--prefix-file", path,
                  "--synthetic-questions", "10",
                  "--dry-run"],

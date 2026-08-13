@@ -110,11 +110,11 @@ import json
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent  # bench/workload/ -> repo root
 DEFAULT_BFCL_DIR = REPO_ROOT / "datasets" / "bfcl"
-DEFAULT_PUBLIC_TEST_FILE = REPO_ROOT / "public-test.jsonl"
+DEFAULT_PUBLIC_TEST_FILE = Path(__file__).resolve().parent / "public-test.jsonl"
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))  # for `import eval_quality_swebench`
+sys.path.insert(0, str(REPO_ROOT / "bench"))  # for `import eval_quality_swebench`
 
 # BFCL class name (as it appears in involved_classes / possible_answer keys)
 # -> function-doc filename under multi_turn_func_doc/. Confirmed empirically

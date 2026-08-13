@@ -12,9 +12,9 @@ vào `STATUS.md` + commit — số chỉ nằm trên runtime là sẽ mất.
 
 ```bash
 # load + decode ngắn (bảng chuẩn: bench_load ~35.35s load / 646.0 tok tổng)
-python scripts/bench_load.py --model /content/champion
+python bench/bench_load.py --model /content/champion
 # prefill sạch cache (đo prefill thật, không dính prefix cache)
-python scripts/prefill_bench.py --model /content/champion
+python bench/prefill_bench.py --model /content/champion
 ```
 Số chuẩn để so (vLLM 0.27.1): ppl 4.7637, decode ~390 tok/s server / ~520 offline
 (prefix 30K), prefill 2789–2934 tok/s.
@@ -22,7 +22,7 @@ Số chuẩn để so (vLLM 0.27.1): ppl 4.7637, decode ~390 tok/s server / ~520
 ## 2. Chất lượng — perplexity
 
 ```bash
-python scripts/eval_quality.py --model /content/champion        # ppl nhanh
+python bench/eval_quality_swebench.py --model /content/champion        # ppl nhanh
 # eval_quality_swebench.py cần datasets → dựng env với CUSTOM_VLLM_TOOLS=1
 ```
 
@@ -31,14 +31,14 @@ python scripts/eval_quality.py --model /content/champion        # ppl nhanh
 Serve bằng cell SERVE (config chuẩn trong CLAUDE.md), rồi:
 
 ```bash
-python scripts/bench_serving.py --host 127.0.0.1 --port 8000 ...
-python scripts/bench_skills.py --synthetic-prefix-tokens 30000 --seed 0   # prefix chia sẻ tổng hợp
+python bench/bench_serving.py --host 127.0.0.1 --port 8000 ...
+python bench/bench_skills.py --synthetic-prefix-tokens 30000 --seed 0   # prefix chia sẻ tổng hợp
 ```
 
 ## 4. Agent-loop nhiều user (workload chính của dự án)
 
 ```bash
-python scripts/bench_agent_loop.py \
+python bench/bench_agent_loop.py \
     --sessions 8 --turns 6 --synthetic-prefix-tokens 30000 \
     --max-model-len 65536
 ```
@@ -53,10 +53,10 @@ python scripts/bench_agent_loop.py \
 
 ```bash
 # BFCL đã tải sẵn ở datasets/bfcl/ (gitignored) — tải lại nếu runtime mới
-python scripts/prepare_agent_workload.py --mix "bfcl:50,public-test:30,swebench:20" \
+python bench/workload/prepare_agent_workload.py --mix "bfcl:50,public-test:30,swebench:20" \
     --out /content/workload.jsonl
-python scripts/bench_agent_loop.py --workload /content/workload.jsonl ...
-python scripts/score_bfcl.py --results <ket-qua>   # chấm AST-lite cho tool call
+python bench/bench_agent_loop.py --workload /content/workload.jsonl ...
+python bench/workload/score_bfcl.py --results <ket-qua>   # chấm AST-lite cho tool call
 ```
 
 ## Kỷ luật đo

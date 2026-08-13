@@ -37,12 +37,12 @@ colab-mcp bản patch local (`D:\Training\AI_Module\colab-mcp`, nhận env
 
 ```bash
 git clone https://github.com/cds0987/custom-vllm.git /content/custom_vllm
-cd /content/custom_vllm && bash scripts/colab_bootstrap.sh
+cd /content/custom_vllm && bash loading/colab_bootstrap.sh
 ```
 
 - `colab_bootstrap.sh`: env (uv, test-first sdist, skip llmcompressor trừ khi
   `CUSTOM_VLLM_TOOLS=1`) → pull champion prebuilt `gunnybd01/qwen35-9b-champion`
   (fallback: tải frame+GGUF song song rồi graft) → patch loader → in lệnh serve.
-- Rebuild env nhanh hơn nữa: `python scripts/env_snapshot.py restore --repo <hf-repo>`
+- Rebuild env nhanh hơn nữa: `python utils/env_snapshot.py restore --repo <hf-repo>`
   (có guard manifest python/CUDA; exit 2 = không có/không hợp → build thường).
 - Script vLLM offline: `LLM()` phải nằm trong `if __name__ == "__main__":` (vLLM spawn).
