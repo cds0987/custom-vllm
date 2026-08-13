@@ -1,1 +1,1 @@
-REGISTER = {"name": "quantize", "kind": "load-family", "description": "Tu lam frame W4A16/AWQ/GPTQ khi cong dong khong co san (llmcompressor, can CUSTOM_VLLM_TOOLS=1)"}
+REGISTER = {"name": "quantize", "kind": "load-family", "description": "Tu lam frame W4A16/AWQ/GPTQ khi cong dong khong co san (llmcompressor, can CUSTOM_VLLM_TOOLS=1). Ho awq hien 2 file, gptq 1 file - CHUA du nguong >2 de tach subfolder; them file thu 3 cung ho thi tach (awq/, gptq/) va registry tu nhan."}
