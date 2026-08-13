@@ -9,6 +9,12 @@ Cập nhật: 2026-08-12.
 
 ## Trạng thái
 
+- **2026-08-13 (mới nhất): user ra lệnh DỪNG Colab, chuyển sang bước REFACTOR, chờ
+  lệnh từng bước.** GPU không có gì chạy (an toàn). Việc 27B đang dở: tối ưu spec
+  decoding chưa đo (runtime recycle lần 11 giữa chừng; frame 27B đã tải lại xong,
+  env đã dựng — bootstrap 3,0 phút). Khi quay lại: chạy cell SERVE (đã có config
+  ngram spec) rồi đo decode.
+
 - **Lệnh hiện hành (2026-08-13)**: dứt điểm L4 + Qwen3.5-9B trên DUY NHẤT notebook A,
   không subagent (chỉ được dùng để discuss/phân việc), tự làm tự fix. Xong hẳn 9B thì
   transfer sang Qwen3.5-27B-GGUF. Làm với code/workflow hiện tại — REFACTOR CHƯA ĐƯỢC
