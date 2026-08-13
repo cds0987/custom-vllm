@@ -23,8 +23,10 @@
 8. Báo cáo tiếng Việt, hướng người mới (user là beginner CUDA/LLM), tuần tự, logic.
 9. Notebook giữ ĐÚNG 1 CELL duy nhất chạy `bash run.sh <lệnh>` (kiểu vLLM). Cần gì
    THÊM LỆNH vào cell đó (mọi lệnh idempotent) — cấm thêm cell. `run.sh help` liệt kê.
-10. `run_code_cell` là blocking 30 phút — gom lệnh dài vào 1 cell và chờ trong lượt;
-    không sleep/poll, không kết thúc lượt để đợi.
+10. Task LỚN trên Colab (serve, bench dài, download, soak): LUÔN chạy `nohup ... > log &`
+    trong cell để cell trả về ngay — KHÔNG chờ đồng bộ trong lượt (user chốt 2026-08-14).
+    Trong lúc Colab chạy nền thì làm việc local (research, code, docs). Kiểm tra sau
+    bằng `bash run.sh status` / tail log. Task nhỏ (<1-2 phút) chạy thẳng được.
 
 ## An toàn
 11. KHÔNG ghi HF token vào file/commit/log; nhắc user revoke sau chiến dịch.

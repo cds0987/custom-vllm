@@ -1,0 +1,1 @@
+REGISTER = {"name": "kv_transfer", "kind": "research", "description": "Cross-model KV transfer 9B<->27B (paper 2608.03893, ridge mapper dong): attention matched-KV (4 head x 256) OK; GDN state (32 vs 48 v-heads) = nghien cuu rieng, paper de future work"}
