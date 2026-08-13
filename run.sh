@@ -9,7 +9,7 @@
 # Need something else? ADD A COMMAND to that cell, not a new cell:
 #
 #     bash run.sh setup              # env + all patches (idempotent, auto-run by serve)
-#     bash run.sh serve 9b           # pull champion 9B + serve with tuned L4 config
+#     bash run.sh serve 9b|9b-spec   # pull champion 9B + serve (-spec: ngram speculative)
 #     bash run.sh serve 27b          # pull 27B frame + serve with tuned L4 config
 #     bash run.sh status             # GPU / server / model state, tail of logs
 #     bash run.sh logs               # follow server log
@@ -61,14 +61,15 @@ EOF
   esac
 }
 
-serve() {  # $1 = 9b|27b
+serve() {  # $1 = 9b|27b, optionally with -spec suffix (ngram speculative decoding)
   local variant="$1"; shift || true
+  local base="${variant%-spec}"
   ensure_setup
-  say "pulling model $variant"
-  pull_model "$variant" >/dev/null
+  say "pulling model $base"
+  pull_model "$base" >/dev/null
   local model flags
   # Tuned configs — measured on L4 22.5GB, see models/qwen3_5/hardware/l4.py and STATUS.md
-  case "$variant" in
+  case "$base" in
     9b)
       model="$MODELS_DIR/champion9b"
       flags="--max-model-len 65536 --max-num-batched-tokens 1088" ;;
@@ -77,8 +78,13 @@ serve() {  # $1 = 9b|27b
       flags="--max-model-len 8192 --max-num-batched-tokens 512 --max-num-seqs 8 \
              --compilation-config {\"cudagraph_capture_sizes\":[1,2,4,8],\"max_cudagraph_capture_size\":8} \
              --gpu-memory-utilization 0.97" ;;
+    *) echo "unknown model: $base (want 9b|27b, optional -spec)"; exit 1;;
   esac
-  [ "$variant" = "9b" ] && flags="$flags --gpu-memory-utilization 0.85"
+  [ "$base" = "9b" ] && flags="$flags --gpu-memory-utilization 0.85"
+  if [ "$variant" != "$base" ]; then
+    say "speculative decoding: ngram k=4 (prompt-lookup 2-4)"
+    flags="$flags --speculative-config {\"method\":\"ngram\",\"num_speculative_tokens\":4,\"prompt_lookup_max\":4,\"prompt_lookup_min\":2}"
+  fi
   say "stopping any old server"
   pkill -f "vllm serve" 2>/dev/null || true
   local t0=$(date +%s)
