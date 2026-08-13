@@ -18,7 +18,7 @@ SERVE_CONFIGS = {
     "9b": {
         "max_model_len": 65536,          # Q2c: 49152 is 5.2% WORSE at the 8-session operating point
         "max_num_batched_tokens": 1088,  # SLA floor: newcomers' prefill must not starve decoders
-        "gpu_memory_utilization": 0.85,
+        "gpu_memory_utilization": 0.97,  # util sweep 2026-08-14: KV 404K->560K (+38.5%); 1.0 dies
         "extra": ["--enable-prefix-caching", "--mamba-cache-mode align",
                    "--kv-cache-dtype fp8_e4m3"],
     },

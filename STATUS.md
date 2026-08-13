@@ -752,6 +752,45 @@ Cùng runtime/config với Q2c (mml=65536, baseline 329,5 tasks/hr):
   est chỉ +~1K; --context-limit-tokens so với EST chứ không phải token thật.
   Cần sửa harness: dùng cùng một thang (ưu tiên real qua usage) — TODO.
 
+## SPEC DECODING NGRAM (2026-08-14): OFF MẶC ĐỊNH TRÊN L4 — đo 2 model × 2 mức tải
+
+Profile `-spec` (ngram k=4, prompt-lookup 2-4) thêm vào run.sh; cùng runtime,
+baseline đo lại tươi:
+
+    9B                    baseline    ngram-spec
+    skills conc1 decode   34,34       37,68 (+9,7%)
+    skills conc8 thr      158,6       145,3 (−8,4%)
+    agent-loop 8 phiên    278,6/hr    **179,4 (−36%)**, TTFT p95 50s
+    KV capacity           404.613     350.907 (−13%)
+
+    27B                   baseline    ngram-spec
+    skills conc1 decode   15,83       19,49 (+23%)
+    KV tokens             12.288      8.874 (−28%)
+    prefix hit            95,3%       **54% (sập)**; TTFT p50 0,23→2,1s; conc2 thr −43%
+
+Cơ chế: ở tải cao GPU đã bão hòa compute (P7) — verify draft đốt thêm compute,
+draft trượt là công cốc; và spec chiếm VRAM đúng vào KV vốn là tài nguyên hiếm
+nhất. Spec chỉ thắng ở single-stream sinh dài + VRAM dư (GPU to) — không phải L4.
+Ghi vào hardware/l4.py. Đóng hướng bằng số đo, không phải suy luận.
+
+## UTIL SWEEP (2026-08-14, lệnh user "nghiên cứu 98/100"): MẶC ĐỊNH MỚI 0.97 — ĐỈNH DỊCH 8→12 PHIÊN
+
+    GPU_UTIL   KV tokens (mml 65536)   agent-loop 12 phiên
+    0.85       404.613 (cũ)            —
+    0.90       469.199 (+16%)          —
+    0.95       534.735 (+32%)          —
+    **0.97**   **560.380 (+38,5%)**    308,4 cold / **358,1 warm ⬅ đỉnh mới**
+    0.98       573.677 (+2,4% nữa)     308,4 (trùng 0.97 đến số lẻ)
+    1.00       CHẾT khi khởi động engine (đo thật, không phải lý thuyết)
+
+- **Điểm vận hành mới: 12 phiên @0.97** — warm 358,1 tasks/hr (+27% vs 8 phiên
+  cùng điều kiện; đỉnh cũ toàn chiến dịch 329). 16 phiên giờ 330,7 (×1,74 con
+  số cũ 189,8) — không còn là vùng lỗ.
+- Bài học đo: 358 vs 308 là hiệu ứng SERVER ẤM (prefix cache đầy sẵn, hit 90,3%
+  vs 87,7%) — báo cả hai số, không chọn số đẹp.
+- 0.98 không cho gì thêm (perf y hệt, margin mỏng hơn) → chốt 0.97; run.sh +
+  adapter.py đã đổi mặc định.
+
 ## REFACTOR (2026-08-13): kiến trúc sản phẩm theo khuôn transformers — TEST THẬT PASS
 
 User chốt qua 5 vòng thảo luận (lấy `out/transformers` làm tham chiếu):

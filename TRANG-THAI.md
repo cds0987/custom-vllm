@@ -18,9 +18,12 @@ Cập nhật: 2026-08-12.
   KV 404.613 khớp lịch sử), chạy lại 140s, smoke completion trả lời đúng.
   9 file test local xanh (26+14+16+29+8+6 case + 3 suite graft/marlin).
   Commit: 54cb272 (git mv 54 file) + 9a8f0e3 (run.sh/registry/manifest/paths).
-- Việc 27B đang dở TRƯỚC refactor: đo ngram speculative decoding (chưa chạy —
-  runtime recycle lần 11). Làm tiếp bằng: sửa run.sh thêm cờ spec vào profile 27b
-  hoặc serve tay. Frame 27B pull lại bằng `bash run.sh serve 27b`.
+- **2026-08-14**: (1) Spec decoding ngram ĐÓNG bằng số đo — OFF mặc định trên L4
+  (9B −36% tasks/hr @8 phiên; 27B decode +23% nhưng KV −28%/prefix hit sập).
+  (2) Util sweep (lệnh user): MẶC ĐỊNH MỚI gpu_util=0.97 — KV +38,5% (560.380),
+  điểm vận hành dịch 8→12 phiên (358,1 warm / 308,4 cold), 16 phiên hết lỗ
+  (330,7 = ×1,74 số cũ); 0.98 y hệt 0.97; 1.0 chết khi khởi động (đo thật).
+  Chi tiết: STATUS.md. Hàng đợi tiếp: 4B/2B, soak test, HTML report.
 
 - **Lệnh hiện hành (2026-08-13)**: dứt điểm L4 + Qwen3.5-9B trên DUY NHẤT notebook A,
   không subagent (chỉ được dùng để discuss/phân việc), tự làm tự fix. Xong hẳn 9B thì
