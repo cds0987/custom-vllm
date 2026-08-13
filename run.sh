@@ -80,7 +80,8 @@ serve() {  # $1 = 9b|27b, optionally with -spec suffix (ngram speculative decodi
              --gpu-memory-utilization 0.97" ;;
     *) echo "unknown model: $base (want 9b|27b, optional -spec)"; exit 1;;
   esac
-  [ "$base" = "9b" ] && flags="$flags --gpu-memory-utilization 0.85"
+  [ "$base" = "9b" ] && flags="$flags --gpu-memory-utilization ${GPU_UTIL:-0.85}"
+  # GPU_UTIL env overrides the profile default (research: 0.85 -> 0.90/0.95/0.97)
   if [ "$variant" != "$base" ]; then
     say "speculative decoding: ngram k=4 (prompt-lookup 2-4)"
     flags="$flags --speculative-config {\"method\":\"ngram\",\"num_speculative_tokens\":4,\"prompt_lookup_max\":4,\"prompt_lookup_min\":2}"
