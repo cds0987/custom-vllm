@@ -28,30 +28,58 @@ import re
 
 
 def zero_cache_parts(past, *, zero_gdn: bool, zero_attn: bool, verbose=False):
-    """Zero tensors inside a transformers hybrid cache object, by attribute
-    name pattern — robust to exact cache class naming."""
+    """Zero tensors inside a transformers hybrid cache, walking the object
+    RECURSIVELY (tensors live in past.layers[i].<attr>, not at top level —
+    the first version scanned only top-level attrs, zeroed nothing, and made
+    all conditions identical; hard-fail guard below prevents that recurrence).
+    """
     import torch
     hit = []
-    for attr in dir(past):
-        if attr.startswith("_"):
-            continue
-        try:
-            val = getattr(past, attr)
-        except Exception:
-            continue
-        is_gdn = any(s in attr.lower() for s in ("recurrent", "ssm", "conv"))
-        is_attn = any(s in attr.lower() for s in ("key_cache", "value_cache", "keys", "values")) \
-            and not is_gdn
-        if not ((zero_gdn and is_gdn) or (zero_attn and is_attn)):
-            continue
-        if isinstance(val, (list, tuple)):
-            for t in val:
-                if torch.is_tensor(t):
-                    t.zero_(); hit.append(attr)
-        elif torch.is_tensor(val):
-            val.zero_(); hit.append(attr)
+
+    def classify(name):
+        n = name.lower()
+        if any(s in n for s in ("recurrent", "ssm", "conv")):
+            return "gdn"
+        if any(s in n for s in ("key", "value")):
+            return "attn"
+        return None
+
+    def visit(obj, prefix, depth):
+        if depth > 4 or obj is None:
+            return
+        if isinstance(obj, (list, tuple)):
+            for i, o in enumerate(obj):
+                visit(o, f"{prefix}[{i}]", depth + 1)
+            return
+        for attr in dir(obj):
+            if attr.startswith("_"):
+                continue
+            try:
+                val = getattr(obj, attr)
+            except Exception:
+                continue
+            kind = classify(attr)
+            if torch.is_tensor(val):
+                if (zero_gdn and kind == "gdn") or (zero_attn and kind == "attn"):
+                    val.zero_(); hit.append(f"{prefix}.{attr}")
+            elif isinstance(val, (list, tuple)) and val and torch.is_tensor(val[0]):
+                if (zero_gdn and kind == "gdn") or (zero_attn and kind == "attn"):
+                    for t in val:
+                        t.zero_()
+                    hit.append(f"{prefix}.{attr}[*]")
+            elif attr == "layers":
+                visit(val, f"{prefix}.layers", depth + 1)
+
+    visit(past, "past", 0)
     if verbose:
-        print("  zeroed attrs:", sorted(set(hit)))
+        names = sorted({h.split('.')[-1] for h in hit})
+        print(f"  zeroed {len(hit)} tensors; attr names: {names}")
+        print("  cache type:", type(past).__name__,
+              "| layer types:", sorted({type(l).__name__ for l in getattr(past, 'layers', [])}))
+    if not hit:
+        raise RuntimeError(
+            "zero_cache_parts hit NOTHING — cache layout unknown; measurement "
+            "would be invalid (all conditions identical). Inspect cache attrs.")
     return past
 
 
