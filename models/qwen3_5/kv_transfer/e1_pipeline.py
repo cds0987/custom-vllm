@@ -226,7 +226,11 @@ def cmd_fit(args):
             X = Ss[:, h].transpose(0, 2, 1).reshape(S * DV, DK)   # samples: (seq, col)
             Y = St[:, h].transpose(0, 2, 1).reshape(S * DV, DK)
             ntr = (S - n_val) * DV
-            W, b = rm.fit_ridge(X[:ntr], Y[:ntr], lam=1.0)   # heavier ridge: states are peaky
+            # Scale-adaptive lambda: fixed lam=1.0 crushed small-magnitude heads
+            # (identity gate caught it: R2 0.047 on quiet heads). lam relative to
+            # mean diag(X^T X) makes shrinkage uniform across head scales.
+            lam_h = args.gdn_lam * ntr * float(np.mean(X[:ntr] ** 2)) + 1e-12
+            W, b = rm.fit_ridge(X[:ntr], Y[:ntr], lam=lam_h)
             out[f"G_W_{lt}_{h}"], out[f"G_b_{lt}_{h}"] = W, b
             r2s.append(rm.r2_score(Y[ntr:], rm.apply_ridge(X[ntr:], W, b)))
         val_gdn += r2s
@@ -428,6 +432,8 @@ def main():
     f = sub.add_parser("fit")
     f.add_argument("--src", required=True); f.add_argument("--tgt", required=True)
     f.add_argument("--out", required=True)
+    f.add_argument("--gdn-lam", type=float, default=1e-3,
+                   help="ridge GDN tuong doi theo mean diag(X^T X)")
     f.add_argument("--holdout", type=int, default=40,
                    help="so seq giu lai de cham R2 (khong dung de fit)")
     f.add_argument("--expect-identity", action="store_true",
