@@ -71,6 +71,21 @@ def calib_texts(n_seqs, seed=0):
     return [" ".join(rng.choice(base) for _ in range(1400)) for _ in range(n_seqs)]
 
 
+def get_rope_theta(cfg) -> float:
+    """transformers moved rope_theta around across versions — try every home."""
+    for probe in (lambda: cfg.rope_theta,
+                  lambda: cfg.rope_parameters["rope_theta"],
+                  lambda: cfg.rope_scaling["rope_theta"],
+                  lambda: cfg.rotary_emb_base):
+        try:
+            v = probe()
+            if v:
+                return float(v)
+        except (AttributeError, KeyError, TypeError):
+            continue
+    raise RuntimeError(f"cannot find rope_theta in {type(cfg).__name__}")
+
+
 def load_model(name):
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -126,7 +141,7 @@ def cmd_collect(args):
             if (si + 1) % 20 == 0:
                 print(f"{si+1}/{len(texts)} seqs  ({time.time()-t0:.0f}s)")
 
-    out_d = {"rope_theta": float(cfg.rope_theta),
+    out_d = {"rope_theta": get_rope_theta(cfg),
              "positions": np.concatenate(pos_acc)}
     for i in K_acc:
         out_d[f"K_{i}"] = np.concatenate(K_acc[i], 0)
