@@ -180,6 +180,17 @@ def cmd_fit(args):
            "theta_src": src["rope_theta"], "theta_tgt": tgt["rope_theta"]}
 
     pos = src["positions"]
+    # Recover sequence ids from position resets (collect stored per-seq
+    # positions starting at 0) so we can hold out whole sequences — held-out
+    # R2 is the number that matters; train R2 self-flatters.
+    seq_id = np.cumsum(np.concatenate([[1], (np.diff(pos) <= 0).astype(int)])) - 1
+    n_seq = int(seq_id.max()) + 1
+    n_val = min(args.holdout, max(1, n_seq // 5))
+    tr_rows, va_rows = seq_id < (n_seq - n_val), seq_id >= (n_seq - n_val)
+    print(f"holdout: {n_seq} seqs -> train {n_seq - n_val} / val {n_val} "
+          f"({tr_rows.sum()}/{va_rows.sum()} rows)")
+
+    val_attn, val_gdn = [], []
     # attention: per-head ridge, layer-1:1 (identical layouts) in stripped space
     for ls, lt in zip(aid_s, aid_t):
         Ks, Kt = src[f"K_{ls}"], tgt[f"K_{lt}"]         # (N, 4, 256)
@@ -190,15 +201,18 @@ def cmd_fit(args):
                           for h in range(Kt.shape[1])], 1)
         XK = Ks_st.reshape(len(Ks_st), -1)
         XV = Vs.reshape(len(Vs), -1)
+        r2k, r2v = [], []
         for h in range(Kt.shape[1]):
-            Wk, bk = rm.fit_ridge(XK, Kt_st[:, h])
-            Wv, bv = rm.fit_ridge(XV, Vt[:, h])
+            Wk, bk = rm.fit_ridge(XK[tr_rows], Kt_st[tr_rows, h])
+            Wv, bv = rm.fit_ridge(XV[tr_rows], Vt[tr_rows, h])
             out[f"AK_W_{lt}_{h}"], out[f"AK_b_{lt}_{h}"] = Wk, bk
-            r2 = rm.r2_score(Kt_st[:, h], rm.apply_ridge(XK, Wk, bk))
             out[f"AV_W_{lt}_{h}"], out[f"AV_b_{lt}_{h}"] = Wv, bv
-            r2v = rm.r2_score(Vt[:, h], rm.apply_ridge(XV, Wv, bv))
-            if h == 0:
-                print(f"attn L{ls}->L{lt} h0: R2(K)={r2:.3f} R2(V)={r2v:.3f}")
+            r2k.append(rm.r2_score(Kt_st[va_rows, h], rm.apply_ridge(XK[va_rows], Wk, bk)))
+            r2v.append(rm.r2_score(Vt[va_rows, h], rm.apply_ridge(XV[va_rows], Wv, bv)))
+        val_attn += r2k + r2v
+        print(f"attn L{ls}->L{lt}: heldout R2(K) mean {np.mean(r2k):.3f} "
+              f"(min {np.min(r2k):.3f})  R2(V) mean {np.mean(r2v):.3f} "
+              f"(min {np.min(r2v):.3f})")
 
     # GDN recurrent state: per-layer per-head column-wise ridge.
     # state: (n_heads=32, dk=128, dv=128); columns over dv are samples.
@@ -206,16 +220,23 @@ def cmd_fit(args):
         Ss = src[f"GDNR_{ls}"].astype(np.float64)   # (S, 32, 128, 128)
         St = tgt[f"GDNR_{lt}"].astype(np.float64)
         S, H, DK, DV = Ss.shape
+        s_tr, s_va = slice(0, S - n_val), slice(S - n_val, S)
         r2s = []
         for h in range(H):
             X = Ss[:, h].transpose(0, 2, 1).reshape(S * DV, DK)   # samples: (seq, col)
             Y = St[:, h].transpose(0, 2, 1).reshape(S * DV, DK)
-            import importlib
-            W, b = rm.fit_ridge(X, Y, lam=1.0)   # heavier ridge: states are peaky
+            ntr = (S - n_val) * DV
+            W, b = rm.fit_ridge(X[:ntr], Y[:ntr], lam=1.0)   # heavier ridge: states are peaky
             out[f"G_W_{lt}_{h}"], out[f"G_b_{lt}_{h}"] = W, b
-            r2s.append(rm.r2_score(Y, rm.apply_ridge(X, W, b)))
-        print(f"gdn L{ls}->L{lt}: mean R2 {np.mean(r2s):.3f} (min {np.min(r2s):.3f})")
+            r2s.append(rm.r2_score(Y[ntr:], rm.apply_ridge(X[ntr:], W, b)))
+        val_gdn += r2s
+        print(f"gdn L{ls}->L{lt}: heldout R2 mean {np.mean(r2s):.3f} (min {np.min(r2s):.3f})")
 
+    ma, mg = float(np.mean(val_attn)), float(np.mean(val_gdn))
+    print(f"\nTONG KET heldout R2: attention {ma:.4f}  gdn {mg:.4f}")
+    if args.expect_identity and (ma < 0.99 or mg < 0.99):
+        raise SystemExit(f"IDENTITY GATE FAIL: R2 attn {ma:.4f} / gdn {mg:.4f} "
+                         "< 0.99 — plumbing sai, dung lai truoc khi ton GPU eval")
     np.savez_compressed(args.out, **out)
     print(f"saved mapper {args.out}")
 
@@ -236,6 +257,13 @@ def transplant(past_src, mapper, mode):
     attn, gdn = cache_layers(past_src)
     theta_s, theta_t = float(mapper["theta_src"]), float(mapper["theta_tgt"])
     dev = "cuda"
+    # E0 lesson: verify the manipulation actually happened (checksum guard).
+    def _cksum():
+        s = sum(float(l.keys.float().abs().sum() + l.values.float().abs().sum())
+                for l in attn.values())
+        s += sum(float(l.recurrent_states.float().abs().sum()) for l in gdn.values())
+        return s
+    before = _cksum()
     for (i, layer), lt in zip(sorted(attn.items()),
                               [int(x) for x in mapper["attn_tgt"]]):
         if mode == "copy":
@@ -274,6 +302,9 @@ def transplant(past_src, mapper, mode):
         layer.recurrent_states[0] = torch.tensor(newS, dtype=layer.recurrent_states.dtype,
                                                  device=dev)
         # conv_states copied as-is (identical shapes)
+    if mode == "ridge" and _cksum() == before:
+        raise RuntimeError("transplant no-op: ridge mode changed NOTHING in the "
+                           "cache — mapper/layout mismatch, measurement invalid")
     return past_src
 
 
@@ -284,58 +315,73 @@ def cmd_eval(args):
     mapper = np.load(args.mapper)
     rng = random.Random(args.seed)
 
+    FRACS = (0.25, 0.5, 0.75)          # needle position sweep: catches RoPE bugs
     trials = []
-    for _ in range(args.trials):
+    for ti in range(args.trials):
         name = rng.choice(NAMES)
         code = "".join(rng.choice("0123456789") for _ in range(6))
-        trials.append((name, code))
+        trials.append((name, code, FRACS[ti % len(FRACS)]))
 
-    def build_ctx(tok, name, code):
+    def build_ctx(tok, name, code, frac):
         ids = tok(FILLER * 200, add_special_tokens=False)["input_ids"][:args.filler_tokens]
-        pre = tok.decode(ids[: args.filler_tokens // 2])
-        post = tok.decode(ids[args.filler_tokens // 2:])
+        cut = int(args.filler_tokens * frac)
+        pre, post = tok.decode(ids[:cut]), tok.decode(ids[cut:])
         return (f"{pre}\nIMPORTANT: The secret code for project {name} is {code}.\n"
-                f"{post}\nQuestion: What is the secret code for project {name}?\n"
+                f"{post}\n{build_q(name)}")
+
+    def build_q(name):
+        return (f"Question: What is the secret code for project {name}?\n"
                 f"Answer: The secret code for project {name} is")
 
-    # ---- stage 1: 4B prefills all contexts, save caches to CPU ----
+    # ---- stage 1: 4B prefills all contexts (on [:-1]), save caches ----
     tok_s, model_s = load_model(args.src_model)
     src_caches, t_src_prefill = [], []
     with torch.no_grad():
-        for name, code in trials:
-            enc = tok_s(build_ctx(tok_s, name, code), return_tensors="pt").to("cuda")
+        for name, code, frac in trials:
+            enc = tok_s(build_ctx(tok_s, name, code, frac), return_tensors="pt").to("cuda")
             torch.cuda.synchronize(); t0 = time.time()
-            out = model_s(**enc, use_cache=True)
+            out = model_s(input_ids=enc["input_ids"][:, :-1], use_cache=True)
             torch.cuda.synchronize(); t_src_prefill.append(time.time() - t0)
-            src_caches.append((out.past_key_values, enc["input_ids"].shape[1]))
+            src_caches.append(out.past_key_values)
     del model_s
     torch.cuda.empty_cache()
     print(f"4B prefill mean {statistics.mean(t_src_prefill):.3f}s")
 
-    # ---- stage 2: 9B answers under 3 conditions ----
+    # ---- stage 2: 9B answers under 4 conditions ----
+    # Symmetric protocol: EVERY condition builds its cache from tokens [:-1],
+    # then feeds the final token — latency and cache length are comparable.
+    # no_ctx = floor control (question only, no context at all).
     tok_t, model_t = load_model(args.tgt_model)
-    res = {c: {"hits": 0, "nll": [], "lat": []} for c in ("self_prefill", "ridge", "copy")}
+    CONDS = ("self_prefill", "ridge", "copy", "no_ctx")
+    res = {c: {"hits": 0, "nll": [], "lat": [], "byfrac": {}} for c in CONDS}
     with torch.no_grad():
-        for ti, (name, code) in enumerate(trials):
-            ctx = build_ctx(tok_t, name, code)
+        for ti, (name, code, frac) in enumerate(trials):
+            ctx = build_ctx(tok_t, name, code, frac)
             enc = tok_t(ctx, return_tensors="pt").to("cuda")
+            if ti == 0:
+                ids_s = tok_s(ctx)["input_ids"]
+                assert ids_s == enc["input_ids"][0].tolist(), \
+                    "tokenizer 4B != 9B tren cung text — cache khong the ghep"
             gold = tok_t(" " + code, add_special_tokens=False,
                          return_tensors="pt")["input_ids"].to("cuda")
-            for cond in ("self_prefill", "ridge", "copy"):
+            for cond in CONDS:
                 torch.cuda.synchronize(); t0 = time.time()
                 if cond == "self_prefill":
-                    out = model_t(**enc, use_cache=True)
-                    past = out.past_key_values
+                    o0 = model_t(input_ids=enc["input_ids"][:, :-1], use_cache=True)
+                    past, last = o0.past_key_values, enc["input_ids"][:, -1:]
+                elif cond == "no_ctx":
+                    q = tok_t(build_q(name), return_tensors="pt").to("cuda")
+                    o0 = model_t(input_ids=q["input_ids"][:, :-1], use_cache=True)
+                    past, last = o0.past_key_values, q["input_ids"][:, -1:]
                 else:
                     import copy as _c
-                    past = _c.deepcopy(src_caches[ti][0])
-                    past = transplant(past, mapper, mode=cond)
-                    out = model_t(input_ids=enc["input_ids"][:, -1:],
-                                  past_key_values=past, use_cache=True)
+                    past = transplant(_c.deepcopy(src_caches[ti]), mapper, mode=cond)
+                    last = enc["input_ids"][:, -1:]
+                out = model_t(input_ids=last, past_key_values=past, use_cache=True)
                 torch.cuda.synchronize()
                 lat = time.time() - t0
                 logp = torch.log_softmax(out.logits[:, -1, :].float(), -1)
-                cur, nll, gen = past, 0.0, []
+                cur, nll, gen = out.past_key_values, 0.0, []
                 for gi in range(gold.shape[1]):
                     nll += -float(logp[0, gold[0, gi]])
                     nxt = logp.argmax(-1, keepdim=True)
@@ -343,20 +389,31 @@ def cmd_eval(args):
                     o = model_t(input_ids=nxt, past_key_values=cur, use_cache=True)
                     cur = o.past_key_values
                     logp = torch.log_softmax(o.logits[:, -1, :].float(), -1)
-                text = tok_t.decode(gen)
-                ok = code in re.sub(r"\D", "", text)
+                ok = code in re.sub(r"\D", "", tok_t.decode(gen))
                 res[cond]["hits"] += int(ok)
                 res[cond]["nll"].append(nll / gold.shape[1])
                 res[cond]["lat"].append(lat)
-            print(f"trial {ti+1}/{len(trials)}: " +
-                  " ".join(f"{c}:{res[c]['hits']}" for c in res))
+                bf = res[cond]["byfrac"].setdefault(frac, [0, 0])
+                bf[0] += int(ok); bf[1] += 1
+            print(f"trial {ti+1}/{len(trials)} (needle@{frac:.0%}): " +
+                  " ".join(f"{c}:{res[c]['hits']}" for c in CONDS))
 
     print("\n===== E1 KET QUA =====")
     print(f"4B prefill:            {statistics.mean(t_src_prefill):.3f}s")
-    for c, r in res.items():
+    base_hits = max(res["self_prefill"]["hits"], 1)
+    for c in CONDS:
+        r = res[c]
+        frs = " ".join(f"@{f:.0%}:{v[0]}/{v[1]}" for f, v in sorted(r["byfrac"].items()))
         print(f"{c:13s} needle {r['hits']}/{len(trials)}  "
-              f"NLL {statistics.mean(r['nll']):.3f}  lat {statistics.mean(r['lat']):.3f}s")
-    print("speedup TTFT = self_prefill.lat vs (4B prefill + ridge.lat)")
+              f"retention {100 * r['hits'] / base_hits:.0f}%  "
+              f"NLL {statistics.mean(r['nll']):.3f}  "
+              f"lat {statistics.mean(r['lat']):.3f}s  [{frs}]")
+    t4b = statistics.mean(t_src_prefill)
+    tself = statistics.mean(res["self_prefill"]["lat"])
+    tridge = statistics.mean(res["ridge"]["lat"])
+    print(f"\nTTFT ledger: 9B self {tself:.3f}s  vs  4B prefill {t4b:.3f}s "
+          f"+ transplant&step {tridge:.3f}s = {t4b + tridge:.3f}s "
+          f"(x{tself / (t4b + tridge):.2f})")
 
 
 def main():
@@ -371,6 +428,10 @@ def main():
     f = sub.add_parser("fit")
     f.add_argument("--src", required=True); f.add_argument("--tgt", required=True)
     f.add_argument("--out", required=True)
+    f.add_argument("--holdout", type=int, default=40,
+                   help="so seq giu lai de cham R2 (khong dung de fit)")
+    f.add_argument("--expect-identity", action="store_true",
+                   help="cong sanity: src==tgt thi R2 heldout phai ~1.0, khong thi fail")
     e = sub.add_parser("eval")
     e.add_argument("--mapper", required=True)
     e.add_argument("--src-model", required=True); e.add_argument("--tgt-model", required=True)
