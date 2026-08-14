@@ -771,6 +771,42 @@ Qwen3.5-4B bf16 (10 trial, ablation cache sau prefill):
   transformers/compressed-tensors decompress TỪ CHỐI → calib trên champion cần
   fix config hoặc dùng bf16 gốc (9B bf16 ~18,4GB vừa L4 cho batch-1).
 
+## KV-TRANSFER E1 (2026-08-15): COPY NGUYÊN CACHE 4B→9B GIỮ 100% NEEDLE — RIDGE MAPPER LẠI PHÁ
+
+Chuỗi full trên L4 (collect 4B+9B 200×1024 FineWeb-Edu → identity gate → fit →
+eval 12 trial needle 1,5K tok, needle ở 25/50/75% context, protocol đối xứng
+mọi điều kiện prefill [:-1] + nạp token cuối):
+
+    điều kiện      needle   retention   NLL/tok   lat cache+step
+    self_prefill   12/12    100%        0,011     0,889s (prefill 9B)
+    **copy 4B**    **12/12  100%        0,043     0,080s**
+    ridge mapper   0/12     0%          2,678     4,119s (numpy CPU)
+    no_ctx (sàn)   0/12     0%          10,013    0,327s
+
+    TTFT 1,5K ctx: 9B self 0,889s vs 4B prefill 0,622s + copy 0,080s = 0,702s (×1,27)
+
+- **Phát hiện chính: cache 4B và 9B tương thích THÔ** — copy nguyên K/V + GDN
+  state (shape trùng hệt) vào 9B, needle 12/12 ở cả 3 vị trí, NLL 0,043 gần
+  self-prefill (0,011), chi phí transplant ~0. Nghi vấn Qwen3.5 4B/9B chia sẻ
+  không gian biểu diễn cache (cùng KV 4×256, GDN 32×128 — có thể upscale từ
+  cùng gốc). Paper không thử copy thô vì các cặp của họ lệch shape.
+- **Ridge mapper (đúng bài paper) NGƯỢC LẠI phá sạch**: heldout R² attention
+  0,726 / GDN 0,600 — 27-40% variance mất là đủ giết needle (0/12). Nghịch lý
+  R²-vs-chức-năng: copy thô R² thấp hơn về hình học nhưng giữ đúng các hướng
+  attention đọc; ridge "gần đúng đều" lại xóa tín hiệu. Bài học: R² KHÔNG phải
+  proxy của retention — phải đo chức năng.
+- Identity gate 9B→9B cứu 1 vòng GPU: bắt bug λ=1.0 đè chết head GDN biên độ
+  nhỏ (R² 0,047) → sửa λ thích ứng scale (mean diag XᵀX, mặc định 1e-3) →
+  attention R²=1,000, GDN 0,997+ khi identity. Guard no-op transplant + sàn
+  no_ctx (0/12, NLL 10) xác nhận không có đường rò kết quả.
+- Vận hành: runtime recycle nuốt calib 5,9GB×2 (bài học quy tắc 6 — artifact
+  chỉ nằm runtime); dòng `!nohup` trong cell Colab từng phóng câm — chuyển
+  chuẩn sang subprocess.Popen(start_new_session=True) + kiểm alive sau 10s.
+- Ý nghĩa sản phẩm: cascade 4B-prefill→9B-decode trên 1 GPU khả thi với chi
+  phí transplant ≈0; trần TTFT ~×2 ở 30K ctx (prefill 4B ≈44% FLOPs 9B). Cần
+  E2 trước khi tin: eval khó hơn needle (QA/ppl continuation), ctx dài hơn,
+  và đo trần 4B prefill thật trên vLLM.
+
 ## SPEC DECODING NGRAM (2026-08-14): OFF MẶC ĐỊNH TRÊN L4 — đo 2 model × 2 mức tải
 
 Profile `-spec` (ngram k=4, prompt-lookup 2-4) thêm vào run.sh; cùng runtime,

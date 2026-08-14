@@ -68,6 +68,16 @@ xác định), (c) bilinear/MLP.
   #44223 connector interface; tạm thời PoC bằng transformers generate với
   past_key_values ghép.
 
+## E1 ĐÃ CHẠY (2026-08-15) — copy thô thắng, ridge thua
+
+12 trial needle (1,5K tok, needle 25/50/75%): **copy nguyên cache 4B→9B: 12/12,
+NLL 0,043** (self-prefill 0,011); ridge mapper: 0/12, NLL 2,68 (heldout R² attn
+0,726/GDN 0,600 — thiếu là chết); no_ctx sàn: 0/12, NLL 10. TTFT 1,5K:
+0,889s → 0,702s (×1,27); trần lý thuyết ×2 ở 30K ctx. Kết luận: cặp Qwen3.5
+4B/9B cache-compatible thô (shape trùng hệt) — KHÔNG cần mapper cho cặp này;
+mapper chỉ còn giá trị cho cặp lệch shape (9B↔27B GDN 32/48). R² không phải
+proxy retention — đo chức năng mới tin. Chi tiết STATUS.md mục E1.
+
 ## Nói thật về giá trị trên 1×L4
 
 L4 đơn không giữ nổi 2 model cùng lúc (18,6+9,1GB) — use-case swap-giữa-hội-thoại

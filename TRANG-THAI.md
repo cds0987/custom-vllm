@@ -31,15 +31,16 @@ Cập nhật: 2026-08-14.
 - Paper 2608.03893: mapper tự cài ở `models/qwen3_5/kv_transfer/` (không có code
   chính thức). **E0 phán quyết: context sống ở CẢ GDN state lẫn KV** (needle
   10/10 → 0/10 khi xóa một trong hai) → Phase B GDN-mapping bắt buộc.
-- Cặp ưu tiên: 4B↔9B (matched toàn phần, lớp 1:1, cùng vừa 1 L4).
-- **E1 gia cố chất lượng (2026-08-15, commit đã push)**: held-out R² (40 seq),
-  cổng identity 9B→9B (R²<0.99 = fail sớm), guard transplant no-op (checksum),
-  protocol đối xứng (mọi điều kiện prefill [:-1] + nạp token cuối), sàn no_ctx,
-  needle 3 vị trí 25/50/75%.
-- **Runtime recycle 2026-08-15 (host f9bba2ca1d97): MẤT calib 5.9GB×2 + frame4b**
-  (bài học quy tắc 6). Chuỗi FULL đang chạy nền PID file /content/logs/e1_full.pid,
-  log e1_full.log: collect 4B → collect 9B → identity gate → fit → eval 12 trial
-  (mốc cuối: dòng `E1_CHAIN_DONE`). Ước ~2-3h.
+- **E1 XONG (2026-08-15): COPY NGUYÊN cache 4B→9B giữ 100% needle (12/12,
+  NLL 0,043 vs self 0,011, transplant 0,08s); ridge mapper 0/12 (R² heldout
+  0,73/0,60 — thiếu là chết); no_ctx sàn 0/12.** TTFT 1,5K: ×1,27; trần ×2 @30K.
+  Kết luận: cặp Qwen3.5 4B/9B cache-compatible THÔ, không cần mapper; mapper chỉ
+  còn cho cặp lệch shape (27B). R² không phải proxy retention. Chi tiết STATUS.md.
+- Identity gate cứu 1 vòng GPU (bắt bug λ GDN); calib mất 1 lần do runtime
+  recycle (đã thu lại); chuẩn phóng nền mới: subprocess.Popen thay !nohup.
+- **Chờ user quyết E2**: (a) eval khó hơn needle (QA/ppl continuation, ctx dài),
+  (b) đo trần 4B prefill thật trên vLLM (serve 4b), (c) PoC cascade 4B-prefill→
+  9B-decode. Calib + mapper còn trên runtime /content (sẽ mất khi recycle).
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
