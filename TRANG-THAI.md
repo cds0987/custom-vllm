@@ -26,6 +26,17 @@ Cập nhật: 2026-08-14.
   vẫn còn trong run.sh cho GPU lớn.
 - Chiến dịch 9B ĐÓNG SẠCH (Q2c/Q3/Q4/R2b/P7/cổng đồng thời — chi tiết STATUS.md).
 
+## Nghiên cứu KV-transfer (lệnh user 2026-08-14, đang chạy)
+
+- Paper 2608.03893: mapper tự cài ở `models/qwen3_5/kv_transfer/` (không có code
+  chính thức). **E0 phán quyết: context sống ở CẢ GDN state lẫn KV** (needle
+  10/10 → 0/10 khi xóa một trong hai) → Phase B GDN-mapping bắt buộc.
+- Cặp ưu tiên: 4B↔9B (matched toàn phần, lớp 1:1, cùng vừa 1 L4). Kế tiếp = E1:
+  calib 2 model bf16 (collect_calib cần cập nhật theo cache thật DynamicCache/
+  LinearAttentionLayer) → fit attention-ridge + GDN 3 nấc (copy/ridge-cột/MLP)
+  → đo retention + speedup TTFT.
+- 4B frame W4A16 đã tải sẵn /content/models/frame4b (cho profile serve 4b sau).
+
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
 1. ✅ Spec decoding — đóng bằng số đo.

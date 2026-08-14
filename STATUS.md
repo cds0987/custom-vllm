@@ -752,6 +752,25 @@ Cùng runtime/config với Q2c (mml=65536, baseline 329,5 tasks/hr):
   est chỉ +~1K; --context-limit-tokens so với EST chứ không phải token thật.
   Cần sửa harness: dùng cùng một thang (ưu tiên real qua usage) — TODO.
 
+## KV-TRANSFER E0 (2026-08-14): CONTEXT SỐNG Ở CẢ GDN LẪN KV — transfer chỉ-attention KHÔNG ĐỦ
+
+Nghiên cứu arXiv:2608.03893 (ridge mapper cross-model, không có code chính thức —
+tự cài `models/qwen3_5/kv_transfer/`, 4/4 unit test). E0 needle-in-context trên
+Qwen3.5-4B bf16 (10 trial, ablation cache sau prefill):
+
+    nguyên vẹn 10/10 (NLL 0,069) | xóa GDN 0/10 (5,6) | xóa KV 0/10 (11,8)
+
+- Phase B (GDN-state mapping — vùng paper bỏ ngỏ) là BẮT BUỘC với họ hybrid.
+- Cặp ưu tiên: **4B↔9B** (matched TOÀN PHẦN kể cả GDN 16/32×128, lớp 1:1, cùng
+  vừa 1 L4 → cascade 1-GPU). 27B để sau (GDN v-heads lệch 32/48).
+- Bẫy đo bị bắt 2 lần: (1) zero cache không chạm tensor → 3 điều kiện trùng
+  từng số lẻ (đã thêm hard-fail guard); (2) pgrep/pkill TỰ KHỚP chuỗi lệnh
+  wrapper → "đang chạy" giả + tự giết launcher. Quy tắc mới: kill theo PID,
+  pattern kiểu '[e]0...' cũng không an toàn trong bash -lc.
+- Bug ghi nhận: champion config có quant group `group_size: 0` — vLLM tha,
+  transformers/compressed-tensors decompress TỪ CHỐI → calib trên champion cần
+  fix config hoặc dùng bf16 gốc (9B bf16 ~18,4GB vừa L4 cho batch-1).
+
 ## SPEC DECODING NGRAM (2026-08-14): OFF MẶC ĐỊNH TRÊN L4 — đo 2 model × 2 mức tải
 
 Profile `-spec` (ngram k=4, prompt-lookup 2-4) thêm vào run.sh; cùng runtime,

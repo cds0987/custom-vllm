@@ -36,9 +36,24 @@ transfer chỉ-attention đã có giá trị. Nếu không → phải giải bà
 (32→48 v-heads, mỗi state 128×128/head, chỉ 1 mẫu/sequence — bài toán fit
 khác hẳn, cần dạng bilinear S_t ≈ A·S_s·B hoặc MLP).
 
-→ **THÍ NGHIỆM E0 (rẻ nhất, 1 model, không cần mapper):** trên 9B, prefill 2K
-token → xóa GDN state (giữ KV) → decode tiếp, so chất lượng với nguyên vẹn.
-Đo được ngay "context sống ở đâu" trong hybrid.
+→ **E0 ĐÃ CHẠY (2026-08-14, Qwen3.5-4B bf16, 10 trial needle-in-context 1,5K tok):**
+
+    điều kiện            needle    NLL/token
+    nguyên vẹn           10/10     0,069
+    xóa GDN (giữ KV)     0/10      5,6
+    xóa KV (giữ GDN)     0/10      11,8
+
+**PHÁN QUYẾT: context sống ở CẢ HAI — transfer chỉ-attention KHÔNG đủ cho họ
+hybrid này; Phase B (GDN mapping) là BẮT BUỘC.** (Hai lần chạy đầu vô hiệu vì
+zero không chạm tensor — guard hard-fail đã thêm; cache thật: DynamicCache với
+layers[i] là DynamicLayer{keys,values} | LinearAttentionLayer{conv_states,
+recurrent_states}.)
+
+Cặp ưu tiên đổi từ 9B↔27B sang **4B↔9B**: GDN shapes trùng hệt (16/32×128),
+lớp 1:1 (cùng 32 lớp interval 4), cả hai vừa CÙNG một L4 → use-case cascade
+1-GPU thật. Phase B ba nấc: (a) copy nguyên state (shapes trùng, chi phí 0),
+(b) ridge per-head theo CỘT state (200 seq × 128 cột = 25,6K mẫu 128-dim — đủ
+xác định), (c) bilinear/MLP.
 
 ## Kế hoạch phase (GPU L4, notebook A, mọi bước nohup nền)
 
