@@ -118,8 +118,9 @@ def main():
 
     # ---- phase B: 9B — 5 conditions ----
     tok_t, model_t = e5.load_4bit(args.tgt_model)
-    CONDS = ["self", "copy_fp16_W0", "copy_bf16_W0", "copy_bf16_W32",
-             "copy_bf16_W128"]
+    CONDS = (["self", "copy_bf16_W0", "copy_fp16_W0"] if args.bf16_models
+             else ["self", "copy_fp16_W0", "copy_bf16_W0", "copy_bf16_W32",
+                   "copy_bf16_W128"])
     res = {c: {"hit": 0, "nll": []} for c in CONDS}
     with torch.no_grad():
         for bi, (prompt, gold, fn_name) in enumerate(items):
