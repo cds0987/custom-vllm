@@ -42,7 +42,7 @@ e1 = importlib.util.module_from_spec(spec1)
 spec1.loader.exec_module(e1)
 
 L_CTX = 768
-T2 = 96
+T2 = 32   # 96 OOMed: backward graph through 48 GDN torch-fallback layers ~3.7GB
 CONV_WARM = 4
 
 
@@ -257,7 +257,7 @@ def main():
 
     cdir = Path(args.src_cache_dir)
     cdir.mkdir(parents=True, exist_ok=True)
-    done_marker = cdir / f"DONE_{args.steps}_{args.eval_trials}"
+    done_marker = cdir / f"DONE_{args.steps}_{args.eval_trials}_T{T2}"
 
     # ---------------- PHASE A: 4B alone -> spill source caches --------------
     if not done_marker.exists():
