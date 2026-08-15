@@ -61,7 +61,11 @@ Cập nhật: 2026-08-14.
   chốt trong STATUS. Tóm tắt: (1) 9B-copy trên BFCL: NLL parity 99% nhưng
   greedy hit 6/20 — vết nứt biên-mỏng; E6b loại nhiễu spill, phát hiện
   **suffix re-prefill phản tác dụng** (luật nhất quán nội tại của cache);
-  E6c đang kiểm nghi phạm cuối (bnb vs bf16). (2) 27B-mapper v2 hội tụ trong
+  **E6c chốt: bnb gánh nửa vết nứt (bf16 copy 9/20 vs bnb 4-6/20), nửa còn
+  lại là information bottleneck thật của cache 4B ở biên mỏng** — copy NLL
+  thậm chí TỐT hơn self (2,43 vs 2,64) mà greedy vẫn thua: error-placement
+  lần 4. Scope copy an toàn: chat/QA/RAG; function-calling cần polisher
+  (đo lại trên W4A16 Marlin thật trong Phase C). (2) 27B-mapper v2 hội tụ trong
   miền (KL 0,63) nhưng 0/20 ngoài miền — v3 cần miền train đa dạng. (3) Ma
   trận 8 cặp: **pairability = CCA-GDN ≥ 0,9**; attention thẳng hàng toàn họ;
   {0.8B,2B} GDN lạc hệ; 4B→27B là cặp học sáng nhất (0,785).

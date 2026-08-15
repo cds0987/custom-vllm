@@ -972,8 +972,24 @@ KL hội tụ 134,7 → đáy 0,632 (v1 chưa từng dưới 17). Nhưng:
   giới 4B-cache/9B-native là điểm gãy nhất quán (key hai model lệch thang →
   softmax nhìn qua ranh giới bị méo; GDN state 4B + động lực học 9B = trạng
   thái lai). **Cache copy sống nhờ NHẤT QUÁN NỘI TẠI; trộn là phá** — đo trực
-  tiếp bài học transition-point của DroidSpeak. Nghi phạm cuối: bnb-4bit
-  (mọi kết quả 100% trước là bf16) — E6c đang kiểm.
+  tiếp bài học transition-point của DroidSpeak.
+
+**E6c (bf16 toàn tuyến — nghi phạm cuối) — PHÁN QUYẾT VỤ GREEDY: hai thủ phạm,
+mỗi bên một nửa**:
+
+    self 19/20 (NLL 2,637) | copy bf16 9/20 (NLL 2,430!) | copy fp16 10/20
+
+- bnb-4bit của harness gánh ~nửa vết nứt (bnb 4-6/20 → bf16 9-10/20). Nửa còn
+  lại (10 vs 19) là GIỚI HẠN THẬT của cache 4B với quyết định biên mỏng —
+  information bottleneck đúng nghĩa C2C mô tả.
+- Nghịch lý error-placement lần 4, mạnh nhất: copy NLL 2,430 TỐT HƠN self
+  2,637 mà greedy vẫn thua 9 vs 19 — cache copy "tự tin trung bình" hơn nhưng
+  đặt sai lệch đúng các bước 51/49.
+- Kết luận vận hành: production W4A16 Marlin (sạch hơn bnb nf4) kỳ vọng nằm
+  giữa hai mức — PHẢI đo lại trong Phase C trên vLLM thật. Copy scope an toàn:
+  chat/QA/RAG; function-calling nghiêm ngặt cần target-side polisher (mapper
+  nhỏ train functional trên chính 9B — không phải suffix-repair đã bị bác)
+  hoặc giới hạn task.
 
 **E7 (ma trận 8 cặp, needle tile-transplant + CCA + variance-explained)**:
 
