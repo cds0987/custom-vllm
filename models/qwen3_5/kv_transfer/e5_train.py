@@ -45,6 +45,10 @@ spec = importlib.util.spec_from_file_location(
     "e2_suite", Path(__file__).parent / "e2_suite.py")
 e2 = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(e2)
+spec1 = importlib.util.spec_from_file_location(
+    "e1_pipeline", Path(__file__).parent / "e1_pipeline.py")
+e1 = importlib.util.module_from_spec(spec1)
+spec1.loader.exec_module(e1)
 
 L_CTX = 1024
 T2 = 128
@@ -212,7 +216,7 @@ def main():
     tok_t, model_t = load_4bit(args.tgt_model)
     cfg_s = model_s.config.get_text_config()
     cfg_t = model_t.config.get_text_config()
-    theta_s, theta_t = e2.get_rope_theta(cfg_s), e2.get_rope_theta(cfg_t)
+    theta_s, theta_t = e1.get_rope_theta(cfg_s), e1.get_rope_theta(cfg_t)
 
     # probe layer structure with a dummy forward
     with torch.no_grad():
