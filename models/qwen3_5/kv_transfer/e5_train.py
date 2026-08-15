@@ -50,8 +50,8 @@ spec1 = importlib.util.spec_from_file_location(
 e1 = importlib.util.module_from_spec(spec1)
 spec1.loader.exec_module(e1)
 
-L_CTX = 1024
-T2 = 128
+L_CTX = 768
+T2 = 96
 CONV_WARM = 4
 
 
@@ -249,16 +249,19 @@ def main():
             with torch.no_grad():
                 src_past = model_s(input_ids=ctx, use_cache=True,
                                    logits_to_keep=1).past_key_values
-                tch = model_t(input_ids=ctx, use_cache=True,
-                              logits_to_keep=1)
-                tch_out = model_t(input_ids=suffix,
-                                  past_key_values=tch.past_key_values,
-                                  use_cache=True)
-                tch_logp = torch.log_softmax(
-                    tch_out.logits[:, CONV_WARM:].float(), -1)
-                # teacher cache re-prefill for aux target (ctx-only cache)
+                # ONE teacher prefill; suffix runs on a throwaway deepcopy so
+                # tch_past stays ctx-only (aux target + student template).
+                # Memory is the scarcest resource here: bnb keeps embed/lm_head
+                # in bf16, weights alone ~21GB of the L4.
+                import copy as _c
                 tch_past = model_t(input_ids=ctx, use_cache=True,
                                    logits_to_keep=1).past_key_values
+                tch_ext = _c.deepcopy(tch_past)
+                tch_logp = torch.log_softmax(
+                    model_t(input_ids=suffix, past_key_values=tch_ext,
+                            use_cache=True).logits[:, CONV_WARM:].float(), -1)
+                del tch_ext
+                torch.cuda.empty_cache()
             student_past = build_student_past(tch_past, src_past, mapper)
             out = model_t(input_ids=suffix, past_key_values=student_past,
                           use_cache=True)
@@ -268,6 +271,8 @@ def main():
             lam = max(0.0, 1.0 - step / (0.3 * args.steps))
             loss = kl + lam * aux_mse(student_past, tch_past)
             opt.zero_grad(); loss.backward(); opt.step()
+            del student_past, out, stu_logp, tch_logp, src_past, tch_past
+            torch.cuda.empty_cache()
             if step % 10 == 0:
                 print(f"step {step}/{args.steps} KL {float(kl):.4f} "
                       f"lam {lam:.2f} ({time.time()-t0:.0f}s)")
