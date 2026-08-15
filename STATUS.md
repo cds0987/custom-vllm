@@ -836,6 +836,34 @@ lên sau 511s (fresh env). → Cascade 4B-prefill→9B-decode trên số vLLM: T
   cascade production cần connector hoặc hack engine = Phase C. Số trên là
   trần đo được từ thành phần, ghép tuần tự trên 1 L4.
 
+## KV-TRANSFER E3 (2026-08-15): BỘ CHỈ SỐ 9B ĐO LẠI QUA CROSS @30K + BỨC TƯỜNG ĐỒNG TRÚ vLLM
+
+E3A (`e3_bench.py`, chunked prefill 4096, 4 trial @30K, bf16):
+
+    điều kiện   QA     cont-NLL   decode      first-step
+    self        2/2    2,235      11,8 tok/s  0,139s
+    **copy**    **2/2  2,467      11,8 tok/s  0,085s**
+    no_ctx      0/2    2,732      12,9        —
+
+- **Decode parity XÁC NHẬN**: 11,8 = 11,8 — decode không quan tâm cache từ đâu
+  → mọi số decode/throughput 9B thuần (34-36 conc1, 390 conc32) GIỮ NGUYÊN cho
+  cross. TTFT transformers ×1,24 (18,66→15,02s); số vLLM thật ×1,66.
+- Retention "hiểu" theo chiều dài: 74% @2K → 69% @8K → 58% @16K → **53% @30K**
+  (suy giảm đơn điệu — trần của copy thô, cần ghi khi bán).
+
+E3B đồng trú 2 server trên 1 L4: **4 lần chết = 4 ràng buộc đo được**:
+1. KV 9B ≥ mml tối thiểu (util 0,62 cho 0,86GiB < 0,9GiB cần cho mml 65536).
+2. Hybrid GDN: max_num_seqs ≤ số Mamba block (mặc định 256 > 193 → chết).
+3. CUDA graphs ăn ~6% util ẩn (0,62 hiệu dụng 0,55).
+4. **BỨC TƯỜNG: vLLM 0.27.1 tính non-torch memory bằng NVML — cộng cả VRAM
+   của process KHÁC vào chi phí mình** → server thứ 2 cần util ≥0,84 cho KV
+   nhưng check khởi động chặn ≤0,38 (free 8,5GiB) — mâu thuẫn, đồng trú naive
+   BẤT KHẢ THI. Lối thoát đã xác định: `--kv-cache-memory-bytes` (bỏ profiling,
+   có trong EngineArgs) — chưa thử. Ngoài ra EngineArgs có `kv_transfer_config`
+   (khung KVConnector) = cửa Phase C.
+- Bẫy vận hành mới: killpg chuỗi launcher giết luôn server con (9B) — server
+  sống lâu phải setsid tách khỏi chuỗi phóng, hoặc chỉ kill launcher theo PID.
+
 ## SPEC DECODING NGRAM (2026-08-14): OFF MẶC ĐỊNH TRÊN L4 — đo 2 model × 2 mức tải
 
 Profile `-spec` (ngram k=4, prompt-lookup 2-4) thêm vào run.sh; cùng runtime,

@@ -38,13 +38,19 @@ Cập nhật: 2026-08-14.
   còn cho cặp lệch shape (27B). R² không phải proxy retention. Chi tiết STATUS.md.
 - Identity gate cứu 1 vòng GPU (bắt bug λ GDN); calib mất 1 lần do runtime
   recycle (đã thu lại); chuẩn phóng nền mới: subprocess.Popen thay !nohup.
-- **E2 XONG (2026-08-15, user duyệt "làm hết")**: QA đa fact copy **9/9 tới
-  16K**; cont-NLL copy giữ 58-74% lợi ích ngữ cảnh; transplant 2-8ms. vLLM
-  `serve 4b` (profile MỚI trong run.sh): 4B prefill 5514/5307/4771 tok/s
-  @4K/16K/30K vs 9B 2789-2934 → **cascade TTFT 30K ×1,66** (10,45→6,3s), KV 4B
-  752K token. Chặn production: vLLM chưa bơm được cache ngoài (RFC #44223) →
-  Phase C = connector/engine hack, chờ user duyệt hướng.
-- Bug OOM lm_head prefill ≥8K đã sửa (`logits_to_keep=1`).
+- **E2+E3 XONG (2026-08-15)**: copy giữ QA 9/9 tới 16K và 2/2 @30K; retention
+  "hiểu" giảm đơn điệu 74%@2K → 53%@30K; **decode parity 11,8=11,8 tok/s**
+  (mọi số decode 9B thuần giữ nguyên cho cross); 4B prefill vLLM 4771-5514
+  tok/s → cascade TTFT 30K ×1,66. Chi tiết STATUS mục E1/E2/E3.
+- **E3B: đồng trú 2 vLLM server trên 1 L4 naive = BẤT KHẢ THI** (0.27.1 tính
+  non-torch bằng NVML, cộng VRAM process khác vào mình — 4 ràng buộc ghi
+  STATUS). Lối thoát chưa thử: `--kv-cache-memory-bytes`. EngineArgs có
+  `kv_transfer_config` = khung KVConnector cho Phase C.
+- **E4 ĐANG CHẠY** (lệnh user: chọn learning algorithm bằng số liệu, không
+  đoán): thống kê phân phối cache 4B/9B/27B-bnb4bit — kurtosis/eff-rank,
+  ‖Â−I‖ + phổ Â, đấu 5 ứng viên held-out (identity/Procrustes/scaled/ridge/
+  concat-ridge full-recipe NVIDIA), CCA cross-capacity (go/no-go cho 27B).
+  Log /content/logs/e4_full.log, kết quả e4_stats.json.
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 

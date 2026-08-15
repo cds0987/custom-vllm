@@ -86,6 +86,16 @@ lợi ích ngữ cảnh (mất 0,06-0,10 NLL so với self); transplant 2-8ms. v
 → cascade TTFT 30K: 10,45s → ~6,3s (×1,66). Chặn production: vLLM chưa có
 đường bơm cache ngoài (RFC #44223) — Phase C = connector. Chi tiết STATUS.md.
 
+## E3 ĐÃ CHẠY (2026-08-15) — decode parity + bức tường đồng trú
+
+@30K: copy QA 2/2, cont-NLL giữ 53% (retention giảm đơn điệu theo chiều dài:
+74/69/58/53% @2/8/16/30K); **decode 11,8=11,8 tok/s — parity, số decode 9B
+thuần áp nguyên cho cross**. Đồng trú 2 server naive bất khả thi trên vLLM
+0.27.1 (non-torch memory tính bằng NVML gồm cả process khác); lối thoát:
+`--kv-cache-memory-bytes`; Phase C đi qua `kv_transfer_config`/KVConnector.
+E4 (đang chạy): chọn thuật toán map bằng phân phối dữ liệu — 5 ứng viên
+đóng-form + CCA, gồm concat-ridge full-recipe của paper. Chi tiết STATUS.md.
+
 ## Nói thật về giá trị trên 1×L4
 
 L4 đơn không giữ nổi 2 model cùng lúc (18,6+9,1GB) — use-case swap-giữa-hội-thoại
