@@ -807,6 +807,35 @@ mọi điều kiện prefill [:-1] + nạp token cuối):
   E2 trước khi tin: eval khó hơn needle (QA/ppl continuation), ctx dài hơn,
   và đo trần 4B prefill thật trên vLLM.
 
+## KV-TRANSFER E2 (2026-08-15): COPY 4B→9B GIỮ QA 9/9 TỚI 16K; TRẦN PREFILL 4B vLLM ~1,8× 9B
+
+E2a (`e2_suite.py`, bf16 tuần tự, cache spill đĩa fp16): QA đa fact (3 mã ở
+20/50/80% ctx, hỏi xoay) + cont-NLL 200 token FineWeb thật, L = 2K/8K/16K:
+
+    L       QA self/copy/no_ctx   cont-NLL self/copy/no_ctx   TTFT tfm: self vs 4B+ghép
+    2K      3/3  3/3  0/3         2,092  2,152  2,325         1,00s vs 0,80s (×1,25)
+    8K      3/3  3/3  0/3         2,063  2,126  2,264         4,65s vs 3,59s (×1,30)
+    16K     3/3  3/3  0/3         2,279  2,382  2,525         10,46s vs 8,30s (×1,26)
+
+- **QA copy 9/9 mọi độ dài** — truy xuất không suy giảm theo ctx. **Cont-NLL:
+  copy giữ 58-74% lợi ích ngữ cảnh** (self→no_ctx cách 0,20-0,25 NLL; copy chỉ
+  mất 0,06-0,10) — "hiểu" giữ phần lớn, không trọn. Transplant 2-8ms (ghi đè
+  tensor thuần, đo tách khỏi disk-spill).
+- Tỷ lệ prefill 4B/9B trên transformers chỉ ~0,8 (GDN torch fallback nghẽn) →
+  ×1,25-1,30. Số vLLM mới là thật (dưới).
+
+E2b (`run.sh serve 4b` mới — frame RedHatAI W4A16, config như 9B; prefill_bench
+cache-proof): **4B prefill 5514 / 5307 / 4771 tok/s @4K/16K/30K** (9B champion:
+2789-2934) = **×1,8-1,9**; KV cache 752.239 token (9B: 560.380, +34%). Server
+lên sau 511s (fresh env). → Cascade 4B-prefill→9B-decode trên số vLLM: TTFT 30K
+10,45s → ~6,3s (**×1,66**); 4K: 1,38s → 0,73s (×1,9).
+
+- Bug bắt giữa chừng: OOM lm_head khi prefill 9B ≥8K (logits full-seq 3,7GB)
+  → `logits_to_keep=1` ở mọi forward prefill; expandable_segments bật.
+- Trạng thái tích hợp: vLLM CHƯA có đường bơm cache ngoài (RFC #44223 mở) —
+  cascade production cần connector hoặc hack engine = Phase C. Số trên là
+  trần đo được từ thành phần, ghép tuần tự trên 1 L4.
+
 ## SPEC DECODING NGRAM (2026-08-14): OFF MẶC ĐỊNH TRÊN L4 — đo 2 model × 2 mức tải
 
 Profile `-spec` (ngram k=4, prompt-lookup 2-4) thêm vào run.sh; cùng runtime,

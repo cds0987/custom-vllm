@@ -78,6 +78,14 @@ NLL 0,043** (self-prefill 0,011); ridge mapper: 0/12, NLL 2,68 (heldout R² attn
 mapper chỉ còn giá trị cho cặp lệch shape (9B↔27B GDN 32/48). R² không phải
 proxy retention — đo chức năng mới tin. Chi tiết STATUS.md mục E1.
 
+## E2 ĐÃ CHẠY (2026-08-15) — copy trụ tới 16K; trần vLLM ×1,66-1,9
+
+`e2_suite.py`: QA đa fact copy **9/9** ở 2K/8K/16K; cont-NLL copy giữ 58-74%
+lợi ích ngữ cảnh (mất 0,06-0,10 NLL so với self); transplant 2-8ms. vLLM
+(`serve 4b` mới): 4B prefill 5514/5307/4771 tok/s @4K/16K/30K vs 9B 2789-2934
+→ cascade TTFT 30K: 10,45s → ~6,3s (×1,66). Chặn production: vLLM chưa có
+đường bơm cache ngoài (RFC #44223) — Phase C = connector. Chi tiết STATUS.md.
+
 ## Nói thật về giá trị trên 1×L4
 
 L4 đơn không giữ nổi 2 model cùng lúc (18,6+9,1GB) — use-case swap-giữa-hội-thoại

@@ -38,9 +38,13 @@ Cập nhật: 2026-08-14.
   còn cho cặp lệch shape (27B). R² không phải proxy retention. Chi tiết STATUS.md.
 - Identity gate cứu 1 vòng GPU (bắt bug λ GDN); calib mất 1 lần do runtime
   recycle (đã thu lại); chuẩn phóng nền mới: subprocess.Popen thay !nohup.
-- **Chờ user quyết E2**: (a) eval khó hơn needle (QA/ppl continuation, ctx dài),
-  (b) đo trần 4B prefill thật trên vLLM (serve 4b), (c) PoC cascade 4B-prefill→
-  9B-decode. Calib + mapper còn trên runtime /content (sẽ mất khi recycle).
+- **E2 XONG (2026-08-15, user duyệt "làm hết")**: QA đa fact copy **9/9 tới
+  16K**; cont-NLL copy giữ 58-74% lợi ích ngữ cảnh; transplant 2-8ms. vLLM
+  `serve 4b` (profile MỚI trong run.sh): 4B prefill 5514/5307/4771 tok/s
+  @4K/16K/30K vs 9B 2789-2934 → **cascade TTFT 30K ×1,66** (10,45→6,3s), KV 4B
+  752K token. Chặn production: vLLM chưa bơm được cache ngoài (RFC #44223) →
+  Phase C = connector/engine hack, chờ user duyệt hướng.
+- Bug OOM lm_head prefill ≥8K đã sửa (`logits_to_keep=1`).
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
