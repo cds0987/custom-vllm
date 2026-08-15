@@ -116,6 +116,17 @@ backprop + Adam8bit). KL 134,7→18-45 (÷4-5) nhưng needle mapped 0/10 (= sàn
 dense per-layer supervision, hoặc đường 2 chặng 4B→9B(copy)+9B→27B(học).
 Chi tiết STATUS mục E5.
 
+## E6/E7/E6b (2026-08-15) — benchmark thật, ma trận 8 cặp, luật nhất quán
+
+- BFCL: 9B-copy NLL parity 99% nhưng greedy hit 6/20 (self 19/20) — biên mỏng
+  lật argmax; 27B-mapper v2 hội tụ trong miền (KL 0,63) nhưng 0/20 ngoài miền.
+- E6b: fp16-spill vô can; **suffix re-prefill phản tác dụng** (32 tok: 2/20,
+  128 tok: 1/20) → LUẬT: cache copy sống nhờ nhất quán nội tại, mọi ranh giới
+  trộn 2 model là điểm gãy. E6c đang kiểm nghi phạm cuối (bnb vs bf16).
+- E7: **pairability = CCA-GDN ≥ 0,9**; attention thẳng hàng toàn họ; họ
+  {0.8B,2B} GDN lạc hệ (0,23); 4B→27B (0,785) là cặp học sáng nhất.
+  Chi tiết STATUS mục E6+E7+E6b.
+
 ## Nói thật về giá trị trên 1×L4
 
 L4 đơn không giữ nổi 2 model cùng lúc (18,6+9,1GB) — use-case swap-giữa-hội-thoại

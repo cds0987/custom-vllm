@@ -944,6 +944,58 @@ tràn ly. Train 400 bước ổn định, 4,7s/bước, GPU 22,4GB không creep.
 - Hàng E5 v2 (chờ user duyệt scale): steps 2000+, mapper MLP per-head,
   needle-aware calib, per-layer output matching, thử nguồn 9B.
 
+## KV-TRANSFER E6+E7+E6b (2026-08-15): BENCHMARK THẬT + MA TRẬN 8 CẶP + MỔ VẾT NỨT GREEDY
+
+**E6 (train hội tụ + BFCL 20 câu function-calling)**: mapper 4B→27B v2 (2000
+bước, needle-mix 40%, dense supervision 16 hook, cosine, Adam8bit, cycle 600
+mẫu — 2000 spill = 112GB từng làm ĐẦY ĐĨA, bài học mới quy tắc vận hành):
+KL hội tụ 134,7 → đáy 0,632 (v1 chưa từng dưới 17). Nhưng:
+
+    đường                self NLL/hit      xfer NLL/hit      no_ctx
+    27B + mapper v2      2,597 / 14/20     7,042 / 0/20      7,355 / 0/20
+    9B + copy thô 4B     2,461 / 19/20     **2,497 / 6/20**  7,091 / 0/20
+
+- 27B-mapper: hội tụ TRONG MIỀN nhưng chết NGOÀI MIỀN (train văn xuôi 480 tok
+  vs đề JSON 2K tok) — lỗi miền train, không phải lỗi cặp. ifstruct/parsebench
+  schema không khớp field-picker (nợ v3).
+- **9B-copy trên task thật: NLL parity ~99% nhưng greedy hit 6/20 vs 19/20** —
+  vết nứt đầu tiên của copy: lệch logit nhỏ (vô hình với NLL) lật argmax trong
+  chuỗi 24 token khi biên quyết định mỏng (chọn tên hàm). Echo trực tiếp phát
+  hiện r=−0,20 của NVIDIA: error PLACEMENT > error magnitude.
+
+**E6b (mổ tận gốc vết nứt, 5 điều kiện cùng 20 câu)**:
+
+    self 19/20 | copy fp16 6/20 | copy bf16-spill 4/20
+    | copy + 9B tự đọc 32 tok cuối: 2/20 | 128 tok cuối: 1/20 (NLL cũng tệ đi)
+
+- Nhiễu fp16-spill: VÔ CAN. **Suffix re-prefill PHẢN TÁC DỤNG** — mỗi ranh
+  giới 4B-cache/9B-native là điểm gãy nhất quán (key hai model lệch thang →
+  softmax nhìn qua ranh giới bị méo; GDN state 4B + động lực học 9B = trạng
+  thái lai). **Cache copy sống nhờ NHẤT QUÁN NỘI TẠI; trộn là phá** — đo trực
+  tiếp bài học transition-point của DroidSpeak. Nghi phạm cuối: bnb-4bit
+  (mọi kết quả 100% trước là bf16) — E6c đang kiểm.
+
+**E7 (ma trận 8 cặp, needle tile-transplant + CCA + variance-explained)**:
+
+    cặp        needle   CCA-attnK  CCA-GDN   VarExpl-attnK  VarExpl-GDN
+    4B→9B      5/5      0,996      0,916     0,531          0,051
+    4B→27B     N/A(*)   0,992      0,785     0,234          −0,646
+    2B→4B      0/5      0,979      0,232     0,488          −0,134
+    2B→9B      0/5      0,977      0,232     0,451          −0,127
+    2B→27B     0/5      0,962      0,246     0,267          −0,105
+    0.8B→4B    0/5      0,976      0,231     0,416          −0,355
+    0.8B→9B    0/5      0,974      0,234     0,381          −0,382
+    0.8B→27B   0/5      0,960      0,244     0,201          −0,467
+    (*) tỷ lệ GDN head 32→48 không nguyên, không có dạng tile; mapper = E6.
+
+- **PAIRABILITY SCORE tìm thấy: CCA-GDN ≥ ~0,9 ⟺ copy/tile sống.** Attention
+  thẳng hàng TOÀN HỌ (0,96+) — số phận mỗi cặp nằm 100% ở GDN.
+- Họ {0.8B, 2B}: GDN CCA ~0,23 với mọi model lớn — chế độ mã hóa khác hẳn
+  (16 v-head không phải bản thu nhỏ); không có đường tắt, muốn dùng làm
+  prefill-servant phải functional-mapper hoặc compatibility-finetuning.
+- 4B→27B GDN CCA 0,785 = cặp-học-được sáng nhất ngoài họ (chọn cặp E5/E6 đúng).
+- Variance-explained PHẢN chức năng lần 3 (4B→9B chỉ 0,53/0,05 mà copy 100%).
+
 ## SPEC DECODING NGRAM (2026-08-14): OFF MẶC ĐỊNH TRÊN L4 — đo 2 model × 2 mức tải
 
 Profile `-spec` (ngram k=4, prompt-lookup 2-4) thêm vào run.sh; cùng runtime,

@@ -57,14 +57,18 @@ Cập nhật: 2026-08-14.
   4B prefill đồng trú 3406 tok/s @30K (71% solo) → TTFT chỉ còn ×1,15-1,2.
   1-GPU cascade = khả thi cơ học, đáng giá khi ít phiên + nhiều cold-miss;
   giá trị lớn ở 2-GPU. Chi tiết STATUS mục E3C.
-- **E5 v1 XONG (2026-08-15)**: hạ tầng train mapper qua 27B đóng băng trên
-  MỘT L4 chạy được (2 pha, suffix backprop, Adam8bit — 5 OOM postmortem trong
-  STATUS). KL ÷4-5 (134,7→18-45) nhưng **needle mapped 0/10** — functional
-  loss học được, chưa qua ngưỡng truy xuất (đúng dự đoán tường mid-GDN CCA
-  0,27). Mapper checkpoint /content/mapper_e5.pt.
-- **Chờ user duyệt E5 v2** (scale: 2000+ bước / needle-aware data / dense
-  per-layer supervision / đường 2 chặng 4B→9B copy + 9B→27B học) — hoặc
-  chuyển ưu tiên sang Phase C KVConnector cho cặp 4B→9B đã chứng minh.
+- **E5→E6→E7→E6b XONG (2026-08-15, ngày thí nghiệm dài nhất dự án)** — số
+  chốt trong STATUS. Tóm tắt: (1) 9B-copy trên BFCL: NLL parity 99% nhưng
+  greedy hit 6/20 — vết nứt biên-mỏng; E6b loại nhiễu spill, phát hiện
+  **suffix re-prefill phản tác dụng** (luật nhất quán nội tại của cache);
+  E6c đang kiểm nghi phạm cuối (bnb vs bf16). (2) 27B-mapper v2 hội tụ trong
+  miền (KL 0,63) nhưng 0/20 ngoài miền — v3 cần miền train đa dạng. (3) Ma
+  trận 8 cặp: **pairability = CCA-GDN ≥ 0,9**; attention thẳng hàng toàn họ;
+  {0.8B,2B} GDN lạc hệ; 4B→27B là cặp học sáng nhất (0,785).
+- Deep-innovation đề xuất (từ deep-research doc + số của ta): weight-derived
+  conjugation GDN (#1), activation-splicing (#2), pairability score (#3 — đã
+  có data), importance-weighted loss (#4), compatibility-finetuning 0.8/2B
+  (#5), retention-length law (#6). Chờ user chọn hướng sau E6c.
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
