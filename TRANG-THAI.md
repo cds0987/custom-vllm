@@ -57,8 +57,14 @@ Cập nhật: 2026-08-14.
   4B prefill đồng trú 3406 tok/s @30K (71% solo) → TTFT chỉ còn ×1,15-1,2.
   1-GPU cascade = khả thi cơ học, đáng giá khi ít phiên + nhiều cold-miss;
   giá trị lớn ở 2-GPU. Chi tiết STATUS mục E3C.
-- Kế tiếp: **E5 build mapper functional-loss cho x→27B (plan đã trình, CHỜ
-  USER DUYỆT)**; Phase C KVConnector qua kv_transfer_config.
+- **E5 v1 XONG (2026-08-15)**: hạ tầng train mapper qua 27B đóng băng trên
+  MỘT L4 chạy được (2 pha, suffix backprop, Adam8bit — 5 OOM postmortem trong
+  STATUS). KL ÷4-5 (134,7→18-45) nhưng **needle mapped 0/10** — functional
+  loss học được, chưa qua ngưỡng truy xuất (đúng dự đoán tường mid-GDN CCA
+  0,27). Mapper checkpoint /content/mapper_e5.pt.
+- **Chờ user duyệt E5 v2** (scale: 2000+ bước / needle-aware data / dense
+  per-layer supervision / đường 2 chặng 4B→9B copy + 9B→27B học) — hoặc
+  chuyển ưu tiên sang Phase C KVConnector cho cặp 4B→9B đã chứng minh.
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 

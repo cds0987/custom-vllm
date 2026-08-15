@@ -919,6 +919,31 @@ cho GDN giữa của 27B; đây là chỗ duy nhất bắt buộc phương pháp
 3. Đường loại bỏ đã đóng bằng số: copy thô →27B (identity −1,8), concat-ridge
    cỡ mẫu hiện tại, ridge-MSE thuần cho GDN sâu.
 
+## KV-TRANSFER E5 v1 (2026-08-15): TRAIN MAPPER 4B→27B CHẠY ĐƯỢC TRÊN L4 — KL GIẢM 4-5×, NEEDLE CHƯA ĐẠT
+
+`e5_train.py` — hạ tầng train functional-loss qua 27B đóng băng trên MỘT L4
+(đóng góp chính, chưa ai làm): 2 pha (4B một mình spill cache đĩa → 27B một
+mình train), backward chỉ qua suffix 32 token (cache map là INPUT của forward
+→ autograd với tới mapper không cần backprop qua prefill), Adam8bit, ctx 512.
+5 lần OOM = 5 lớp bản đồ bộ nhớ: bnb không nén embed/lm_head (27B ~18GB);
+đồ thị backward GDN torch-fallback ~1,2GB/32tok; Adam state 270MB là giọt
+tràn ly. Train 400 bước ổn định, 4,7s/bước, GPU 22,4GB không creep.
+
+    KL: 134,7 (init) → 61 (step 50) → 35-45 (200) → dao động 18-45 (240-390)
+    Eval needle 10 trial: self 10/10 | **mapped 0/10** | no_ctx 0/10
+
+- **Phán quyết v1**: functional loss HỌC ĐƯỢC (KL ÷4-5) nhưng chưa qua ngưỡng
+  truy xuất — mapped vẫn ở sàn. Khớp dự đoán E4: mid-GDN CCA 0,27 là tường
+  thật; 35M tham số tuyến tính+song tuyến, 400 bước, văn bản trơn — chưa đủ.
+- Nghi phạm chính theo thứ tự bằng chứng: (1) KL còn ~1/token — xa mức
+  teacher, cần 5-10× bước + lr schedule; (2) data trơn không có mẫu truy
+  xuất — hướng gradient không ưu tiên các chiều "tra fact" (needle-aware
+  data); (3) tín hiệu cuối chuỗi quá thưa — cần khớp attention-output từng
+  lớp (dense supervision); (4) 4B→27B một nhảy có thể quá xa — đường 2 chặng
+  4B→9B (copy, đã chứng minh) + 9B→27B (học) chưa thử.
+- Hàng E5 v2 (chờ user duyệt scale): steps 2000+, mapper MLP per-head,
+  needle-aware calib, per-layer output matching, thử nguồn 9B.
+
 ## SPEC DECODING NGRAM (2026-08-14): OFF MẶC ĐỊNH TRÊN L4 — đo 2 model × 2 mức tải
 
 Profile `-spec` (ngram k=4, prompt-lookup 2-4) thêm vào run.sh; cùng runtime,

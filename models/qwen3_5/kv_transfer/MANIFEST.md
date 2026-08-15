@@ -108,6 +108,14 @@ E4 (đang chạy): chọn thuật toán map bằng phân phối dữ liệu — 
   GDN = MLP nhỏ + RMS-normalize state, train FUNCTIONAL LOSS (khớp đầu ra
   27B), calib ≥500 seq. Bậc kế: E5 = build + train mapper này trên L4.
 
+## E5 v1 (2026-08-15) — hạ tầng train qua 27B trên L4 chạy được; needle chưa đạt
+
+Pipeline functional-loss train ổn định 400 bước trên MỘT L4 (2 pha + suffix
+backprop + Adam8bit). KL 134,7→18-45 (÷4-5) nhưng needle mapped 0/10 (= sàn).
+Đúng dự đoán E4 (mid-GDN CCA 0,27). V2 cần: 5-10× bước, needle-aware data,
+dense per-layer supervision, hoặc đường 2 chặng 4B→9B(copy)+9B→27B(học).
+Chi tiết STATUS mục E5.
+
 ## Nói thật về giá trị trên 1×L4
 
 L4 đơn không giữ nổi 2 model cùng lúc (18,6+9,1GB) — use-case swap-giữa-hội-thoại
