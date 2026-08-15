@@ -1,43 +1,34 @@
 """E5 — trainable cache mapper 4B->27B with FUNCTIONAL loss (user-approved).
 
-E4 measured verdict (STATUS.md):
-  - attention x->27B: CCA 0.93-0.97 (linear structure GO) but identity dead
-  - mid-GDN: CCA 0.27 — linear closed forms cannot carry it
-  - deep GDN heavy-tailed (A-hat sv_max ~110) — raw MSE explodes
-  => per-layer lightweight mapper, trained by matching the TARGET MODEL'S
-     OUTPUTS (KL on logits), not cache values. MSE-to-teacher-cache is used
-     only as a decaying auxiliary to warm-start (plays the role of ridge init
-     without a separate calib phase).
+E4 measured verdict (STATUS.md): attention x->27B CCA 0.93-0.97 (GO), mid-GDN
+CCA 0.27 (linear wall), deep-GDN heavy tails (sv_max ~110) => per-layer
+lightweight mapper trained by matching the TARGET MODEL'S OUTPUTS (KL on
+logits), with a decaying MSE-to-teacher-cache auxiliary as ridge-like warm
+start.
 
-Key engineering trick that makes this trainable on one L4: the functional
-loss only needs gradients through a SHORT suffix forward (T2=128 tokens).
-The mapped cache enters that forward as input tensors, so autograd reaches
-the mapper without ever backpropping through the full prefill.
+Two OOM postmortems shaped this file (L4 = 22GiB):
+  - bnb-4bit does NOT quantize embed/lm_head: 27B alone ~18GB, 4B ~3.5GB —
+    both resident + autograd does not fit. => TWO-PHASE layout: phase A runs
+    the 4B ALONE and spills every source cache to disk (fp16); phase B runs
+    the 27B ALONE for teacher prefill + training. Nothing shares the GPU with
+    the backward pass.
+  - The functional loss only needs gradients through a SHORT suffix forward
+    (T2 tokens); the mapped cache enters as input tensors, so autograd
+    reaches the mapper without backprop through the prefill.
 
-Per training step (both models bnb-4bit, frozen, co-resident ~18GB):
-  1. text (L=1024 tok); split ctx = [0..L-T2), suffix = [L-T2..L)
-  2. no_grad: 4B prefill(ctx) -> src cache; 27B prefill(ctx) -> teacher cache
-     + teacher logits over suffix
-  3. grad: mapped = Mapper(src cache); 27B forward(suffix, past=mapped)
-     loss = KL(teacher || student) + lam_aux * MSE(mapped, teacher cache)
-  4. conv_states: zeroed + first 4 suffix tokens rebuild them (kernel=4);
-     loss skips those warmup positions.
-
-Mapper (~35M params):
-  attention (16 tgt layers): per layer WK,WV: 1024->1024 on RoPE-stripped K
-    (strip src theta, apply tgt theta), identity-init.
-  GDN (48 tgt layers): S_t[h] = sum_s alpha[h,s] * A S_s[s] B  — head-mix
-    (48x32) + shared per-layer A,B (128x128, identity-init); src layer chosen
-    by relative depth. RMS-normalize state before map, restore scale after
-    (E4: sv_max 110 => raw scales unusable).
+Mapper (~35M params): attention per tgt layer WK,WV 1024x1024 on RoPE-stripped
+K (identity-init); GDN per tgt layer head-mix alpha(48x32) + A,B(128x128) on
+RMS-normalized states. Source layer chosen by relative depth. conv_states are
+zeroed; the first CONV_WARM suffix tokens rebuild them and the loss skips
+those positions.
 
 Run:  python e5_train.py --steps 400 --out /content/mapper_e5.pt
 Eval: python e5_train.py --eval-only --out /content/mapper_e5.pt
 """
 
 import argparse
+import gc
 import importlib.util
-import math
 import time
 from pathlib import Path
 
@@ -93,9 +84,8 @@ class Mapper:
         self.params = []
         self.WK, self.bK, self.WV, self.bV = [], [], [], []
         for _ in range(n_attn_tgt):
-            for lst, init in ((self.WK, torch.eye(attn_dim)),
-                              (self.WV, torch.eye(attn_dim))):
-                w = init.to(device).float().requires_grad_(True)
+            for lst in (self.WK, self.WV):
+                w = torch.eye(attn_dim, device=device).float().requires_grad_(True)
                 lst.append(w); self.params.append(w)
             for lst in (self.bK, self.bV):
                 b = torch.zeros(attn_dim, device=device, requires_grad=True)
@@ -109,8 +99,8 @@ class Mapper:
             self.alpha.append(a); self.A.append(A); self.B.append(B)
             self.params += [a, A, B]
 
-    def map_attn(self, j, k, v, positions):
-        """k,v: (1, H, T, dh) from source. Returns mapped bf16 tensors."""
+    def map_attn(self, j, k, v):
+        """k,v: (1, H, T, dh) source tensors on cuda. Returns mapped bf16."""
         import torch
         _, H, T, dh = k.shape
         cos_s, sin_s = rope_cs(T, dh, self.theta_s, k.device)
@@ -118,23 +108,20 @@ class Mapper:
         k_st = rope_apply(k.float(), cos_s, sin_s, -1)         # strip src rope
         flat_k = k_st.permute(0, 2, 1, 3).reshape(T, H * dh)   # (T, 1024)
         flat_v = v.float().permute(0, 2, 1, 3).reshape(T, H * dh)
-        mk = flat_k @ self.WK[j] + self.bK[j]
-        mv = flat_v @ self.WV[j] + self.bV[j]
-        mk = mk.reshape(1, T, H, dh).permute(0, 2, 1, 3)
-        mv = mv.reshape(1, T, H, dh).permute(0, 2, 1, 3)
+        mk = (flat_k @ self.WK[j] + self.bK[j]).reshape(1, T, H, dh).permute(0, 2, 1, 3)
+        mv = (flat_v @ self.WV[j] + self.bV[j]).reshape(1, T, H, dh).permute(0, 2, 1, 3)
         mk = rope_apply(mk, cos_t, sin_t, +1)                  # apply tgt rope
         return mk.to(torch.bfloat16), mv.to(torch.bfloat16)
 
     def map_gdn(self, j, S):
-        """S: (1, Hs, dk, dv) source recurrent state -> (1, Ht, dk, dv)."""
+        """S: (1, Hs, dk, dv) -> (1, Ht, dk, dv)."""
         import torch
-        S = S[0].float()                                        # (Hs,128,128)
+        S = S[0].float()
         rms = S.pow(2).mean((-2, -1), keepdim=True).sqrt() + 1e-6
         Sn = S / rms                                            # tame sv_max~110
         mapped = torch.einsum("ts,sij->tij", self.alpha[j],
                               self.A[j] @ Sn @ self.B[j])
-        scale = rms.mean()                                      # restore scale
-        return (mapped * scale)[None].to(torch.bfloat16)
+        return (mapped * rms.mean())[None].to(torch.bfloat16)
 
     def state_dict(self):
         return {"WK": self.WK, "bK": self.bK, "WV": self.WV, "bV": self.bV,
@@ -148,10 +135,51 @@ class Mapper:
                 dst.data.copy_(src.data)
 
 
+# ---------------- disk-spilled source caches (phase A -> phase B) -----------
+
+class _FA:
+    def __init__(self, k, v):
+        self.keys, self.values = k, v
+
+
+class _FG:
+    def __init__(self, r, c):
+        self.recurrent_states, self.conv_states = r, c
+
+
+class FakeCache:
+    def __init__(self, layers):
+        self.layers = layers
+
+
+def spill_cache(past, path):
+    import torch
+    d = []
+    for l in past.layers:
+        if "LinearAttention" in type(l).__name__:
+            d.append(("g", l.recurrent_states.to(torch.float16).cpu(),
+                      l.conv_states.to(torch.float16).cpu()))
+        else:
+            d.append(("a", l.keys.to(torch.float16).cpu(),
+                      l.values.to(torch.float16).cpu()))
+    torch.save(d, path)
+
+
+def load_cache(path):
+    import torch
+    layers = []
+    for t, x, y in torch.load(path, map_location="cpu"):
+        x = x.cuda().to(torch.bfloat16)
+        y = y.cuda().to(torch.bfloat16)
+        layers.append(_FA(x, y) if t == "a" else _FG(x, y))
+    return FakeCache(layers)
+
+
 def split_layers(past):
     attn, gdn = {}, {}
     for i, l in enumerate(past.layers):
-        (gdn if "LinearAttention" in type(l).__name__ else attn)[i] = l
+        is_gdn = isinstance(l, _FG) or "LinearAttention" in type(l).__name__
+        (gdn if is_gdn else attn)[i] = l
     return attn, gdn
 
 
@@ -160,7 +188,7 @@ def depth_map(n_src, n_tgt):
 
 
 def build_student_past(tpl_past, src_past, mapper):
-    """Deepcopy 27B template (shapes/positions right), swap in mapped
+    """Deepcopy 27B template (positions/shapes right), swap in mapped
     grad-tracking tensors by ATTRIBUTE replacement (not in-place: autograd)."""
     import copy
     import torch
@@ -171,8 +199,7 @@ def build_student_past(tpl_past, src_past, mapper):
     amap = depth_map(len(ks), len(kt))
     for j, it in enumerate(kt):
         src = attn_s[ks[amap[j]]]
-        T = src.keys.shape[2]
-        mk, mv = mapper.map_attn(j, src.keys, src.values, T)
+        mk, mv = mapper.map_attn(j, src.keys, src.values)
         attn_t[it].keys = mk
         attn_t[it].values = mv
     gs, gt = sorted(gdn_s), sorted(gdn_t)
@@ -185,10 +212,9 @@ def build_student_past(tpl_past, src_past, mapper):
 
 
 def aux_mse(student_past, teacher_past):
-    import torch
     loss, n = 0.0, 0
     for ls, lt in zip(student_past.layers, teacher_past.layers):
-        if "LinearAttention" in type(ls).__name__:
+        if "LinearAttention" in type(lt).__name__:
             loss = loss + (ls.recurrent_states.float()
                            - lt.recurrent_states.float()).pow(2).mean()
         else:
@@ -198,6 +224,21 @@ def aux_mse(student_past, teacher_past):
     return loss / n
 
 
+def make_eval_trials(tok, n_trials):
+    import random
+    rng = random.Random(0)
+    trials = []
+    for ti in range(n_trials):
+        name = rng.choice(e2.NAMES)
+        code = "".join(rng.choice("0123456789") for _ in range(6))
+        ids = e2.token_stream(tok, 1400, seed=900 + ti)
+        ctx = (tok.decode(ids[:700])
+               + f"\nIMPORTANT: The secret code for project {name} is {code}.\n"
+               + tok.decode(ids[700:]) + "\n" + e2.build_q(name))
+        trials.append((name, code, ctx))
+    return trials
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--src-model", default="Qwen/Qwen3.5-4B")
@@ -205,54 +246,88 @@ def main():
     ap.add_argument("--steps", type=int, default=400)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--out", default="/content/mapper_e5.pt")
+    ap.add_argument("--src-cache-dir", default="/content/e5_src")
     ap.add_argument("--eval-only", action="store_true")
     ap.add_argument("--eval-trials", type=int, default=10)
     args = ap.parse_args()
 
     import torch
     import torch.nn.functional as F
+    from transformers import AutoConfig
 
-    tok_s, model_s = load_4bit(args.src_model)
+    cdir = Path(args.src_cache_dir)
+    cdir.mkdir(parents=True, exist_ok=True)
+    done_marker = cdir / f"DONE_{args.steps}_{args.eval_trials}"
+
+    # ---------------- PHASE A: 4B alone -> spill source caches --------------
+    if not done_marker.exists():
+        tok_s, model_s = load_4bit(args.src_model)
+        stream = e2.token_stream(tok_s, args.steps * L_CTX + L_CTX, seed=11)
+        with torch.no_grad():
+            for step in range(args.steps):
+                pth = cdir / f"tr{step}.pt"
+                if pth.exists():
+                    continue
+                ids = torch.tensor([stream[step * L_CTX:(step + 1) * L_CTX]],
+                                   device="cuda")
+                past = model_s(input_ids=ids[:, :-T2], use_cache=True,
+                               logits_to_keep=1).past_key_values
+                spill_cache(past, pth)
+                del past
+                torch.cuda.empty_cache()
+                if step % 50 == 0:
+                    print(f"A train-cache {step}/{args.steps}")
+            for ti, (name, code, ctx) in enumerate(
+                    make_eval_trials(tok_s, args.eval_trials)):
+                enc = tok_s(ctx, return_tensors="pt").to("cuda")
+                past = model_s(input_ids=enc["input_ids"][:, :-1],
+                               use_cache=True, logits_to_keep=1).past_key_values
+                spill_cache(past, cdir / f"ev{ti}.pt")
+                del past
+                torch.cuda.empty_cache()
+            print("A eval-caches done")
+        del model_s
+        gc.collect()
+        torch.cuda.empty_cache()
+        done_marker.touch()
+        print("PHASE_A_DONE")
+
+    theta_s = e1.get_rope_theta(
+        AutoConfig.from_pretrained(args.src_model).get_text_config())
     tok_t, model_t = load_4bit(args.tgt_model)
-    cfg_s = model_s.config.get_text_config()
-    cfg_t = model_t.config.get_text_config()
-    theta_s, theta_t = e1.get_rope_theta(cfg_s), e1.get_rope_theta(cfg_t)
+    theta_t = e1.get_rope_theta(model_t.config.get_text_config())
 
-    # probe layer structure with a dummy forward
-    with torch.no_grad():
-        probe_s = model_s(input_ids=torch.tensor([[1, 2, 3]], device="cuda"),
-                          use_cache=True, logits_to_keep=1).past_key_values
-        probe_t = model_t(input_ids=torch.tensor([[1, 2, 3]], device="cuda"),
-                          use_cache=True, logits_to_keep=1).past_key_values
-    a_s, g_s = split_layers(probe_s)
-    a_t, g_t = split_layers(probe_t)
+    # probe structures: source from a spilled cache, target via dummy forward
+    src0 = load_cache(cdir / "tr0.pt")
+    a_s, g_s = split_layers(src0)
     Hs = next(iter(g_s.values())).recurrent_states.shape[1]
-    Ht = next(iter(g_t.values())).recurrent_states.shape[1]
     attn_dim = (next(iter(a_s.values())).keys.shape[1]
                 * next(iter(a_s.values())).keys.shape[3])
-    print(f"attn {len(a_s)}->{len(a_t)} (dim {attn_dim}), "
-          f"gdn {len(g_s)}->{len(g_t)} heads {Hs}->{Ht}, "
+    n_as, n_gs = len(a_s), len(g_s)
+    del src0
+    torch.cuda.empty_cache()
+    with torch.no_grad():
+        probe_t = model_t(input_ids=torch.tensor([[1, 2, 3]], device="cuda"),
+                          use_cache=True, logits_to_keep=1).past_key_values
+    a_t, g_t = split_layers(probe_t)
+    Ht = next(iter(g_t.values())).recurrent_states.shape[1]
+    print(f"attn {n_as}->{len(a_t)} (dim {attn_dim}), "
+          f"gdn {n_gs}->{len(g_t)} heads {Hs}->{Ht}, "
           f"theta {theta_s}/{theta_t}")
-
     mapper = Mapper(len(a_t), len(g_t), Hs, Ht, attn_dim, theta_s, theta_t)
     if args.eval_only:
         mapper.load(args.out)
 
+    # ---------------- PHASE B: 27B alone -> train ---------------------------
     if not args.eval_only:
         opt = torch.optim.Adam(mapper.params, lr=args.lr)
-        stream = e2.token_stream(tok_s, args.steps * L_CTX + L_CTX, seed=11)
+        stream = e2.token_stream(tok_t, args.steps * L_CTX + L_CTX, seed=11)
         t0 = time.time()
         for step in range(args.steps):
             ids = torch.tensor([stream[step * L_CTX:(step + 1) * L_CTX]],
                                device="cuda")
             ctx, suffix = ids[:, :-T2], ids[:, -T2:]
             with torch.no_grad():
-                src_past = model_s(input_ids=ctx, use_cache=True,
-                                   logits_to_keep=1).past_key_values
-                # ONE teacher prefill; suffix runs on a throwaway deepcopy so
-                # tch_past stays ctx-only (aux target + student template).
-                # Memory is the scarcest resource here: bnb keeps embed/lm_head
-                # in bf16, weights alone ~21GB of the L4.
                 import copy as _c
                 tch_past = model_t(input_ids=ctx, use_cache=True,
                                    logits_to_keep=1).past_key_values
@@ -262,6 +337,7 @@ def main():
                             use_cache=True).logits[:, CONV_WARM:].float(), -1)
                 del tch_ext
                 torch.cuda.empty_cache()
+            src_past = load_cache(cdir / f"tr{step}.pt")
             student_past = build_student_past(tch_past, src_past, mapper)
             out = model_t(input_ids=suffix, past_key_values=student_past,
                           use_cache=True)
@@ -271,60 +347,53 @@ def main():
             lam = max(0.0, 1.0 - step / (0.3 * args.steps))
             loss = kl + lam * aux_mse(student_past, tch_past)
             opt.zero_grad(); loss.backward(); opt.step()
-            del student_past, out, stu_logp, tch_logp, src_past, tch_past
+            klv = float(kl)
+            del student_past, out, stu_logp, tch_logp, src_past, tch_past, kl, loss
             torch.cuda.empty_cache()
             if step % 10 == 0:
-                print(f"step {step}/{args.steps} KL {float(kl):.4f} "
+                print(f"step {step}/{args.steps} KL {klv:.4f} "
                       f"lam {lam:.2f} ({time.time()-t0:.0f}s)")
             if step % 50 == 49 or step == args.steps - 1:
                 torch.save(mapper.state_dict(), args.out)
         print("TRAIN_DONE")
 
-    # ---- eval: needle @~1.5K, mapper vs no_ctx vs 27B self ----
-    import random, re
-    rng = random.Random(0)
+    # ---------------- eval: needle, mapped vs self vs no_ctx ----------------
+    import re
     res = {c: 0 for c in ("self", "mapped", "no_ctx")}
+    trials = make_eval_trials(tok_t, args.eval_trials)
     with torch.no_grad():
-        pass
-    for ti in range(args.eval_trials):
-        name = rng.choice(e2.NAMES)
-        code = "".join(rng.choice("0123456789") for _ in range(6))
-        ids = e2.token_stream(tok_t, 1400, seed=900 + ti)
-        ctx_txt = (tok_t.decode(ids[:700])
-                   + f"\nIMPORTANT: The secret code for project {name} is {code}.\n"
-                   + tok_t.decode(ids[700:]) + "\n" + e2.build_q(name))
-        enc = tok_t(ctx_txt, return_tensors="pt").to("cuda")
-        pre, last = enc["input_ids"][:, :-1], enc["input_ids"][:, -1:]
-        for cond in ("self", "mapped", "no_ctx"):
-            with torch.no_grad():
+        for ti, (name, code, ctx) in enumerate(trials):
+            enc = tok_t(ctx, return_tensors="pt").to("cuda")
+            pre, last0 = enc["input_ids"][:, :-1], enc["input_ids"][:, -1:]
+            for cond in ("self", "mapped", "no_ctx"):
+                last = last0
                 if cond == "self":
                     past = model_t(input_ids=pre, use_cache=True,
                                    logits_to_keep=1).past_key_values
                 elif cond == "no_ctx":
                     q = tok_t(e2.build_q(name), return_tensors="pt").to("cuda")
                     past = model_t(input_ids=q["input_ids"][:, :-1],
-                                   use_cache=True, logits_to_keep=1).past_key_values
+                                   use_cache=True,
+                                   logits_to_keep=1).past_key_values
                     last = q["input_ids"][:, -1:]
                 else:
-                    src_past = model_s(input_ids=pre, use_cache=True,
-                                       logits_to_keep=1).past_key_values
+                    src_past = load_cache(cdir / f"ev{ti}.pt")
                     tpl = model_t(input_ids=pre, use_cache=True,
                                   logits_to_keep=1).past_key_values
                     past = build_student_past(tpl, src_past, mapper)
-                cur, gen = past, []
-                logp = None
-                inp = last
+                    del src_past, tpl
+                cur, gen, inp = past, [], last
                 for _ in range(10):
                     o = model_t(input_ids=inp, past_key_values=cur,
                                 use_cache=True)
                     cur = o.past_key_values
                     inp = o.logits[:, -1, :].argmax(-1, keepdim=True)
                     gen.append(int(inp))
-                ok = code in re.sub(r"\D", "", tok_t.decode(gen))
-                res[cond] += int(ok)
-            last = enc["input_ids"][:, -1:]
-        print(f"eval {ti+1}/{args.eval_trials}: " +
-              " ".join(f"{c}:{res[c]}" for c in res))
+                res[cond] += int(code in re.sub(r"\D", "", tok_t.decode(gen)))
+                del past, cur
+                torch.cuda.empty_cache()
+            print(f"eval {ti+1}/{len(trials)}: " +
+                  " ".join(f"{c}:{res[c]}" for c in res))
     print("===== E5 KET QUA =====")
     for c, h in res.items():
         print(f"{c:8s} needle {h}/{args.eval_trials}")
