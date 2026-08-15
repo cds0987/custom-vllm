@@ -1033,6 +1033,33 @@ mỗi bên một nửa**:
   (c) nếu cả hai thua → chốt "phương ngữ nhóm nhỏ không sửa được bằng adapter
   nhẹ", 4B là prefill-helper chính thức duy nhất.
 
+**E8 v2+v3 (user duyệt a+b, lệnh "theo bài Unsloth, khảo sát kỹ") — ĐÓNG,
+phương án (c) kích hoạt (2026-08-15, `e8v2_qlora.py`/`e8v3_unsloth.py`)**:
+
+    v2 (bnb student, LoRA r=64 MỌI linear 186 module 67,3M, loss
+      state-alignment nMSE, batch 4): 13s/bước — kill sớm (torch-fallback).
+    v3 (đúng bài Unsloth: student BF16 — docs Unsloth "KHÔNG QLoRA 4-bit
+      trên Qwen3.5", trùng E6c; kernel Triton fla+causal-conv1d build 13ph,
+      fast path BẬT thật): grad-flow OK, GPU 100%, vẫn 13,8s/bước.
+      nMSE 10,52 → 1,06 @20 (học xong THANG ĐO) → mài 0,9855→0,9587→0,9588
+      (đứng im) — needle 0/5 @74 và @149 → DỪNG SỚM đúng cam kết
+      (tiết kiệm ~1,5h GPU).
+
+- Khảo sát Unsloth (docs Qwen3.5): FastLanguageModel wrapper KHÔNG dùng được
+  cho bài cache-loss — forward patch trả past_key_values=None trong training
+  + target_modules bị filter vision/language + trả PROCESSOR đa phương thức
+  (tok(text) chết ở image loader — bug đã vá). Tinh túy giữ được: bf16
+  student + kernel fla + LoRA rộng.
+- Chẩn đoán tốc độ sai 2 lần liên tiếp (bnb → torch-fallback → hóa ra
+  compute thật, GPU 100%): quy tắc 5 thắng — chỉ số đo mới tin.
+- **PHÁN QUYẾT E8 (3 đòn tấn công đủ mạnh đều thua)**: gate trần thông tin
+  SÁNG (2B self 5/5+5/5) nhưng nMSE kẹt ~0,96 = LoRA 67M chỉ chiếm được ~4%
+  cấu trúc state 9B — khớp tường CCA-GDN 0,23. **Phương ngữ GDN nhóm nhỏ
+  {0.8B,2B} KHÔNG sửa được bằng adapter nhẹ + alignment/functional loss cỡ
+  vài trăm bước.** Ô ma trận đóng bằng kết quả âm 3 lớp; 4B giữ vai
+  prefill-helper chính thức duy nhất của 9B. Muốn mở lại cần vũ khí khác
+  hẳn: finetune sâu (full GDN blocks) hoặc weight-derived conjugation (#1).
+
 ## SPEC DECODING NGRAM (2026-08-14): OFF MẶC ĐỊNH TRÊN L4 — đo 2 model × 2 mức tải
 
 Profile `-spec` (ngram k=4, prompt-lookup 2-4) thêm vào run.sh; cùng runtime,

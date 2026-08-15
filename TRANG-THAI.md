@@ -73,15 +73,18 @@ Cập nhật: 2026-08-14.
   conjugation GDN (#1), activation-splicing (#2), pairability score (#3 — đã
   có data), importance-weighted loss (#4), compatibility-finetuning 0.8/2B
   (#5), retention-length law (#6). **User chọn #5 (2026-08-15): E8 ĐANG CHẠY**.
-- **E8 v1 XONG (2026-08-15, compatibility LoRA 2B→9B — #5)**: gate 2B self
-  needle 5/5@800 + 5/5@2000 (cache 2B CÓ thông tin — thất bại thuần phương
-  ngữ GDN, không phải bottleneck); baseline tile 0/5 (tái lập E7); train 300
-  bước LoRA r=16 chỉ-GDN (5,9M param, KL-functional qua tile): KL 231→126
-  (÷1,8 rồi ngang) — **needle 0/5 cả 6 mốc. Kết quả âm có kiểm soát.** Hạ
-  tầng mới: 2 model đồng trú + grad xuyên 2B chạy được (10GB, 7s/bước).
-  V2 chờ user duyệt: (a) r=64 + mọi linear + 600 bước; (b) loss chính =
-  state-alignment MSE; (c) thua nữa → chốt 4B là prefill-helper duy nhất.
-  Chi tiết STATUS mục E8.
+- **E8 ĐÓNG TRỌN 3 PHIÊN BẢN (2026-08-15, compatibility LoRA 2B→9B — #5,
+  phương án (c) kích hoạt)**: gate trần thông tin SÁNG (2B self needle
+  5/5@800 + 5/5@2000 — cache 2B CÓ đủ thông tin) nhưng cả 3 đòn thua sạch:
+  v1 (LoRA r=16 chỉ-GDN, KL-functional, 300 bước) 0/5×6 mốc; v2 (r=64 mọi
+  linear, state-alignment) 13s/bước kill; v3 (đúng bài Unsloth: student bf16
+  + kernel fla/causal-conv1d fast path BẬT) nMSE học xong thang đo 10,5→1,06
+  rồi KẸT ~0,96 (chiếm ~4% cấu trúc state) — needle 0/5 @74/@149 → dừng sớm.
+  **PHÁN QUYẾT: phương ngữ GDN nhóm nhỏ không sửa được bằng adapter nhẹ;
+  4B là prefill-helper chính thức duy nhất của 9B.** Bài học Unsloth:
+  FastLanguageModel không dùng được cho cache-loss (past=None khi training,
+  trả processor đa phương thức); tinh túy giữ được = bf16 student (docs
+  "KHÔNG QLoRA trên Qwen3.5" trùng E6c) + kernel Triton. Chi tiết STATUS E8.
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
