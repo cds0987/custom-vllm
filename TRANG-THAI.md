@@ -46,11 +46,14 @@ Cập nhật: 2026-08-14.
   non-torch bằng NVML, cộng VRAM process khác vào mình — 4 ràng buộc ghi
   STATUS). Lối thoát chưa thử: `--kv-cache-memory-bytes`. EngineArgs có
   `kv_transfer_config` = khung KVConnector cho Phase C.
-- **E4 ĐANG CHẠY** (lệnh user: chọn learning algorithm bằng số liệu, không
-  đoán): thống kê phân phối cache 4B/9B/27B-bnb4bit — kurtosis/eff-rank,
-  ‖Â−I‖ + phổ Â, đấu 5 ứng viên held-out (identity/Procrustes/scaled/ridge/
-  concat-ridge full-recipe NVIDIA), CCA cross-capacity (go/no-go cho 27B).
-  Log /content/logs/e4_full.log, kết quả e4_stats.json.
+- **E4 XONG (2026-08-15)**: 27B chạy được transformers/bnb-4bit trên L4 (mới).
+  Số chốt: 4B↔9B CCA attention 0,98 (copy giữ ngôi, thiếu hụt @30K khoanh vùng
+  GDN sâu); **x→27B attention CCA 0,93-0,97 = GO**, GDN giữa CCA 0,27 = tường
+  tuyến tính, GDN sâu đuôi nặng (sv_max 110); concat-ridge thua ridge 1-lớp ở
+  N hiện tại. **Kiến trúc chốt: mapper per-layer + functional loss (E5)** —
+  chi tiết STATUS mục E4. Target user chốt: 27B, không bỏ.
+- Kế tiếp: E5 build mapper functional-loss cho x→27B; retry đồng trú
+  --kv-cache-memory-bytes; Phase C KVConnector.
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 

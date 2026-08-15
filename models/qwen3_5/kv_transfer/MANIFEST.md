@@ -96,6 +96,18 @@ thuần áp nguyên cho cross**. Đồng trú 2 server naive bất khả thi tr�
 E4 (đang chạy): chọn thuật toán map bằng phân phối dữ liệu — 5 ứng viên
 đóng-form + CCA, gồm concat-ridge full-recipe của paper. Chi tiết STATUS.md.
 
+## E4 — Thuật toán chọn bằng số liệu (2026-08-15, e4_stats.json)
+
+- 4B→9B: CCA attention 0,977-0,980 nhưng identity R² 0,12 mà copy vẫn thắng
+  chức năng → R²/MSE không phải thước; copy giữ ngôi. Thiếu hụt "hiểu" @30K
+  khoanh vùng ở GDN sâu (CCA 0,71 @L30).
+- x→27B: attention CCA 0,93-0,97 (GO — cấu trúc chung dày); GDN giữa CCA 0,27
+  (bức tường tuyến tính); GDN sâu đuôi nặng sv_max 110. Concat-ridge full
+  recipe thua ridge 1-lớp ở N=13K (nhiễu ước lượng 8192 chiều).
+- **Kiến trúc chốt cho 27B**: mapper per-layer nhẹ, attention init từ ridge,
+  GDN = MLP nhỏ + RMS-normalize state, train FUNCTIONAL LOSS (khớp đầu ra
+  27B), calib ≥500 seq. Bậc kế: E5 = build + train mapper này trên L4.
+
 ## Nói thật về giá trị trên 1×L4
 
 L4 đơn không giữ nổi 2 model cùng lúc (18,6+9,1GB) — use-case swap-giữa-hội-thoại

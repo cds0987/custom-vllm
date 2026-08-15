@@ -864,6 +864,44 @@ E3B đồng trú 2 server trên 1 L4: **4 lần chết = 4 ràng buộc đo đư
 - Bẫy vận hành mới: killpg chuỗi launcher giết luôn server con (9B) — server
   sống lâu phải setsid tách khỏi chuỗi phóng, hoặc chỉ kill launcher theo PID.
 
+## KV-TRANSFER E4 (2026-08-15): CHỌN THUẬT TOÁN BẰNG PHÂN PHỐI THẬT — 3 MODEL, 3 CẶP
+
+`e4_stats.py`, 64 văn bản chung, 4B/9B bf16 + **27B bnb-4bit** (lần đầu 27B chạy
+transformers trên L4). Kết quả tại /content/logs/e4_stats.json; số chốt:
+
+**Hình dáng phân phối**: attention K gần Gaussian (kurtosis 0,0-0,2), eff-rank
+154-307/1024 — đất tốt cho phương pháp tuyến tính. GDN: eff-rank ~50/128,
+kurtosis tới 2,4 và phổ Â có sv_max tới **110** ở lớp sâu — đuôi nặng, MSE dễ
+nổ (ridge R² âm tới −11 ở GDN L62 là bằng chứng sống).
+
+**Cặp 4B→9B (attention)**: CCA top-64 = **0,977-0,980** — cấu trúc tuyến tính
+chung gần tuyệt đối. Nhưng identity R² thô chỉ 0,12-0,14 mà copy vẫn 12/12
+chức năng → CHỐT bằng số: hình học MSE ≠ chức năng attention. Không ứng viên
+đóng-form nào cần thay copy. Phần "hiểu" mất @30K KHOANH VÙNG được: GDN sâu
+(CCA tụt 0,90→0,71 @L30, mọi ứng viên ≤0,24) — muốn đòi lại phải vá đúng chỗ đó.
+
+**x→27B attention**: CCA **0,93-0,97** — cấu trúc chung TỒN TẠI dày (go cho
+27B). Ridge 1-lớp 0,52-0,73 (tốt nhất L31→L63). **Concat-ridge full-recipe
+NVIDIA THUA ridge 1-lớp** (0,22-0,52) ở N=13K mẫu — nhiễu ước lượng 8192 chiều
+nuốt hết lợi ích; muốn dùng phải tăng calib ≥5×. Identity âm nặng (−1,8) —
+copy thô chết như dự đoán với cặp lệch khuôn.
+
+**x→27B GDN (32vs48 head)**: L0 map được ngay (ridge/scaled-Procrustes ≈0,91);
+**L giữa (L33) CCA 0,26-0,27 = BỨC TƯỜNG** — gần như không có cấu trúc tuyến
+tính chung; L62 CCA 0,64 nhưng ridge nổ vì đuôi nặng. → Tuyến tính KHÔNG đủ
+cho GDN giữa của 27B; đây là chỗ duy nhất bắt buộc phương pháp học phi tuyến.
+
+**PHÁN QUYẾT THUẬT TOÁN (theo số, không đoán)**:
+1. 4B→9B: giữ copy; nâng cấp duy nhất đáng làm = mapper CHỈ cho GDN sâu, train
+   bằng functional loss (khớp đầu ra model đích, không khớp giá trị cache).
+2. x→27B: kiến trúc chọn = mapper per-layer nhẹ — attention khởi tạo từ ridge
+   (CCA 0,93+ chống lưng), GDN dùng MLP nhỏ; TRAIN BẰNG FUNCTIONAL LOSS;
+   chuẩn hóa RMS state trước khi map (trị sv_max 110/kurtosis 2,4); calib
+   ≥500 seq nếu dùng concat. Train một lần trên L4 (model đóng băng, mapper
+   vài triệu tham số, grad checkpointing qua 27B bnb-4bit).
+3. Đường loại bỏ đã đóng bằng số: copy thô →27B (identity −1,8), concat-ridge
+   cỡ mẫu hiện tại, ridge-MSE thuần cho GDN sâu.
+
 ## SPEC DECODING NGRAM (2026-08-14): OFF MẶC ĐỊNH TRÊN L4 — đo 2 model × 2 mức tải
 
 Profile `-spec` (ngram k=4, prompt-lookup 2-4) thêm vào run.sh; cùng runtime,
