@@ -212,21 +212,44 @@ def main():
         del model
         gc.collect(); torch.cuda.empty_cache()
 
-    # ---- phase 3: CCA on CPU for every pair ----
+    # ---- phase 3: CCA + variance-explained (heldout ridge R2) per pair ----
+    def ridge_r2(X, Y):
+        """Heldout variance of the TARGET explained by a linear map from the
+        source (dims may differ). The user-requested 'variance explained'."""
+        n = min(len(X), len(Y))
+        X, Y = X[:n].astype(np.float64), Y[:n].astype(np.float64)
+        ntr = int(n * 0.8)
+        mx, my = X[:ntr].mean(0), Y[:ntr].mean(0)
+        Xc, Yc = X[:ntr] - mx, Y[:ntr] - my
+        lam = 1e-3 * ntr * float((Xc ** 2).mean()) + 1e-12
+        W = np.linalg.solve(Xc.T @ Xc + lam * np.eye(Xc.shape[1]), Xc.T @ Yc)
+        pred = (X[ntr:] - mx) @ W + my
+        ss = ((Y[ntr:] - pred) ** 2).sum()
+        return float(1 - ss / (((Y[ntr:] - Y[ntr:].mean(0)) ** 2).sum() + 1e-12))
+
     cca_out = {}
     for s, t in PAIRS:
         zs = np.load(wd / f"stats_{s}.npz")
         zt = np.load(wd / f"stats_{t}.npz")
         n = min(len(zs["K"]), len(zt["K"]))
-        cca_k = float(np.mean(e4.cca(zs["K"][:n], zt["K"][:n])))
+        rhos = e4.cca(zs["K"][:n], zt["K"][:n])
+        cca_k = float(np.mean(rhos))
+        shared_var_k = float(np.mean([r * r for r in rhos]))
+        r2_k = ridge_r2(zs["K"], zt["K"])
         Gs, Gt = zs["G"], zt["G"]
         m = min(len(Gs), len(Gt))
         Xs = Gs[:m, 0].transpose(0, 2, 1).reshape(-1, Gs.shape[2])
         Xt = Gt[:m, 0].transpose(0, 2, 1).reshape(-1, Gt.shape[2])
-        cca_g = float(np.mean(e4.cca(Xs, Xt)))
-        cca_out[f"{s}->{t}"] = {"cca_attnK": round(cca_k, 3),
-                                "cca_gdn": round(cca_g, 3)}
-        print(f"CCA {s}->{t}: attnK {cca_k:.3f} gdn {cca_g:.3f}")
+        rhog = e4.cca(Xs, Xt)
+        cca_g = float(np.mean(rhog))
+        r2_g = ridge_r2(Xs, Xt)
+        cca_out[f"{s}->{t}"] = {
+            "cca_attnK": round(cca_k, 3), "cca_gdn": round(cca_g, 3),
+            "var_explained_attnK": round(r2_k, 3),
+            "var_explained_gdn": round(r2_g, 3),
+            "shared_var_cca_top64": round(shared_var_k, 3)}
+        print(f"{s}->{t}: CCA attnK {cca_k:.3f} gdn {cca_g:.3f} | "
+              f"VAR-EXPLAINED attnK {r2_k:.3f} gdn {r2_g:.3f}")
 
     with open(args.results, "w") as fh:
         json.dump({"needle": results, "cca": cca_out,
