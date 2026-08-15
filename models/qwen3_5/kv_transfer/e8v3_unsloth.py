@@ -61,9 +61,11 @@ def main():
         with open(args.results, "w") as fh:
             json.dump(results, fh, indent=1)
 
-    model_s, tok = FastLanguageModel.from_pretrained(
+    model_s, proc = FastLanguageModel.from_pretrained(
         model_name=args.src_model, max_seq_length=2048,
         load_in_4bit=False, load_in_16bit=True)
+    # unsloth tra ve PROCESSOR da-phuong-thuc: tok(text) hieu nham text la anh
+    tok = getattr(proc, "tokenizer", proc)
     model_s = FastLanguageModel.get_peft_model(
         model_s, r=args.lora_r, lora_alpha=args.lora_r * 2,
         target_modules=TARGETS, lora_dropout=0.0, bias="none",
