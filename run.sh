@@ -11,6 +11,7 @@
 #     bash run.sh setup              # env + all patches (idempotent, auto-run by serve)
 #     bash run.sh serve 9b|9b-spec   # pull champion 9B + serve (-spec: ngram speculative)
 #     bash run.sh serve 27b          # pull 27B frame + serve with tuned L4 config
+#     bash run.sh serve 4b           # pull 4B w4a16 frame + serve (throughput tier)
 #     bash run.sh status             # GPU / server / model state, tail of logs
 #     bash run.sh logs               # follow server log
 #     bash run.sh bench <script> ... # run any bench/ script against the live server
@@ -26,6 +27,7 @@ LOGS=/content/logs; mkdir -p "$LOGS" 2>/dev/null || LOGS="$REPO_DIR/out/logs"; m
 MODELS_DIR="${MODELS_DIR:-/content/models}"
 CHAMPION_9B_REPO="${CHAMPION_9B_REPO:-gunnybd01/qwen35-9b-champion}"
 FRAME_27B_REPO="${FRAME_27B_REPO:-apolo13x/Qwen3.5-27B-quantized.w4a16}"
+FRAME_4B_REPO="${FRAME_4B_REPO:-RedHatAI/Qwen3.5-4B-quantized.w4a16}"
 
 say() { echo; echo "=== [run.sh] $* ==="; }
 
@@ -57,7 +59,14 @@ from huggingface_hub import snapshot_download
 print(snapshot_download(sys.argv[1], local_dir=sys.argv[2], max_workers=8))
 EOF
       ;;
-    *) echo "unknown model: $1 (want 9b|27b)"; exit 1;;
+    4b)
+      python - "$FRAME_4B_REPO" "$MODELS_DIR/frame4b" <<'EOF'
+import sys
+from huggingface_hub import snapshot_download
+print(snapshot_download(sys.argv[1], local_dir=sys.argv[2], max_workers=8))
+EOF
+      ;;
+    *) echo "unknown model: $1 (want 9b|27b|4b)"; exit 1;;
   esac
 }
 
@@ -78,7 +87,12 @@ serve() {  # $1 = 9b|27b, optionally with -spec suffix (ngram speculative decodi
       flags="--max-model-len 8192 --max-num-batched-tokens 512 --max-num-seqs 8 \
              --compilation-config {\"cudagraph_capture_sizes\":[1,2,4,8],\"max_cudagraph_capture_size\":8} \
              --gpu-memory-utilization 0.97" ;;
-    *) echo "unknown model: $base (want 9b|27b, optional -spec)"; exit 1;;
+    4b)
+      # Throughput tier / prefill-offload candidate (E1: cache copies raw into 9B).
+      # Same mml/mnbt as 9b so bench numbers are apples-to-apples.
+      model="$MODELS_DIR/frame4b"
+      flags="--max-model-len 65536 --max-num-batched-tokens 1088 --gpu-memory-utilization ${GPU_UTIL:-0.97}" ;;
+    *) echo "unknown model: $base (want 9b|27b|4b, optional -spec)"; exit 1;;
   esac
   [ "$base" = "9b" ] && flags="$flags --gpu-memory-utilization ${GPU_UTIL:-0.97}"
   # GPU_UTIL env overrides. Default 0.97 (measured 2026-08-14: KV +38.5% vs 0.85,
