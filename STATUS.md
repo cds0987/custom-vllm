@@ -1012,6 +1012,27 @@ mỗi bên một nửa**:
 - 4B→27B GDN CCA 0,785 = cặp-học-được sáng nhất ngoài họ (chọn cặp E5/E6 đúng).
 - Variance-explained PHẢN chức năng lần 3 (4B→9B chỉ 0,53/0,05 mà copy 100%).
 
+**E8 v1 (compatibility LoRA 2B→9B — deep-innovation #5, user duyệt "làm đi"
+2026-08-15, `e8_compat.py`, e8_results.json)**:
+
+    gate 2B self needle: @800 5/5, @2000 5/5   ← trần thông tin SÁNG
+    baseline tile 2B→9B (0-train): 0/5          ← tái lập E7
+    train 300 bước LoRA r=16 (90 linear khối GDN, 5,9M param, lr 2e-4,
+      L_CTX 256, loss KL-functional qua tile + aux state-MSE decay 30%):
+      KL 231 → ~126 (÷1,8, nhiễu 81-183), needle tile 0/5 Ở CẢ 6 MỐC EVAL.
+
+- Gate quan trọng nhất: chính 2B nhớ needle hoàn hảo → cache 2B CÓ thông tin;
+  thất bại là thuần "phương ngữ" GDN (CCA 0,23), KHÔNG phải bottleneck.
+- Hạ tầng mới chạy được: 2B(bnb+LoRA) + 9B(bnb) ĐỒNG TRÚ 10GB/23GB, gradient
+  chảy xuyên forward 2B (guard grad-flow OK |g|=2,5e6), ~7s/bước.
+- KL giảm ÷1,8 rồi đi ngang từ ~step 100 (E5 mapper 27B từng ÷4-5): 5,9M
+  tham số LoRA chỉ-GDN chưa đủ lực uốn phương ngữ. KẾT QUẢ ÂM CÓ KIỂM SOÁT.
+- V2 đề xuất (CHỜ USER DUYỆT): (a) r=64 + target mọi linear (phương ngữ có
+  thể hình thành trước khối GDN) + lr 5e-4 + 600 bước; (b) đổi loss chính
+  sang state-alignment RMS-norm MSE (tín hiệu dày per-layer, KL làm gate);
+  (c) nếu cả hai thua → chốt "phương ngữ nhóm nhỏ không sửa được bằng adapter
+  nhẹ", 4B là prefill-helper chính thức duy nhất.
+
 ## SPEC DECODING NGRAM (2026-08-14): OFF MẶC ĐỊNH TRÊN L4 — đo 2 model × 2 mức tải
 
 Profile `-spec` (ngram k=4, prompt-lookup 2-4) thêm vào run.sh; cùng runtime,

@@ -72,7 +72,16 @@ Cập nhật: 2026-08-14.
 - Deep-innovation đề xuất (từ deep-research doc + số của ta): weight-derived
   conjugation GDN (#1), activation-splicing (#2), pairability score (#3 — đã
   có data), importance-weighted loss (#4), compatibility-finetuning 0.8/2B
-  (#5), retention-length law (#6). Chờ user chọn hướng sau E6c.
+  (#5), retention-length law (#6). **User chọn #5 (2026-08-15): E8 ĐANG CHẠY**.
+- **E8 v1 XONG (2026-08-15, compatibility LoRA 2B→9B — #5)**: gate 2B self
+  needle 5/5@800 + 5/5@2000 (cache 2B CÓ thông tin — thất bại thuần phương
+  ngữ GDN, không phải bottleneck); baseline tile 0/5 (tái lập E7); train 300
+  bước LoRA r=16 chỉ-GDN (5,9M param, KL-functional qua tile): KL 231→126
+  (÷1,8 rồi ngang) — **needle 0/5 cả 6 mốc. Kết quả âm có kiểm soát.** Hạ
+  tầng mới: 2 model đồng trú + grad xuyên 2B chạy được (10GB, 7s/bước).
+  V2 chờ user duyệt: (a) r=64 + mọi linear + 600 bước; (b) loss chính =
+  state-alignment MSE; (c) thua nữa → chốt 4B là prefill-helper duy nhất.
+  Chi tiết STATUS mục E8.
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
