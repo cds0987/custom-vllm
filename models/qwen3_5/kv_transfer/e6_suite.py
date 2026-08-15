@@ -50,9 +50,15 @@ GOLD_MAX = 96         # gold tokens scored
 
 # ------------------------------ training data -------------------------------
 
-def make_train_ids(tok, stream, step, rng):
-    """L_CTX token ids; 40% embed a fact whose answer sits in the suffix."""
-    base = stream[step * L_CTX:(step + 1) * L_CTX]
+UNIQUE = 600   # unique cached samples; steps cycle over them (disk: 2000
+               # spills = 112GB filled the disk — postmortem 2026-08-15)
+
+
+def make_train_ids(tok, stream, idx):
+    """L_CTX token ids for sample idx (deterministic per idx); 40% embed a
+    fact whose answer sits in the suffix."""
+    rng = random.Random(1000 + idx)
+    base = stream[idx * L_CTX:(idx + 1) * L_CTX]
     if rng.random() >= NEEDLE_FRAC:
         return base
     name = rng.choice(e2.NAMES) + str(rng.randint(0, 99))
@@ -108,7 +114,8 @@ def load_benches():
     for suite, repo in (("ifstruct", "LiquidAI/ifstruct-v1.0"),
                         ("parsebench", "llamaindex/ParseBench")):
         try:
-            ds = load_dataset(repo, split="train")
+            ds = load_dataset(repo, split={"ifstruct": "test",
+                                       "parsebench": "table"}[suite])
             items = []
             for ex in ds:
                 p = _pick(ex, ["prompt", "question", "instruction", "input",
@@ -235,16 +242,15 @@ def main():
     rng = random.Random(4)
     benches = load_benches()
     print("suites:", {k: len(v) for k, v in benches.items()})
-    marker = cdir / f"DONE_{args.steps}_L{L_CTX}_T{T2}"
+    marker = cdir / f"DONE_u{UNIQUE}_L{L_CTX}_T{T2}"
 
     # ---- PHASE A: 4B alone ----
     if not marker.exists():
         tok_s, model_s = e5.load_4bit(args.src_model)
-        stream = e2.token_stream(tok_s, args.steps * L_CTX + L_CTX, seed=11)
-        rng_a = random.Random(4)
+        stream = e2.token_stream(tok_s, UNIQUE * L_CTX + L_CTX, seed=11)
         with torch.no_grad():
-            for step in range(args.steps):
-                ids = make_train_ids(tok_s, stream, step, rng_a)
+            for step in range(UNIQUE):
+                ids = make_train_ids(tok_s, stream, step)
                 pth = cdir / f"tr{step}.pt"
                 if not pth.exists():
                     t = torch.tensor([ids[:-T2]], device="cuda")
@@ -254,7 +260,7 @@ def main():
                     del past
                     torch.cuda.empty_cache()
                 if step % 200 == 0:
-                    print(f"A {step}/{args.steps}")
+                    print(f"A {step}/{UNIQUE}")
             for suite, items in benches.items():
                 for bi, (prompt, _, _) in enumerate(items):
                     enc = tok_s(prompt, return_tensors="pt",
@@ -302,12 +308,12 @@ def main():
         import bitsandbytes as bnb
         opt = bnb.optim.Adam8bit(mapper.params, lr=args.lr)
         sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.steps)
-        stream = e2.token_stream(tok_t, args.steps * L_CTX + L_CTX, seed=11)
-        rng_b = random.Random(4)
+        stream = e2.token_stream(tok_t, UNIQUE * L_CTX + L_CTX, seed=11)
         t0 = time.time()
         for step in range(args.steps):
             gc.collect(); torch.cuda.empty_cache()
-            ids = make_train_ids(tok_t, stream, step, rng_b)
+            idx = step % UNIQUE
+            ids = make_train_ids(tok_t, stream, idx)
             full = torch.tensor([ids], device="cuda")
             ctx, suffix = full[:, :-T2], full[:, -T2:]
             with torch.no_grad():
@@ -323,7 +329,7 @@ def main():
                 tch_caps = [c.detach() for c in captured]
                 del tch_ext
                 torch.cuda.empty_cache()
-            src_past = e5.load_cache(cdir / f"tr{step}.pt")
+            src_past = e5.load_cache(cdir / f"tr{idx}.pt")
             student_past = e5.build_student_past(tch_past, src_past, mapper)
             lam = max(0.0, 1.0 - step / (0.2 * args.steps))
             aux = e5.aux_mse(student_past, tch_past)
