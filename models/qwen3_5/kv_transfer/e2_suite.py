@@ -167,7 +167,8 @@ def main():
             enc = tok_s(tr["ctx"], return_tensors="pt").to("cuda")
             tr["n_ctx"] = enc["input_ids"].shape[1]
             torch.cuda.synchronize(); t0 = time.time()
-            out = model_s(input_ids=enc["input_ids"][:, :-1], use_cache=True)
+            out = model_s(input_ids=enc["input_ids"][:, :-1], use_cache=True,
+                          logits_to_keep=1)
             torch.cuda.synchronize()
             tr["t_4b_prefill"] = time.time() - t0
             spill(out.past_key_values, f"{args.cache_dir}/t{ti}.npz")
@@ -192,12 +193,14 @@ def main():
                 if cond == "no_ctx":
                     if tr["kind"] == "qa":     # question only
                         q = tok_t(build_q(tr["name"]), return_tensors="pt").to("cuda")
-                        o0 = model_t(input_ids=q["input_ids"][:, :-1], use_cache=True)
+                        o0 = model_t(input_ids=q["input_ids"][:, :-1], use_cache=True,
+                                     logits_to_keep=1)
                         past, last = o0.past_key_values, q["input_ids"][:, -1:]
                     else:                       # bare continuation, no cache
                         past, last = None, None
                 else:
-                    o0 = model_t(input_ids=enc["input_ids"][:, :-1], use_cache=True)
+                    o0 = model_t(input_ids=enc["input_ids"][:, :-1], use_cache=True,
+                                 logits_to_keep=1)
                     past, last = o0.past_key_values, enc["input_ids"][:, -1:]
                     if cond == "copy":
                         row["t_transplant"] = overwrite_from(
