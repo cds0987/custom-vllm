@@ -64,6 +64,8 @@ def main():
     ap.add_argument("--tgt-model", default="Qwen/Qwen3.5-9B")
     ap.add_argument("--work", default="/content/e6b")
     ap.add_argument("--results", default="/content/logs/e6b_results.json")
+    ap.add_argument("--bf16-models", action="store_true",
+                    help="E6c: load bf16 thay bnb — nghi pham cuoi cung")
     args = ap.parse_args()
 
     import re
@@ -72,6 +74,18 @@ def main():
 
     wd = Path(args.work)
     wd.mkdir(parents=True, exist_ok=True)
+    if args.bf16_models:
+        def _load_bf16(name):
+            import torch
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+            tok = AutoTokenizer.from_pretrained(name)
+            m = AutoModelForCausalLM.from_pretrained(
+                name, dtype=torch.bfloat16, device_map="cuda")
+            m.eval()
+            return tok, m
+        e5.load_4bit = _load_bf16
+        global WINDOWS
+        WINDOWS = (0,)   # E6b da chung minh suffix-repair phan tac dung
     benches = e6.load_benches()
     items = benches.get("bfcl", [])
     assert items, "BFCL khong tai duoc"
