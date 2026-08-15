@@ -864,6 +864,23 @@ E3B đồng trú 2 server trên 1 L4: **4 lần chết = 4 ràng buộc đo đư
 - Bẫy vận hành mới: killpg chuỗi launcher giết luôn server con (9B) — server
   sống lâu phải setsid tách khỏi chuỗi phóng, hoặc chỉ kill launcher theo PID.
 
+### E3C (2026-08-15): ĐỒNG TRÚ THÀNH CÔNG — combo đúng và GIÁ đo được
+
+Combo vượt tường (lần thử 6, lần ĐẦU flag chính thực sự được kiểm): server 2
+đặt util THẤP (0,35 — qua check startup free-memory) + `--kv-cache-memory-bytes
+1.5e9` (KV tường minh, né profiling NVML) + enforce-eager. Kết quả:
+
+    9B (util 0,68, mns 32):  KV 208.005 token (−63% vs 560.380 solo)  smoke OK
+    4B (0,35 + kv-bytes):    KV 74.159 token, eager
+    GPU tổng: 20,8GB / 22GiB. Prefill 4B đồng trú: 2138/3291/3406 tok/s
+    @4K/16K/30K (71% mức độc chiếm @30K; 45% @4K — mất vì chia compute).
+
+Ý nghĩa: cascade 1-GPU chạy ĐƯỢC về cơ học nhưng giá đắt — TTFT 30K chỉ còn
+~×1,15-1,2 (4B đồng trú 8,8s vs 9B solo ~10,5s) và 9B mất 63% KV (~12 phiên →
+~4). Trên MỘT L4, đồng trú chỉ đáng khi tải ít phiên + cold-miss nhiều; giá
+trị lớn của cascade nằm ở 2-GPU disaggregation hoặc tuning lại phần chia
+(4B bớt KV, 9B util cao hơn — chưa đo, để Phase C quyết bằng số khi có connector).
+
 ## KV-TRANSFER E4 (2026-08-15): CHỌN THUẬT TOÁN BẰNG PHÂN PHỐI THẬT — 3 MODEL, 3 CẶP
 
 `e4_stats.py`, 64 văn bản chung, 4B/9B bf16 + **27B bnb-4bit** (lần đầu 27B chạy

@@ -52,8 +52,13 @@ Cập nhật: 2026-08-14.
   tuyến tính, GDN sâu đuôi nặng (sv_max 110); concat-ridge thua ridge 1-lớp ở
   N hiện tại. **Kiến trúc chốt: mapper per-layer + functional loss (E5)** —
   chi tiết STATUS mục E4. Target user chốt: 27B, không bỏ.
-- Kế tiếp: E5 build mapper functional-loss cho x→27B; retry đồng trú
-  --kv-cache-memory-bytes; Phase C KVConnector.
+- **E3C XONG: đồng trú 2 server/1 L4 THÀNH CÔNG** (combo: util thấp 0,35 +
+  --kv-cache-memory-bytes + eager). Giá: 9B KV −63% (208K token, ~4 phiên),
+  4B prefill đồng trú 3406 tok/s @30K (71% solo) → TTFT chỉ còn ×1,15-1,2.
+  1-GPU cascade = khả thi cơ học, đáng giá khi ít phiên + nhiều cold-miss;
+  giá trị lớn ở 2-GPU. Chi tiết STATUS mục E3C.
+- Kế tiếp: **E5 build mapper functional-loss cho x→27B (plan đã trình, CHỜ
+  USER DUYỆT)**; Phase C KVConnector qua kv_transfer_config.
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
