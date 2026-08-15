@@ -265,7 +265,7 @@ def main():
         stream = e2.token_stream(tok_s, args.steps * L_CTX + L_CTX, seed=11)
         with torch.no_grad():
             for step in range(args.steps):
-                pth = cdir / f"tr{step}.pt"
+                pth = cdir / f"tr{step}_T{T2}.pt"
                 if pth.exists():
                     continue
                 ids = torch.tensor([stream[step * L_CTX:(step + 1) * L_CTX]],
@@ -282,7 +282,7 @@ def main():
                 enc = tok_s(ctx, return_tensors="pt").to("cuda")
                 past = model_s(input_ids=enc["input_ids"][:, :-1],
                                use_cache=True, logits_to_keep=1).past_key_values
-                spill_cache(past, cdir / f"ev{ti}.pt")
+                spill_cache(past, cdir / f"ev{ti}_T{T2}.pt")
                 del past
                 torch.cuda.empty_cache()
             print("A eval-caches done")
@@ -298,7 +298,7 @@ def main():
     theta_t = e1.get_rope_theta(model_t.config.get_text_config())
 
     # probe structures: source from a spilled cache, target via dummy forward
-    src0 = load_cache(cdir / "tr0.pt")
+    src0 = load_cache(cdir / f"tr0_T{T2}.pt")
     a_s, g_s = split_layers(src0)
     Hs = next(iter(g_s.values())).recurrent_states.shape[1]
     attn_dim = (next(iter(a_s.values())).keys.shape[1]
@@ -337,15 +337,16 @@ def main():
                             use_cache=True).logits[:, CONV_WARM:].float(), -1)
                 del tch_ext
                 torch.cuda.empty_cache()
-            src_past = load_cache(cdir / f"tr{step}.pt")
+            src_past = load_cache(cdir / f"tr{step}_T{T2}.pt")
             student_past = build_student_past(tch_past, src_past, mapper)
+            lam = max(0.0, 1.0 - step / (0.3 * args.steps))
+            aux = aux_mse(student_past, tch_past)   # BEFORE forward extends cache
             out = model_t(input_ids=suffix, past_key_values=student_past,
                           use_cache=True)
             stu_logp = torch.log_softmax(out.logits[:, CONV_WARM:].float(), -1)
             kl = F.kl_div(stu_logp, tch_logp, log_target=True,
                           reduction="batchmean")
-            lam = max(0.0, 1.0 - step / (0.3 * args.steps))
-            loss = kl + lam * aux_mse(student_past, tch_past)
+            loss = kl + lam * aux
             opt.zero_grad(); loss.backward(); opt.step()
             klv = float(kl)
             del student_past, out, stu_logp, tch_logp, src_past, tch_past, kl, loss
@@ -377,7 +378,7 @@ def main():
                                    logits_to_keep=1).past_key_values
                     last = q["input_ids"][:, -1:]
                 else:
-                    src_past = load_cache(cdir / f"ev{ti}.pt")
+                    src_past = load_cache(cdir / f"ev{ti}_T{T2}.pt")
                     tpl = model_t(input_ids=pre, use_cache=True,
                                   logits_to_keep=1).past_key_values
                     past = build_student_past(tpl, src_past, mapper)
