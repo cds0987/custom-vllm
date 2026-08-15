@@ -41,7 +41,7 @@ spec1 = importlib.util.spec_from_file_location(
 e1 = importlib.util.module_from_spec(spec1)
 spec1.loader.exec_module(e1)
 
-L_CTX = 768
+L_CTX = 512   # 768: step-0 passed, Adam-state alloc tipped step-1 OOM
 T2 = 32   # 96 OOMed: backward graph through 48 GDN torch-fallback layers ~3.7GB
 CONV_WARM = 4
 
@@ -257,7 +257,7 @@ def main():
 
     cdir = Path(args.src_cache_dir)
     cdir.mkdir(parents=True, exist_ok=True)
-    done_marker = cdir / f"DONE_{args.steps}_{args.eval_trials}_T{T2}"
+    done_marker = cdir / f"DONE_{args.steps}_{args.eval_trials}_L{L_CTX}_T{T2}"
 
     # ---------------- PHASE A: 4B alone -> spill source caches --------------
     if not done_marker.exists():
@@ -265,7 +265,7 @@ def main():
         stream = e2.token_stream(tok_s, args.steps * L_CTX + L_CTX, seed=11)
         with torch.no_grad():
             for step in range(args.steps):
-                pth = cdir / f"tr{step}_T{T2}.pt"
+                pth = cdir / f"tr{step}_L{L_CTX}_T{T2}.pt"
                 if pth.exists():
                     continue
                 ids = torch.tensor([stream[step * L_CTX:(step + 1) * L_CTX]],
@@ -282,7 +282,7 @@ def main():
                 enc = tok_s(ctx, return_tensors="pt").to("cuda")
                 past = model_s(input_ids=enc["input_ids"][:, :-1],
                                use_cache=True, logits_to_keep=1).past_key_values
-                spill_cache(past, cdir / f"ev{ti}_T{T2}.pt")
+                spill_cache(past, cdir / f"ev{ti}_L{L_CTX}_T{T2}.pt")
                 del past
                 torch.cuda.empty_cache()
             print("A eval-caches done")
@@ -298,7 +298,7 @@ def main():
     theta_t = e1.get_rope_theta(model_t.config.get_text_config())
 
     # probe structures: source from a spilled cache, target via dummy forward
-    src0 = load_cache(cdir / f"tr0_T{T2}.pt")
+    src0 = load_cache(cdir / f"tr0_L{L_CTX}_T{T2}.pt")
     a_s, g_s = split_layers(src0)
     Hs = next(iter(g_s.values())).recurrent_states.shape[1]
     attn_dim = (next(iter(a_s.values())).keys.shape[1]
@@ -320,10 +320,18 @@ def main():
 
     # ---------------- PHASE B: 27B alone -> train ---------------------------
     if not args.eval_only:
-        opt = torch.optim.Adam(mapper.params, lr=args.lr)
+        try:
+            import bitsandbytes as bnb
+            opt = bnb.optim.Adam8bit(mapper.params, lr=args.lr)
+            print("optimizer: Adam8bit")
+        except Exception:
+            opt = torch.optim.Adam(mapper.params, lr=args.lr, foreach=False)
+            print("optimizer: Adam fp32 (bnb khong co)")
         stream = e2.token_stream(tok_t, args.steps * L_CTX + L_CTX, seed=11)
         t0 = time.time()
         for step in range(args.steps):
+            gc.collect()
+            torch.cuda.empty_cache()
             ids = torch.tensor([stream[step * L_CTX:(step + 1) * L_CTX]],
                                device="cuda")
             ctx, suffix = ids[:, :-T2], ids[:, -T2:]
@@ -337,7 +345,7 @@ def main():
                             use_cache=True).logits[:, CONV_WARM:].float(), -1)
                 del tch_ext
                 torch.cuda.empty_cache()
-            src_past = load_cache(cdir / f"tr{step}_T{T2}.pt")
+            src_past = load_cache(cdir / f"tr{step}_L{L_CTX}_T{T2}.pt")
             student_past = build_student_past(tch_past, src_past, mapper)
             lam = max(0.0, 1.0 - step / (0.3 * args.steps))
             aux = aux_mse(student_past, tch_past)   # BEFORE forward extends cache
@@ -378,7 +386,7 @@ def main():
                                    logits_to_keep=1).past_key_values
                     last = q["input_ids"][:, -1:]
                 else:
-                    src_past = load_cache(cdir / f"ev{ti}_T{T2}.pt")
+                    src_past = load_cache(cdir / f"ev{ti}_L{L_CTX}_T{T2}.pt")
                     tpl = model_t(input_ids=pre, use_cache=True,
                                   logits_to_keep=1).past_key_values
                     past = build_student_past(tpl, src_past, mapper)
