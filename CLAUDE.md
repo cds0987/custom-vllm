@@ -15,7 +15,8 @@ custom-vllm
 ├── Adapter-Architecture   → Qwen3.5 ✅, Gemma4 ⬜, nhiều kiến trúc khác ⬜
 ├── Adapter-Engine         → vLLM ✅, SGLang ⬜
 ├── Adapter-Hardware       → Single GPU (L4 ✅, T4 ⬜), Multi-Node K8s ⬜
-└── Adapter-Format         → GGUF ✅ (→ compressed-tensors W4A16), format khác ⬜
+├── Adapter-Format         → GGUF ✅ (→ compressed-tensors W4A16), format khác ⬜
+└── Cross-model KV transfer→ 4B→9B copy ✅ (TTFT ×1,66), x→27B mapper 🔶, 0.8B/2B ❌ (đóng bằng đo)
 ```
 
 Giá trị bán: khách chọn 1 điểm trong không gian (kiến trúc × engine × phần cứng ×
@@ -37,6 +38,22 @@ format), nhận một serving stack đã tối ưu, đã đo, dùng ngay.
 - Báo động giả tái diễn: RMS graft 9.4%/11.4% là BÌNH THƯỜNG với bits=4; `LLM()` ở
   module level chết vì spawn (bọc `if __name__ == "__main__":`); KHÔNG chạy
   `fix_qwen35_hf_checkpoint.py` lên frame.
+
+## Instance #2 (nghiên cứu đã chốt): cross-model KV transfer trong họ Qwen3.5
+
+Chiến dịch E0→E8 (2026-08-14→16, chi tiết STATUS.md, code `models/qwen3_5/kv_transfer/`):
+
+- **4B→9B: bê nguyên cache CHẠY** (không cần mapper — needle 100% tới 30K, decode
+  parity, TTFT 30K ×1,66 hai-GPU / ×1,15-1,2 đồng trú E3C). Scope an toàn:
+  chat/QA/RAG; function-calling hụt biên mỏng (9/20 vs 19/20 bf16) — cần polisher.
+- **Định luật ghép đôi (E7)**: attention thẳng hàng toàn họ; số phận cặp nằm 100%
+  ở GDN — CCA-GDN ≥0,9 bê được / ~0,8 học được (4B→27B) / ~0,23 tường (0.8B/2B).
+- **E8 đóng**: phương ngữ GDN nhóm nhỏ KHÔNG sửa được bằng adapter nhẹ (3 đòn
+  LoRA/loss đều 0/5 dù gate thông tin sáng 5/5). 4B = prefill-helper duy nhất của 9B.
+- 2 luật đã kiểm ≥4 lần: **error-placement** (R²/NLL/nMSE không dự đoán chức năng —
+  chỉ tin thí nghiệm chức năng) và **nhất quán nội tại** (vá suffix càng vá càng hỏng).
+- Cửa sản phẩm còn lại: **Phase C** = KVConnector vLLM (`kv_transfer_config`) + đo
+  lại trên W4A16 Marlin thật.
 
 ## Quy tắc cứng — luôn áp dụng
 

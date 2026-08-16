@@ -127,6 +127,37 @@ Chi tiết STATUS mục E5.
   {0.8B,2B} GDN lạc hệ (0,23); 4B→27B (0,785) là cặp học sáng nhất.
   Chi tiết STATUS mục E6+E7+E6b.
 
+## E8 ĐÃ CHẠY VÀ ĐÓNG (2026-08-15→16) — compatibility LoRA 2B→9B: kết quả âm 3 lớp
+
+Gate trần thông tin SÁNG: 2B self needle 5/5@800 + 5/5@2000 (cache 2B CÓ đủ
+thông tin — thất bại thuần "phương ngữ" GDN CCA 0,23). Ba đòn leo thang đều 0/5:
+
+- v1 `e8_compat.py`: LoRA r=16 chỉ-GDN (5,9M), KL-functional qua tile, 300 bước —
+  KL 231→126 rồi ngang, needle 0/5 × 6 mốc.
+- v2 `e8v2_qlora.py`: r=64 MỌI linear (67M), loss state-alignment nMSE, batch 4 —
+  13s/bước, kill thay v3.
+- v3 `e8v3_unsloth.py`: đúng bài Unsloth (student BF16 — docs "KHÔNG QLoRA 4-bit
+  trên Qwen3.5", trùng E6c; kernel Triton fla+causal-conv1d, fast path BẬT) —
+  nMSE 10,5→1,06 (học xong thang đo) rồi KẸT ~0,96 = chiếm ~4% cấu trúc state;
+  needle 0/5 @74/@149 → dừng sớm 160/600.
+
+**PHÁN QUYẾT: phương ngữ GDN nhóm nhỏ {0.8B,2B} không sửa được bằng adapter nhẹ;
+4B là prefill-helper chính thức duy nhất của 9B.** Muốn mở lại ô này: finetune sâu
+toàn khối GDN hoặc weight-derived conjugation (#1). Bài học hạ tầng: FastLanguageModel
+của unsloth KHÔNG dùng được cho cache-loss (past=None khi training, trả processor
+đa phương thức, filter target_modules); tinh túy giữ được = bf16 student + kernel
+Triton (`pip install flash-linear-attention` + `causal-conv1d --no-build-isolation`).
+
+## Trạng thái các cửa (2026-08-16)
+
+| Cửa | Trạng thái |
+|---|---|
+| 4B→9B copy | ✅ chốt số, chờ Phase C (KVConnector `kv_transfer_config` + đo lại trên W4A16 Marlin) |
+| Polisher function-calling trên 9B | ⬜ đề xuất, chưa duyệt (đòi lại 9→19 BFCL) |
+| x→27B mapper | 🔶 v2 hội tụ trong miền; v3 cần data miền thật (JSON dài) |
+| 0.8B/2B → mọi model | ❌ đóng bằng E7+E8; mở lại cần vũ khí khác hẳn |
+| Weight-derived conjugation GDN (#1) | ⬜ ý tưởng sáng nhất chưa thử, zero-data |
+
 ## Nói thật về giá trị trên 1×L4
 
 L4 đơn không giữ nổi 2 model cùng lúc (18,6+9,1GB) — use-case swap-giữa-hội-thoại

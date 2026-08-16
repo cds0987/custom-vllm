@@ -126,6 +126,41 @@ chứ không phải phỏng đoán:
 
 ---
 
+## Loại 5 — Bổ sung từ chiến dịch cross-model KV transfer (E0→E8, 08/2026)
+
+### 5.1. `!nohup` phóng nền im lặng thất bại
+Job "đã phóng" nhưng không có PID, không có log — mất cả vòng GPU mới phát hiện.
+**Sửa tận gốc**: chuẩn mới `subprocess.Popen(start_new_session=True)` + ghi PID
+file + flag idempotent + kiểm `p.poll()` sau 10s (chi tiết trong skill `colab-mcp`).
+
+### 5.2. killpg giết nhầm server con còn sống
+Dọn chuỗi launcher cũ bằng killpg → giết luôn vLLM server con đang chạy tốt.
+Server dài hạn phải phóng tách session khỏi launcher.
+
+### 5.3. Unsloth trả về processor đa phương thức thay tokenizer
+`FastLanguageModel.from_pretrained` với Qwen3.5 (bản vision) trả processor —
+`tok(text)` hiểu nhầm text là ảnh, chết trong image loader với traceback khó hiểu.
+Sửa: bóc `getattr(proc, "tokenizer", proc)`.
+
+### 5.4. Forward patch của Unsloth trả past_key_values=None khi training
+Loss nào sống bằng cache states là chết. FastLanguageModel chỉ hợp bài SFT chuẩn;
+bài cache-loss phải dùng transformers thuần + tự cài tinh túy (bf16, kernel Triton).
+
+### 5.5. `pip install causal-conv1d` fail vì build isolation
+Môi trường build cách ly không thấy torch → wheel fail. Sửa: `--no-build-isolation`
+(build ~13 phút trên Colab). Thiếu gói này + `flash-linear-attention` là transformers
+âm thầm rơi về đường GDN Python chậm (có in warning — phải ĐỌC log).
+
+### 5.6. Chẩn đoán tốc độ sai 2 lần liên tiếp — chỉ số đo mới tin
+13s/bước bị đổ lỗi lần lượt cho bnb-4bit (sai — bf16 vẫn 13s) rồi cho torch-fallback
+(sai — kernel Triton bật vẫn 13,8s, GPU util 100%: nghẽn compute thật). Mỗi lần đoán
+sai đốt một vòng sửa-phóng-chờ ~30 phút. Nguyên tắc 2 dưới đây thắng tuyệt đối.
+
+### 5.7. Hai writer một log file = null bytes; disk full cắt log giữa dòng
+Mỗi job một log riêng. Task spill cache trăm GB phải kèm `df -h` vào cell status;
+file spill đặt tên theo tham số (`tr{step}_L{ctx}_T{suffix}.pt`) để không dùng nhầm
+file cũ — đã dính một lần silent (704 vs 736 lệch shape).
+
 ## Ba nguyên tắc rút ra
 
 1. **Lỗi im lặng nguy hiểm hơn lỗi ồn ào.** Ưu tiên thiết kế sao cho sai thì
