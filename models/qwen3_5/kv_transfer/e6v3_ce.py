@@ -234,6 +234,28 @@ def main():
     import torch.nn.functional as F
     from transformers import AutoConfig
 
+    # transformers 5.15: update_recurrent_state lam .copy_() IN-PLACE len
+    # tensor state ("static address for cudagraphs") — pha vo autograd khi
+    # initial_state la tensor mapper mang grad (fla backward: "modified by an
+    # inplace operation"). Rebind khi co grad; giu copy_ cho moi ca khac.
+    try:
+        from transformers.cache_utils import LinearAttentionLayer
+        _orig_urs = LinearAttentionLayer.update_recurrent_state
+
+        def _urs(self, recurrent_states, state_idx=0, **kw):
+            cur = (self.recurrent_states.get(state_idx)
+                   if isinstance(self.recurrent_states, dict) else None)
+            if cur is not None and (cur.requires_grad
+                                    or recurrent_states.requires_grad):
+                self.recurrent_states[state_idx] = recurrent_states
+                return recurrent_states
+            return _orig_urs(self, recurrent_states, state_idx, **kw)
+
+        LinearAttentionLayer.update_recurrent_state = _urs
+        print("patched update_recurrent_state (rebind khi co grad)")
+    except ImportError:
+        pass
+
     cdir = Path(args.cache_dir)
     cdir.mkdir(parents=True, exist_ok=True)
     results = {"val_curve": [], "config": {k: v for k, v in vars(args).items()}}
