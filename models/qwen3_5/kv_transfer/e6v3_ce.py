@@ -327,7 +327,7 @@ def main():
         probe = model_t(input_ids=torch.tensor([[1, 2, 3]], device="cuda"),
                         use_cache=True, logits_to_keep=1).past_key_values
     a_t, g_t = e5.split_layers(probe)
-    Ht = next(iter(g_t.values())).recurrent_states.shape[1]
+    Ht = e5._get(next(iter(g_t.values())).recurrent_states).shape[1]
     mapper = e5.Mapper(len(a_t), len(g_t), Hs, Ht, attn_dim, theta_s, theta_t)
     if args.skip_train:
         mapper.load(args.out)
