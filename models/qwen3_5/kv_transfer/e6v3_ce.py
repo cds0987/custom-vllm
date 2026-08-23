@@ -358,9 +358,11 @@ def main():
         print("RESUME tu checkpoint .last")
 
     captured = []
-    hooks = []
+    cap_on = {"v": False}   # hook chi ghi khi bat — val/teacher-ctx-prefill
+    hooks = []              # tung nhet 16x160MB/luot vao captured -> OOM @VAL
     def _hook(mod, inp, out):
-        captured.append(out[0] if isinstance(out, tuple) else out)
+        if cap_on["v"]:
+            captured.append(out[0] if isinstance(out, tuple) else out)
     for name, mod in model_t.named_modules():
         cls = type(mod).__name__
         if "Attention" in cls and "Linear" not in cls and hasattr(mod, "o_proj"):
@@ -455,10 +457,12 @@ def main():
                 tch_past = model_t(input_ids=pre, use_cache=True,
                                    logits_to_keep=1).past_key_values
                 captured.clear()
+                cap_on["v"] = True
                 tch_ext = _c.deepcopy(tch_past)
                 tch_logp = torch.log_softmax(
                     model_t(input_ids=feed, past_key_values=tch_ext,
                             use_cache=True).logits[:, CONV_WARM:].float(), -1)
+                cap_on["v"] = False
                 tch_caps = [c.detach() for c in captured]
                 del tch_ext
                 torch.cuda.empty_cache()
@@ -467,8 +471,10 @@ def main():
             lam = max(0.0, 1.0 - step / (0.2 * args.steps))
             aux = e5.aux_mse(student_past, tch_past)
             captured.clear()
+            cap_on["v"] = True
             out = model_t(input_ids=feed, past_key_values=student_past,
                           use_cache=True)
+            cap_on["v"] = False
             stu_caps = list(captured)
             logp = torch.log_softmax(out.logits[:, CONV_WARM:].float(), -1)
             ce = -logp.gather(2, gold_ids[:, CONV_WARM:].unsqueeze(-1)).mean()
