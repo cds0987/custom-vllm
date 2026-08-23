@@ -137,6 +137,20 @@ class Mapper:
 
 # ---------------- disk-spilled source caches (phase A -> phase B) -----------
 
+def _get(x):
+    """transformers >=5.15 boc recurrent/conv states trong dict {0: tensor}."""
+    return x[0] if isinstance(x, dict) else x
+
+
+def _set_like(layer, attr, value):
+    """Gan state vao layer song, giu nguyen kieu boc (dict hay tensor)."""
+    cur = getattr(layer, attr)
+    if isinstance(cur, dict):
+        setattr(layer, attr, {0: value.to(cur[0].dtype)})
+    else:
+        setattr(layer, attr, value.to(cur.dtype))
+
+
 class _FA:
     def __init__(self, k, v):
         self.keys, self.values = k, v
@@ -157,8 +171,8 @@ def spill_cache(past, path):
     d = []
     for l in past.layers:
         if "LinearAttention" in type(l).__name__:
-            d.append(("g", l.recurrent_states.to(torch.float16).cpu(),
-                      l.conv_states.to(torch.float16).cpu()))
+            d.append(("g", _get(l.recurrent_states).to(torch.float16).cpu(),
+                      _get(l.conv_states).to(torch.float16).cpu()))
         else:
             d.append(("a", l.keys.to(torch.float16).cpu(),
                       l.values.to(torch.float16).cpu()))
@@ -206,8 +220,10 @@ def build_student_past(tpl_past, src_past, mapper):
     gmap = depth_map(len(gs), len(gt))
     for j, it in enumerate(gt):
         src = gdn_s[gs[gmap[j]]]
-        gdn_t[it].recurrent_states = mapper.map_gdn(j, src.recurrent_states)
-        gdn_t[it].conv_states = torch.zeros_like(gdn_t[it].conv_states)
+        _set_like(gdn_t[it], "recurrent_states",
+                  mapper.map_gdn(j, _get(src.recurrent_states)))
+        _set_like(gdn_t[it], "conv_states",
+                  torch.zeros_like(_get(gdn_t[it].conv_states)))
     return past
 
 
@@ -215,8 +231,8 @@ def aux_mse(student_past, teacher_past):
     loss, n = 0.0, 0
     for ls, lt in zip(student_past.layers, teacher_past.layers):
         if "LinearAttention" in type(lt).__name__:
-            loss = loss + (ls.recurrent_states.float()
-                           - lt.recurrent_states.float()).pow(2).mean()
+            loss = loss + (_get(ls.recurrent_states).float()
+                           - _get(lt.recurrent_states).float()).pow(2).mean()
         else:
             loss = loss + (ls.keys.float() - lt.keys.float()).pow(2).mean() \
                         + (ls.values.float() - lt.values.float()).pow(2).mean()
