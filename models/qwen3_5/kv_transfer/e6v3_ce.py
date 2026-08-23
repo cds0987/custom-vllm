@@ -132,12 +132,16 @@ def pbtable_load(n):
 
 
 def needle_items(tok, n, seed0, ctx_tok=700):
+    # MOT stream duy nhat roi cat lat (khuon E6). token_stream skip `seed`
+    # document truoc khi lay token — seed lon = tai-va-vut hang van doc (bug
+    # treo 20 phut da dinh 2026-08-23). Seed giu nho, xao tron bang rng.
+    stream = e2.token_stream(tok, n * ctx_tok + ctx_tok, seed=seed0 % 400)
     items = []
     for i in range(n):
         rng = random.Random(seed0 + i)
         name = rng.choice(e2.NAMES) + str(rng.randint(0, 99))
         code = "".join(rng.choice("0123456789") for _ in range(6))
-        ids = e2.token_stream(tok, ctx_tok, seed=seed0 + i)
+        ids = stream[i * ctx_tok:(i + 1) * ctx_tok]
         half = ctx_tok // 2
         prompt = (tok.decode(ids[:half])
                   + f"\nIMPORTANT: The secret code for project {name} is {code}.\n"
