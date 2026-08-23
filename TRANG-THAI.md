@@ -4,7 +4,7 @@ File này được CLAUDE.md nạp tự động đầu mỗi phiên. Claude TỰ
 trạng thái thay đổi — KHÔNG cần hỏi user. Giới hạn cứng ≤300 dòng; chi tiết dồn
 sang `STATUS.md`.
 
-Cập nhật: 2026-08-16.
+Cập nhật: 2026-08-24.
 
 ## Trạng thái hiện tại
 
@@ -85,6 +85,18 @@ Cập nhật: 2026-08-16.
   FastLanguageModel không dùng được cho cache-loss (past=None khi training,
   trả processor đa phương thức); tinh túy giữ được = bf16 student (docs
   "KHÔNG QLoRA trên Qwen3.5" trùng E6c) + kernel Triton. Chi tiết STATUS E8.
+
+- **E6 v3 ĐÓNG (2026-08-24, CE-gold mapper 4B→27B trên miền thật — user chốt
+  "KL chưa đủ")**: loss CE(gold)+0,3KL+dense, data BFCL/ifstruct(pseudo-gold
+  +validator)/ParseBench-table/needle (585 train/50 val/30 test niêm phong),
+  3 chốt chặn (best-by-val, stale-3, CE_FLOOR 0,2). **CE train 8,7→0,008
+  (thuộc lòng) nhưng VAL 0 TOÀN TUYẾN 4 mốc; test niêm phong BFCL: self
+  20/20 | mapped 0/20** (needle2k vô hiệu — bug TRAIN_MAX cắt câu hỏi).
+  PHÁN QUYẾT lần 3 qua 3 hàm loss: mapper 35M không tổng quát hóa được
+  cross-shape — vấn đề ở LỚP HÀM. Trận runtime mới: 7 bug (zombie PID,
+  datasets parser, cache dict 5.15, copy_ in-place phá autograd, seed-skip
+  treo, hook OOM, cell kill nhầm) — hạ tầng .last+resume+retry sống sót
+  thật. 3 lối 27B chờ user: #1 weight-derived / 2 chặng qua 9B / đóng ô.
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 

@@ -1060,6 +1060,35 @@ phương án (c) kích hoạt (2026-08-15, `e8v2_qlora.py`/`e8v3_unsloth.py`)**:
   prefill-helper chính thức duy nhất của 9B. Muốn mở lại cần vũ khí khác
   hẳn: finetune sâu (full GDN blocks) hoặc weight-derived conjugation (#1).
 
+**E6 v3 (CE-GOLD mapper 4B→27B trên miền thật — user chốt "KL chưa đủ, cần
+CE bảo đảm đầu ra + bộ SE/BFCL/validation", 2026-08-23→24, `e6v3_ce.py`)**:
+
+    Loss: CE(gold) + 0,3·KL + warm-MSE + 0,05·dense; CE_FLOOR 0,2 (Unsloth).
+    Data THẬT: BFCL 285 + ifstruct 60 (pseudo-gold 27B + validator) +
+      ParseBench-table 40 (bảng→trích hàng k) + needle 200; val 50; test
+      niêm phong = 20 BFCL E6 + 10 needle@2K.
+    KẾT CỤC: CE train 8,7 → 0,008 (THUỘC LÒNG 585 cache) nhưng VAL 0 TOÀN
+      TUYẾN cả 4 mốc (149/299/449/599) → tự dừng stale-3. TEST NIÊM PHONG:
+      BFCL self 20/20 | mapped 0/20 | no_ctx 0/20. (needle2k VÔ HIỆU —
+      TRAIN_MAX cắt mất câu hỏi, self cũng 0: artifact, đã ghi nợ.)
+
+- **PHÁN QUYẾT v3 (lần 3, cùng một câu trả lời qua 3 hàm loss: KL thuần /
+  KL hội tụ sâu / CE-gold)**: mapper 35M tuyến-tính/song-tuyến-tính GHI NHỚ
+  được nhưng KHÔNG TỔNG QUÁT HÓA được phép dịch cross-shape từ vài trăm mẫu
+  — vấn đề nằm ở LỚP HÀM, không phải hàm loss hay miền data nữa.
+- Trận chiến môi trường runtime mới (py3.13 + datasets mới + transformers
+  5.15): 7 bug fix nối tiếp — zombie PID qua mặt kill -0; BFCL "Trailing
+  data" (đổi hf_hub_download + tự parse); cache states bọc dict {0:tensor}
+  (shim _get/_set_like trong e5); update_recurrent_state .copy_() in-place
+  phá autograd fla (monkey-patch rebind khi có grad); needle_items gọi
+  token_stream per-item seed lớn = skip vạn doc (treo 20ph); dense-hook
+  không công tắc → OOM @VAL (16×160MB/prefill); cell launch còn logic kill
+  giết nhầm chuỗi khỏe. Hạ tầng chống chịu mới: checkpoint .last/50 bước +
+  resume + bash retry 8 vòng — CHẠY THẬT (sống sót 2 OOM + 1 kill nhầm).
+- Ba lối còn lại cho 27B: (a) weight-derived conjugation #1 (không học);
+  (b) hai chặng 4B→9B(copy)→27B (chặng học ngắn hơn); (c) đóng ô 27B cho
+  adapter, dồn lực Phase C. Chờ user chọn.
+
 ## SPEC DECODING NGRAM (2026-08-14): OFF MẶC ĐỊNH TRÊN L4 — đo 2 model × 2 mức tải
 
 Profile `-spec` (ngram k=4, prompt-lookup 2-4) thêm vào run.sh; cùng runtime,
