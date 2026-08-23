@@ -47,6 +47,7 @@ TRAIN_MAX = 1024     # ctx token toi da khi train (BFCL ~800-900 la vua)
 GOLD_MAX = 64
 CONV_WARM = e5.CONV_WARM
 BETA = 0.3           # trong so KL phu
+CE_FLOOR = 0.2       # Unsloth: train loss <0,2 = overfit -> dung (user chot)
 GAMMA = 0.05         # dense supervision
 N_NEEDLE_TRAIN = 200
 VAL_EVERY = 150   # val 50 mau ~7 phut/lan — 100 la qua day
@@ -382,6 +383,7 @@ def main():
         sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.steps)
         n_train = len(data["train"])
         best, stale = -1, 0
+        ce_hist = []
         t0 = time.time()
         for step in range(args.steps):
             gc.collect(); torch.cuda.empty_cache()
@@ -428,9 +430,22 @@ def main():
                  dense, loss, stu_caps, tch_caps)
             captured.clear()
             torch.cuda.empty_cache()
+            ce_hist.append(cev)
             if step % 25 == 0:
                 print(f"step {step}/{args.steps} CE {cev:.3f} KL {klv:.3f} "
                       f"lam {lam:.2f} ({time.time()-t0:.0f}s)")
+            if step > 150 and len(ce_hist) >= 50 \
+                    and sum(ce_hist[-50:]) / 50 < CE_FLOOR:
+                print(f"CE trung binh 50 buoc < {CE_FLOOR} — nguy co overfit "
+                      "(quy tac Unsloth, user chot) -> chay VAL roi DUNG")
+                score, detail = run_val(f"cefloor-step{step}")
+                results["val_curve"].append({"step": step, "score": score,
+                                             "stop": "ce_floor", **detail})
+                save_results()
+                if score > best:
+                    best = score
+                    torch.save(mapper.state_dict(), args.out)
+                break
             if step % VAL_EVERY == VAL_EVERY - 1:
                 score, detail = run_val(f"step{step}")
                 results["val_curve"].append({"step": step, "score": score,
