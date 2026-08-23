@@ -57,9 +57,16 @@ SEED = 7
 # ------------------------------ data ----------------------------------------
 
 def bfcl_load(fname, n):
-    from datasets import load_dataset
-    ds = load_dataset("gorilla-llm/Berkeley-Function-Calling-Leaderboard",
-                      data_files=fname, split="train")
+    # KHONG dung load_dataset: datasets ban moi (Colab py3.13) parse JSON
+    # kieu khac -> "Trailing data". Tai file tho + tu parse (JSON hoac JSONL).
+    from huggingface_hub import hf_hub_download
+    path = hf_hub_download("gorilla-llm/Berkeley-Function-Calling-Leaderboard",
+                           fname, repo_type="dataset")
+    txt = Path(path).read_text(encoding="utf-8")
+    try:
+        ds = json.loads(txt)
+    except ValueError:
+        ds = [json.loads(l) for l in txt.splitlines() if l.strip()]
     items = []
     for ex in ds:
         q = ex.get("question")
