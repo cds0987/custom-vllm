@@ -353,6 +353,9 @@ def main():
     mapper = e5.Mapper(len(a_t), len(g_t), Hs, Ht, attn_dim, theta_s, theta_t)
     if args.skip_train:
         mapper.load(args.out)
+    elif Path(args.out + ".last").exists():
+        mapper.load(args.out + ".last")
+        print("RESUME tu checkpoint .last")
 
     captured = []
     hooks = []
@@ -420,6 +423,23 @@ def main():
         t0 = time.time()
         for step in range(args.steps):
             gc.collect(); torch.cuda.empty_cache()
+            # VAL o DAU vong lap: khong bi item-skip (continue) nuot moc nua
+            if step % VAL_EVERY == VAL_EVERY - 1:
+                score, detail = run_val(f"step{step}")
+                results["val_curve"].append({"step": step, "score": score,
+                                             **detail})
+                save_results()
+                if score > best:
+                    best, stale = score, 0
+                    torch.save(mapper.state_dict(), args.out)
+                    print(f"  best-by-val {best} -> saved")
+                else:
+                    stale += 1
+                    if stale >= 3:
+                        print("VAL dung im 3 moc — DUNG SOM (ky luat E8)")
+                        break
+            if step % 50 == 49:   # day an toan: checkpoint bat ke val
+                torch.save(mapper.state_dict(), args.out + ".last")
             it = data["train"][step % n_train]
             sid = f"train{step % n_train}"
             if not it.get("gold"):
@@ -479,20 +499,6 @@ def main():
                     best = score
                     torch.save(mapper.state_dict(), args.out)
                 break
-            if step % VAL_EVERY == VAL_EVERY - 1:
-                score, detail = run_val(f"step{step}")
-                results["val_curve"].append({"step": step, "score": score,
-                                             **detail})
-                save_results()
-                if score > best:
-                    best, stale = score, 0
-                    torch.save(mapper.state_dict(), args.out)
-                    print(f"  best-by-val {best} -> saved")
-                else:
-                    stale += 1
-                    if stale >= 3:
-                        print("VAL dung im 3 moc — DUNG SOM (ky luat E8)")
-                        break
         print("TRAIN_DONE")
         mapper.load(args.out)
 
