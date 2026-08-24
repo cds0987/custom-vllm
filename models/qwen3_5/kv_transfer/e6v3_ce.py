@@ -478,8 +478,16 @@ def main():
             skip_f.write_text(json.dumps(sorted(skip_ids)))
             print(f"OOM-skip: item {crashed % n_train} (tong {len(skip_ids)})")
             att_f.unlink()
+        # step BEN qua restart: OOM moi ~200 buoc < VAL_EVERY -> khong co step
+        # toan cuc thi val/cosine/hoan-thanh khong bao gio dat
+        gstep_f = cdir / "gstep.txt"
+        start_step = int(gstep_f.read_text()) if gstep_f.exists() else 0
+        if start_step:
+            print(f"RESUME step toan cuc {start_step}")
+            for _ in range(start_step):
+                sched.step()
         t0 = time.time()
-        for step in range(args.steps):
+        for step in range(start_step, args.steps):
             gc.collect(); torch.cuda.empty_cache()
             # VAL o DAU vong lap: khong bi item-skip (continue) nuot moc nua
             if step % VAL_EVERY == VAL_EVERY - 1:
@@ -498,6 +506,7 @@ def main():
                         break
             if step % 50 == 49:   # day an toan: checkpoint bat ke val
                 torch.save(mapper.state_dict(), args.out + ".last")
+                gstep_f.write_text(str(step + 1))
             it = data["train"][step % n_train]
             sid = f"train{step % n_train}"
             if not it.get("gold") or (step % n_train) in skip_ids:
