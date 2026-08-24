@@ -1119,6 +1119,31 @@ SỐNG THẬT. BFCL niêm phong: MAPPED 16/20** (`e6v3_ce.py` giao thức mới)
   check + nghi loss) đã cứu cả mặt trận. Error-placement lần 6: CE trung
   bình che token quyết định.
 
+**E6 v3.2 — SCALE-UP (user duyệt, 2026-08-24→25): BFCL 17/20, needle@2K lộ
+vách đá độ dài** (`e6v3_ce.py`, data ×2,5, 2000 bước, e6v32_results.json):
+
+    Data: BFCL 465 + ifstruct 135 (gold 96) + pbtable 110 (gold 64) +
+    needle 350 (700/950); val 55 (gồm needle 1500); test niêm phong y cũ
+    + needle@2K maxlen 4096 (LẦN ĐẦU chấm đúng).
+    Val curve (best@1249): bfcl 3→6→9→10/15, needle 14-15/15 (CẢ nhóm
+    1500 = 1,6× miền train); dừng đúng kỷ luật stale-3 @1999.
+    TEST NIÊM PHONG: BFCL self 20/20 | MAPPED 17/20 | no_ctx 0.
+    needle@2K: self 10/10 | MAPPED 1/10 — VÁCH ĐÁ giữa 1500 và 2000
+    (retention-length law #6 hiện bằng số: GDN state tích lũy theo độ dài,
+    cache 2K ngoài phân phối train ≤950).
+    TRAIN-CHECK: bfcl 11/11, needle 12/12 (hoàn hảo — học quy luật thật).
+    ifstruct/pbtable van 0 moi noi: sinh-cấu-trúc-dài chưa học được (gold
+    96/64 không đủ chữa — cần mổ output, nợ v3.3).
+
+- Trận OOM 22GB (transformers 5.15 GDN fp32 nặng ×2): phong bì train 1024;
+  hạ tầng chống chịu hoàn chỉnh MỚI: skip-mẫu-OOM tự học (attempt.txt +
+  skip.json), step toàn cục bền qua restart (gstep.txt + fast-forward
+  cosine), val kiểu ngưỡng (bắt kịp mốc bị crash nhảy), phòng thủ chủ động
+  ctx>850→gold 32. Sống qua ~10 lần ngã, không mất tiến độ.
+- Scope 4B→27B sau v3.2: function-calling 85% trần + truy xuất tới ~1500
+  token = DÙNG ĐƯỢC; >2K cần train ctx dài (GPU >22GB hoặc tiết kiệm bộ
+  nhớ sâu hơn — hướng v3.3/Phase C).
+
 ## SPEC DECODING NGRAM (2026-08-14): OFF MẶC ĐỊNH TRÊN L4 — đo 2 model × 2 mức tải
 
 Profile `-spec` (ngram k=4, prompt-lookup 2-4) thêm vào run.sh; cùng runtime,

@@ -106,9 +106,16 @@ Cập nhật: 2026-08-24.
   DUNG qua tường GDN, cache chưa gặp); train-check bfcl 7/15 needle 8/9.
   **Cascade 4B→27B vượt thanh kinh tế — có giá trị sản phẩm thật.**
   ĐÃ UPLOAD HF (quy tắc 6d): `gunnybd01/qwen35-kv-mapper-4b-27b` (private) —
-  mapper v31 best+last, 3 json kết quả, pseudo_gold, data. Nợ: needle@2K
-  niêm phong đo lại max_len 4096; NHẮC USER REVOKE token (đã lộ trong chat).
-  Chi tiết STATUS mục E6 v3.1.
+  mapper v31 best+last, 3 json kết quả, pseudo_gold, data.
+- **E6 v3.2 XONG (2026-08-25, scale-up user duyệt)**: data ×2,5 + 2000 bước
+  → **BFCL niêm phong MAPPED 17/20** (self 20, 4B-self 11); val needle
+  15/15 kể cả cỡ 1500; train-check 11/11+12/12 (học thật). **needle@2K
+  niêm phong: 1/10 — VÁCH ĐÁ độ dài giữa 1500-2000** (retention-length law:
+  train ≤950, GDN state ngoài phân phối ở 2K). ifstruct/pbtable vẫn 0 (nợ
+  mổ output). Hạ tầng chống chịu hoàn chỉnh (skip-OOM tự học + gstep bền +
+  val ngưỡng). Scope: fn-calling + retrieval ≤1500 tok = dùng được. NỢ
+  UPLOAD v32 lên HF — Colab Secrets HF_TOKEN CHƯA SET (user cần thêm).
+  Chi tiết STATUS mục E6 v3.2.
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
