@@ -467,6 +467,17 @@ def main():
         n_train = len(data["train"])
         best, stale = -1, 0
         ce_hist = []
+        # tu hoc mau-OOM qua cac lan restart: attempt.txt ghi step dang thu;
+        # neu khoi dong ma file con do = lan truoc CHET tai step ay -> skip
+        # item do vinh vien (chong livelock resume dam lai dung mau to).
+        att_f, skip_f = cdir / "attempt.txt", cdir / "skip.json"
+        skip_ids = set(json.loads(skip_f.read_text())) if skip_f.exists() else set()
+        if att_f.exists():
+            crashed = int(att_f.read_text())
+            skip_ids.add(crashed % n_train)
+            skip_f.write_text(json.dumps(sorted(skip_ids)))
+            print(f"OOM-skip: item {crashed % n_train} (tong {len(skip_ids)})")
+            att_f.unlink()
         t0 = time.time()
         for step in range(args.steps):
             gc.collect(); torch.cuda.empty_cache()
@@ -489,8 +500,9 @@ def main():
                 torch.save(mapper.state_dict(), args.out + ".last")
             it = data["train"][step % n_train]
             sid = f"train{step % n_train}"
-            if not it.get("gold"):
+            if not it.get("gold") or (step % n_train) in skip_ids:
                 continue
+            att_f.write_text(str(step))   # neu chet o buoc nay -> skip lan sau
             cut, warm = enc_cut(it)
             gm = GMAX.get(it["kind"], GOLD_MAX)
             gold_ids = tok(it["gold"], add_special_tokens=False,
@@ -542,6 +554,7 @@ def main():
                  dense, loss, stu_caps, tch_caps)
             captured.clear()
             torch.cuda.empty_cache()
+            att_f.unlink(missing_ok=True)   # buoc nay song sot
             ce_hist.append(cev)
             if step % 25 == 0:
                 print(f"step {step}/{args.steps} CE {cev:.3f} KL {klv:.3f} "
