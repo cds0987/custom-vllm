@@ -1,5 +1,10 @@
 {
   "mcpServers": {
+    "huggingface": {
+      "type": "http",
+      "url": "https://huggingface.co/mcp",
+      "headers": { "Authorization": "Bearer ${HF_TOKEN}" }
+    },
     "colab-mcp": {
       "command": "C:\\Users\\TOMAP\\AppData\\Local\\Programs\\Python\\Python313\\Scripts\\uvx.exe",
       "args": ["--from", "D:\\Training\\AI_Module\\colab-mcp", "colab-mcp"],

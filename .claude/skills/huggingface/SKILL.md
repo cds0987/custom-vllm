@@ -5,10 +5,23 @@ description: Cách dùng HuggingFace trong dự án - login đúng cách (accoun
 
 # Cách dùng HuggingFace
 
-## Account
+## Account & token (quy trình mới, user chốt 2026-08-24 — KHÔNG paste token nữa)
 
-- Account free, username `gunnybd01`. Token do user cấp trong chat (không nằm trong
-  repo) — **không ghi token vào file/commit/log**; nhắc user revoke sau chiến dịch.
+- Account free, username `gunnybd01`.
+- **Local (Windows)**: token nằm ở env var `HF_TOKEN` (User scope) — Python/CLI
+  local tự đọc; MCP server `huggingface` trong `.mcp.json` cũng đọc qua
+  `${HF_TOKEN}` (remote https://huggingface.co/mcp — search/browse hub).
+- **Colab**: dùng **Colab Secrets** (icon chìa khóa, panel trái) — user thêm key
+  `HF_TOKEN` MỘT LẦN cho notebook A + bật "Notebook access". Cell login:
+
+  ```python
+  from google.colab import userdata
+  from huggingface_hub import login
+  login(token=userdata.get("HF_TOKEN"))   # token KHÔNG xuất hiện trong cell
+  ```
+
+- Tuyệt đối **không ghi token vào file/commit/log/cell text**. Token nào từng
+  xuất hiện trong chat = coi như lộ → nhắc user rotate (tạo mới, revoke cũ).
 - Account free đủ dùng: repo model public/private không giới hạn dung lượng thực tế
   cho cỡ dự án này (champion 9.1GB upload 1.1 phút từ Colab).
 
