@@ -11,6 +11,10 @@ description: Cách dùng HuggingFace trong dự án - login đúng cách (accoun
 - **Local (Windows)**: token nằm ở env var `HF_TOKEN` (User scope) — Python/CLI
   local tự đọc; MCP server `huggingface` trong `.mcp.json` cũng đọc qua
   `${HF_TOKEN}` (remote https://huggingface.co/mcp — search/browse hub).
+- **File `.env` ở root repo** (user yêu cầu 2026-08-24, cho linh hoạt): chứa
+  `HF_TOKEN=...`, ĐÃ nằm trong `.gitignore` (kiểm bằng `git check-ignore .env`
+  trước khi đụng). Shell mới chưa nạp env User scope thì đọc từ đây. Khi
+  rotate token: sửa cả 3 nơi (.env + env User scope + Colab Secrets).
 - **Colab**: dùng **Colab Secrets** (icon chìa khóa, panel trái) — user thêm key
   `HF_TOKEN` MỘT LẦN cho notebook A + bật "Notebook access". Cell login:
 
