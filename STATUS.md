@@ -1087,7 +1087,37 @@ CE bảo đảm đầu ra + bộ SE/BFCL/validation", 2026-08-23→24, `e6v3_ce.
   resume + bash retry 8 vòng — CHẠY THẬT (sống sót 2 OOM + 1 kill nhầm).
 - Ba lối còn lại cho 27B: (a) weight-derived conjugation #1 (không học);
   (b) hai chặng 4B→9B(copy)→27B (chặng học ngắn hơn); (c) đóng ô 27B cho
-  adapter, dồn lực Phase C. Chờ user chọn.
+  adapter, dồn lực Phase C. Chờ user chọn. → BỊ LẬT BỞI v3.1 (dưới).
+
+**E6 v3.1 — ĐỘT PHÁ (2026-08-24): tìm ra và sửa lỗi loss → mapper 4B→27B
+SỐNG THẬT. BFCL niêm phong: MAPPED 16/20** (`e6v3_ce.py` giao thức mới):
+
+    Nguyên nhân gốc (user truy "kiểm tra trên train đi" + "loss CE chưa
+    đúng?"): CONV_WARM=4 thừa kế E5 BỎ 4 TOKEN ĐẦU CỦA GOLD khỏi CE/KL —
+    token quyết định (đầu tên hàm) KHÔNG BAO GIỜ được dạy; CE 0,008 của v3.0
+    = chỉ giỏi phần đuôi khi được mớm. Falsification train-check xác nhận:
+    v3.0 chỉ 1/30 NGAY TRÊN MẪU TRAIN.
+    Fix v3.1: cache cắt T-5, warm conv bằng 5 token CUỐI PROMPT (token thật)
+    → CE chấm TRỌN 100% gold, token đầu trọng số ×3; giao thức nhất quán
+    train/val/test.
+    Kết quả: val needle 0→1→8/10 (@449, cache chưa gặp — truyền được NỘI
+    DUNG qua tường GDN); TEST NIÊM PHONG BFCL: self 20/20 | MAPPED 16/20 |
+    no_ctx 0/20; train-check bfcl 7/15 needle 8/9.
+
+    Bảng mốc chấm đúng (baselines đo 2026-08-24, e6v3_baselines.json):
+    27B-self 20/20 & nk 10/10 | 4B-SELF 11/20 & nk 10/10 (thanh kinh tế) |
+    v3.1 MAPPED 16/20 | v3.0 4/20 | mapper-init 0/20 | no_ctx 0/20.
+    → MAPPED 16/20 VƯỢT thanh kinh tế 4B-self (11/20): cascade 4B-prefill →
+    27B-decode có giá trị thật cho function-calling.
+
+- Nợ đo: needle@2K niêm phong vẫn vô hiệu (TRAIN_MAX cắt câu hỏi) — cần
+  chạy lại baselines script với mapper v3.1 max_len 4096 (~15ph GPU).
+- Nợ upload (quy tắc 6d): mapper_v31.pt (best@449) + .last + 2 json — CHỜ
+  TOKEN HF WRITE của user, runtime có thể recycle bất cứ lúc nào.
+- Bài học phương pháp: phán quyết "lớp hàm không tổng quát hóa" của v3.0
+  là SAI — chết bởi 1 dòng loss kế thừa; hai câu truy vấn của user (train-
+  check + nghi loss) đã cứu cả mặt trận. Error-placement lần 6: CE trung
+  bình che token quyết định.
 
 ## SPEC DECODING NGRAM (2026-08-14): OFF MẶC ĐỊNH TRÊN L4 — đo 2 model × 2 mức tải
 

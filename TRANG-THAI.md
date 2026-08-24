@@ -96,7 +96,17 @@ Cập nhật: 2026-08-24.
   cross-shape — vấn đề ở LỚP HÀM. Trận runtime mới: 7 bug (zombie PID,
   datasets parser, cache dict 5.15, copy_ in-place phá autograd, seed-skip
   treo, hook OOM, cell kill nhầm) — hạ tầng .last+resume+retry sống sót
-  thật. 3 lối 27B chờ user: #1 weight-derived / 2 chặng qua 9B / đóng ô.
+  thật. → PHÁN QUYẾT NÀY BỊ LẬT bởi v3.1 (dưới).
+- **E6 v3.1 ĐỘT PHÁ (2026-08-24): mapper 4B→27B SỐNG — BFCL niêm phong
+  MAPPED 16/20** (self 20/20, 4B-self 11/20, v3.0 4/20, init 0/20). Nguyên
+  nhân v3.0 chết: CONV_WARM bỏ 4 token đầu GOLD khỏi loss — token quyết
+  định không bao giờ được dạy (user truy ra bằng train-check 1/30 + nghi
+  "loss CE chưa đúng"). Fix: cache cắt T-5 + warm conv bằng 5 token cuối
+  prompt + CE trọn gold, token đầu ×3. Val needle 8/10 @449 (truyền NỘI
+  DUNG qua tường GDN, cache chưa gặp); train-check bfcl 7/15 needle 8/9.
+  **Cascade 4B→27B vượt thanh kinh tế — có giá trị sản phẩm thật.** Nợ:
+  needle@2K niêm phong đo lại max_len 4096; UPLOAD mapper lên HF (chờ token
+  write user — quy tắc 6d). Chi tiết STATUS mục E6 v3.1.
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
