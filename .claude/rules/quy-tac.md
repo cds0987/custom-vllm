@@ -17,6 +17,12 @@
 6c. Mỗi quy trình chốt kết quả: cập nhật report HTML (Claude artifact, file
     `bao-cao-l4.html` trong scratchpad, URL artifact trong TRANG-THAI.md) và kiểm tra
     hiển thị đúng/đẹp (font Việt, light/dark, không tràn ngang).
+6d. (User chốt 2026-08-24) TRỪ KHI user nói khác: MỌI sản phẩm làm ra được — checkpoint,
+    mapper/LoRA (KỂ CẢ kết quả âm — vẫn cần cho kiểm chứng lại), pseudo-gold, cache
+    spill đắt tiền, data đã dựng — đều phải SAVE LÊN HUGGINGFACE trong CÙNG PHIÊN
+    trước khi runtime có cơ hội recycle. Học phí: mapper E6v3 `.last` mất theo
+    recycle → phải retrain ~2h chỉ để chạy một bài falsification. Không có token
+    write tại thời điểm chốt → HỎI USER NGAY, không để sang hôm sau.
 
 ## Vận hành
 7. GPU đã duyệt chạy thì không ngồi chơi; bị chặn/lỗi báo ngay, không im lặng.

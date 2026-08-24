@@ -45,6 +45,11 @@ api.upload_folder(folder_path="/content/champion", repo_id="gunnybd01/<ten-repo>
 
 ## Nguyên tắc
 
+- **(Quy tắc 6d, user chốt 2026-08-24) MẶC ĐỊNH save MỌI THỨ làm ra lên HF trong
+  CÙNG PHIÊN** — checkpoint, mapper/LoRA (kể cả kết quả ÂM: vẫn cần để kiểm chứng
+  lại/falsification), pseudo-gold, data dựng công phu. Học phí thật: mapper E6v3
+  `.last` không upload → recycle qua đêm → retrain ~2h chỉ để chạy một bài kiểm.
+  Thiếu token write lúc chốt → hỏi user NGAY trong phiên.
 - Kết quả/checkpoint chỉ nằm trên runtime Colab = sẽ mất khi recycle. Chốt xong là
   upload HF (checkpoint) hoặc commit git (số liệu, code) ngay.
 - Google Drive mount KHÔNG dùng được (cần click auth thủ công, treo cell) — HF là

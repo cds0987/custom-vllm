@@ -60,6 +60,8 @@ Chiến dịch E0→E8 (2026-08-14→16, chi tiết STATUS.md, code `models/qwen
 - Mọi thứ chạy trên GPU: đưa plan → user duyệt → mới chạy. Cấm tự làm.
 - Chỉ notebook A (server `colab-mcp`). Không subagent, không B/C — trừ khi user ra lệnh đích danh.
 - Không tự kết luận "hết đường"; không ghi HF token vào file/commit/log.
+- **Mọi sản phẩm làm ra (checkpoint/mapper/data — kể cả kết quả âm) phải save lên
+  HF trong CÙNG PHIÊN**, trừ khi user nói khác — runtime recycle là mất (quy tắc 6d).
 - Bản đầy đủ 13 quy tắc: `.claude/rules/quy-tac.md` — đọc trước khi bắt đầu làm việc.
 
 ## Trạng thái phiên — nạp cùng file này
