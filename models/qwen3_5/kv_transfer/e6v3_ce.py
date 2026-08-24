@@ -213,6 +213,10 @@ def main():
     ap.add_argument("--results", default="/content/logs/e6v3_results.json")
     ap.add_argument("--dry-data", action="store_true")
     ap.add_argument("--skip-train", action="store_true")
+    ap.add_argument("--train-check", action="store_true",
+                    help="falsification: nap mapper .last (thuoc long), "
+                         "greedy tren 30 mau TRAIN — phai ra dap an neu "
+                         "memorization la that")
     args = ap.parse_args()
 
     if args.dry_data:
@@ -378,13 +382,14 @@ def main():
         del src
         return model_t(input_ids=feed, past_key_values=past, use_cache=True), tpl
 
-    def run_val(tag):
-        """Validation CHUC NANG qua duong mapper."""
+    def run_val(tag, split="val", limit=None):
+        """Validation CHUC NANG qua duong mapper (split='train' = kiem
+        thuoc-long: greedy tren chinh mau da train phai ra dap an)."""
         import statistics
         sc = {"bfcl": [], "needle": [], "ifstruct": [], "pbtable": []}
         with torch.no_grad():
-            for i, it in enumerate(data["val"]):
-                sid = f"val{i}"
+            for i, it in enumerate(data[split][:limit]):
+                sid = f"{split}{i}"
                 pre, last = enc_item(it)
                 src = e5.load_cache(cdir / f"{sid}.pt")
                 tpl = model_t(input_ids=pre, use_cache=True,
@@ -414,6 +419,15 @@ def main():
         score = sum(sum(v) for v in sc.values())
         print(f"VAL[{tag}]: {out} -> score {score}")
         return score, out
+
+    if args.train_check:
+        mapper.load(args.out + ".last")
+        print("TRAIN-CHECK: mapper .last (CE 0.008)")
+        score, detail = run_val("train-check", split="train", limit=30)
+        results["train_check"] = detail
+        save_results()
+        print("E6V3_TRAINCHECK_DONE")
+        return
 
     if not args.skip_train:
         import bitsandbytes as bnb
