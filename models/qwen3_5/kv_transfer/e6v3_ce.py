@@ -45,7 +45,13 @@ e5, e2 = e6.e5, e6.e2
 
 TRAIN_MAX = 1024     # ctx token toi da khi train (BFCL ~800-900 la vua)
 GOLD_MAX = 64
-CONV_WARM = e5.CONV_WARM
+CONV_WARM = e5.CONV_WARM   # (v3.0 — giu cho tham chieu)
+# v3.1 (user duyet 2026-08-24): CONV_WARM skip 4 vi tri dau cua GOLD = khong
+# bao gio day token quyet dinh (fn name dau). Giao thuc moi: cache cat tai
+# T-WARM_P, warm conv bang WARM_P token CUOI PROMPT (token that, khong phai
+# dap an) -> CE cham TRON 100% gold, token dau trong so FIRST_W.
+WARM_P = 5
+FIRST_W = 3.0
 BETA = 0.3           # trong so KL phu
 CE_FLOOR = 0.2       # Unsloth: train loss <0,2 = overfit -> dung (user chot)
 GAMMA = 0.05         # dense supervision
@@ -286,7 +292,8 @@ def main():
                         continue
                     enc = tok_s(it["prompt"], return_tensors="pt", truncation=True,
                                 max_length=TRAIN_MAX).to("cuda")
-                    past = model_s(input_ids=enc["input_ids"][:, :-1],
+                    # v3.1: cache cat tai T-WARM_P (GDN khong tua nguoc duoc)
+                    past = model_s(input_ids=enc["input_ids"][:, :-WARM_P],
                                    use_cache=True, logits_to_keep=1).past_key_values
                     e5.spill_cache(past, pth)
                     del past
@@ -311,6 +318,13 @@ def main():
         enc = tok(it["prompt"], return_tensors="pt", truncation=True,
                   max_length=TRAIN_MAX).to("cuda")
         return enc["input_ids"][:, :-1], enc["input_ids"][:, -1:]
+
+    def enc_cut(it):
+        """v3.1: (cache_ids cat tai T-WARM_P, warm = WARM_P token cuoi prompt)."""
+        enc = tok(it["prompt"], return_tensors="pt", truncation=True,
+                  max_length=TRAIN_MAX).to("cuda")
+        ids = enc["input_ids"]
+        return ids[:, :-WARM_P], ids[:, -WARM_P:]
 
     # --- B0: pseudo-gold cho ifstruct (27B tu doc, greedy GOLD_MAX) ---
     pg_path = cdir / "pseudo_gold.json"
@@ -390,14 +404,17 @@ def main():
         with torch.no_grad():
             for i, it in enumerate(data[split][:limit]):
                 sid = f"{split}{i}"
-                pre, last = enc_item(it)
+                cut, warm = enc_cut(it)
                 src = e5.load_cache(cdir / f"{sid}.pt")
-                tpl = model_t(input_ids=pre, use_cache=True,
+                tpl = model_t(input_ids=cut, use_cache=True,
                               logits_to_keep=1).past_key_values
                 past = e5.build_student_past(tpl, src, mapper)
                 del src, tpl
-                cur, gen, inp = past, [], last
-                for _ in range(GOLD_MAX):
+                o = model_t(input_ids=warm, past_key_values=past, use_cache=True)
+                cur = o.past_key_values
+                inp = o.logits[:, -1, :].argmax(-1, keepdim=True)
+                gen = [int(inp)]
+                for _ in range(GOLD_MAX - 1):
                     o = model_t(input_ids=inp, past_key_values=cur, use_cache=True)
                     cur = o.past_key_values
                     inp = o.logits[:, -1, :].argmax(-1, keepdim=True)
@@ -460,22 +477,22 @@ def main():
             sid = f"train{step % n_train}"
             if not it.get("gold"):
                 continue
-            pre, last = enc_item(it)
+            cut, warm = enc_cut(it)
             gold_ids = tok(it["gold"], add_special_tokens=False,
                            return_tensors="pt")["input_ids"][:, :GOLD_MAX].to("cuda")
-            if gold_ids.shape[1] <= CONV_WARM + 1:
+            if gold_ids.shape[1] < 2:
                 continue
-            feed = torch.cat([last, gold_ids[:, :-1]], 1)
+            feed = torch.cat([warm, gold_ids[:, :-1]], 1)
             with torch.no_grad():
                 import copy as _c
-                tch_past = model_t(input_ids=pre, use_cache=True,
+                tch_past = model_t(input_ids=cut, use_cache=True,
                                    logits_to_keep=1).past_key_values
                 captured.clear()
                 cap_on["v"] = True
                 tch_ext = _c.deepcopy(tch_past)
                 tch_logp = torch.log_softmax(
                     model_t(input_ids=feed, past_key_values=tch_ext,
-                            use_cache=True).logits[:, CONV_WARM:].float(), -1)
+                            use_cache=True).logits[:, WARM_P - 1:].float(), -1)
                 cap_on["v"] = False
                 tch_caps = [c.detach() for c in captured]
                 del tch_ext
@@ -490,8 +507,11 @@ def main():
                           use_cache=True)
             cap_on["v"] = False
             stu_caps = list(captured)
-            logp = torch.log_softmax(out.logits[:, CONV_WARM:].float(), -1)
-            ce = -logp.gather(2, gold_ids[:, CONV_WARM:].unsqueeze(-1)).mean()
+            logp = torch.log_softmax(out.logits[:, WARM_P - 1:].float(), -1)
+            nll = -logp.gather(2, gold_ids.unsqueeze(-1)).squeeze(-1)
+            wts = torch.ones_like(nll)
+            wts[:, 0] = FIRST_W          # token quyet dinh — trong so x3
+            ce = (nll * wts).sum() / wts.sum()
             kl = F.kl_div(logp, tch_logp, log_target=True, reduction="batchmean")
             dense = sum((s.float() - t.float()).pow(2).mean()
                         / (t.float().pow(2).mean() + 1e-6)
@@ -536,17 +556,24 @@ def main():
                 if cond == "self":
                     past = model_t(input_ids=pre, use_cache=True,
                                    logits_to_keep=1).past_key_values
+                    cur, gen, inp = past, [], last
                 elif cond == "no_ctx":
                     past = model_t(input_ids=last, use_cache=True,
                                    logits_to_keep=1).past_key_values
-                else:
+                    cur, gen, inp = past, [], last
+                else:   # v3.1: warm conv bang WARM_P token cuoi prompt
+                    cut, warm = enc_cut(it)
                     src = e5.load_cache(cdir / f"test{i}.pt")
-                    tpl = model_t(input_ids=pre, use_cache=True,
+                    tpl = model_t(input_ids=cut, use_cache=True,
                                   logits_to_keep=1).past_key_values
                     past = e5.build_student_past(tpl, src, mapper)
                     del src, tpl
-                cur, gen, inp = past, [], last
-                for _ in range(24):
+                    o = model_t(input_ids=warm, past_key_values=past,
+                                use_cache=True)
+                    cur = o.past_key_values
+                    inp = o.logits[:, -1, :].argmax(-1, keepdim=True)
+                    gen = [int(inp)]
+                for _ in range(24 - len(gen)):
                     o = model_t(input_ids=inp, past_key_values=cur, use_cache=True)
                     cur = o.past_key_values
                     inp = o.logits[:, -1, :].argmax(-1, keepdim=True)
