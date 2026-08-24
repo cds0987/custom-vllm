@@ -43,7 +43,7 @@ e6 = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(e6)
 e5, e2 = e6.e5, e6.e2
 
-TRAIN_MAX = 2048     # v3.2 scale-up: them mien dai (needle 1800, BFCL full)
+TRAIN_MAX = 1536     # 2048 OOM deterministica @train (21,4GB) — ha 1536
 NK_MAXLEN = 4096     # needle khong bao gio duoc cat (bug needle2k cu)
 GOLD_MAX = 64        # fallback
 # v3.2: gold/gen rieng tung loai — ifstruct/pbtable 0 diem vi gold 64 cat cut
@@ -181,9 +181,9 @@ def build_data(tok=None):
     train += pbt[10:]
     if tok is not None:
         train += needle_items(tok, 250, 30000)                  # ngan 700
-        train += needle_items(tok, 100, 40000, ctx_tok=1800)    # MIEN DAI
+        train += needle_items(tok, 100, 40000, ctx_tok=1500)    # MIEN DAI
         val += needle_items(tok, 10, 31000)
-        val += needle_items(tok, 5, 41000, ctx_tok=1800)
+        val += needle_items(tok, 5, 41000, ctx_tok=1500)
         test += needle_items(tok, 10, 32000, ctx_tok=2000)   # needle 2K nhu E6
     rng.shuffle(train)
     return {"train": train, "val": val, "test": test}
