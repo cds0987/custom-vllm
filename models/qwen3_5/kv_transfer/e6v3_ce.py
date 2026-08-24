@@ -43,8 +43,12 @@ e6 = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(e6)
 e5, e2 = e6.e5, e6.e2
 
-TRAIN_MAX = 1024     # ctx token toi da khi train (BFCL ~800-900 la vua)
-GOLD_MAX = 64
+TRAIN_MAX = 2048     # v3.2 scale-up: them mien dai (needle 1800, BFCL full)
+NK_MAXLEN = 4096     # needle khong bao gio duoc cat (bug needle2k cu)
+GOLD_MAX = 64        # fallback
+# v3.2: gold/gen rieng tung loai — ifstruct/pbtable 0 diem vi gold 64 cat cut
+GMAX = {"bfcl": 16, "needle": 12, "ifstruct": 128, "pbtable": 96}
+GEN_LEN = {"bfcl": 24, "needle": 16, "ifstruct": 160, "pbtable": 120}
 CONV_WARM = e5.CONV_WARM   # (v3.0 — giu cho tham chieu)
 # v3.1 (user duyet 2026-08-24): CONV_WARM skip 4 vi tri dau cua GOLD = khong
 # bao gio day token quyet dinh (fn name dau). Giao thuc moi: cache cat tai
@@ -56,7 +60,7 @@ BETA = 0.3           # trong so KL phu
 CE_FLOOR = 0.2       # Unsloth: train loss <0,2 = overfit -> dung (user chot)
 GAMMA = 0.05         # dense supervision
 N_NEEDLE_TRAIN = 200
-VAL_EVERY = 150   # val 50 mau ~7 phut/lan — 100 la qua day
+VAL_EVERY = 250   # v3.2: val 55 mau ~10 phut/lan, 2000 buoc = 8 moc
 SEED = 7
 
 
@@ -158,26 +162,28 @@ def needle_items(tok, n, seed0, ctx_tok=700):
 
 
 def build_data(tok=None):
-    """Return dict(train, val, test). tok=None -> bo needle (dry-data)."""
+    """v3.2 SCALE-UP (user duyet 2026-08-24). tok=None -> bo needle (dry)."""
     rng = random.Random(SEED)
     exec_simple = bfcl_load("BFCL_v3_exec_simple.json", 100)
     test = exec_simple[:20]                      # NIEM PHONG — y het E6
     train = exec_simple[20:]
-    simple = bfcl_load("BFCL_v3_simple.json", 220)
+    simple = bfcl_load("BFCL_v3_simple.json", 400)
     test_prompts = {it["prompt"] for it in test}
     simple = [it for it in simple if it["prompt"] not in test_prompts]
     rng.shuffle(simple)
     val = simple[:15]
     train += simple[15:]
-    ifs = ifstruct_load(75)
+    ifs = ifstruct_load(150)
     val += ifs[:15]
     train += ifs[15:]
-    pbt = pbtable_load(50)
+    pbt = pbtable_load(120)
     val += pbt[:10]
     train += pbt[10:]
     if tok is not None:
-        train += needle_items(tok, N_NEEDLE_TRAIN, 30000)
+        train += needle_items(tok, 250, 30000)                  # ngan 700
+        train += needle_items(tok, 100, 40000, ctx_tok=1800)    # MIEN DAI
         val += needle_items(tok, 10, 31000)
+        val += needle_items(tok, 5, 41000, ctx_tok=1800)
         test += needle_items(tok, 10, 32000, ctx_tok=2000)   # needle 2K nhu E6
     rng.shuffle(train)
     return {"train": train, "val": val, "test": test}
@@ -290,8 +296,9 @@ def main():
                     pth = cdir / f"{split}{i}.pt"
                     if pth.exists():
                         continue
+                    ml = NK_MAXLEN if it["kind"] == "needle" else TRAIN_MAX
                     enc = tok_s(it["prompt"], return_tensors="pt", truncation=True,
-                                max_length=TRAIN_MAX).to("cuda")
+                                max_length=ml).to("cuda")
                     # v3.1: cache cat tai T-WARM_P (GDN khong tua nguoc duoc)
                     past = model_s(input_ids=enc["input_ids"][:, :-WARM_P],
                                    use_cache=True, logits_to_keep=1).past_key_values
@@ -314,15 +321,18 @@ def main():
     theta_t = e5.e1.get_rope_theta(model_t.config.get_text_config())
     data = json.loads((cdir / "data.json").read_text())
 
+    def _maxlen(it):
+        return NK_MAXLEN if it["kind"] == "needle" else TRAIN_MAX
+
     def enc_item(it):
         enc = tok(it["prompt"], return_tensors="pt", truncation=True,
-                  max_length=TRAIN_MAX).to("cuda")
+                  max_length=_maxlen(it)).to("cuda")
         return enc["input_ids"][:, :-1], enc["input_ids"][:, -1:]
 
     def enc_cut(it):
         """v3.1: (cache_ids cat tai T-WARM_P, warm = WARM_P token cuoi prompt)."""
         enc = tok(it["prompt"], return_tensors="pt", truncation=True,
-                  max_length=TRAIN_MAX).to("cuda")
+                  max_length=_maxlen(it)).to("cuda")
         ids = enc["input_ids"]
         return ids[:, :-WARM_P], ids[:, -WARM_P:]
 
@@ -339,7 +349,7 @@ def main():
                     past = model_t(input_ids=pre, use_cache=True,
                                    logits_to_keep=1).past_key_values
                     cur, gen, inp = past, [], last
-                    for _ in range(GOLD_MAX):
+                    for _ in range(GMAX["ifstruct"]):
                         o = model_t(input_ids=inp, past_key_values=cur,
                                     use_cache=True)
                         cur = o.past_key_values
@@ -414,7 +424,7 @@ def main():
                 cur = o.past_key_values
                 inp = o.logits[:, -1, :].argmax(-1, keepdim=True)
                 gen = [int(inp)]
-                for _ in range(GOLD_MAX - 1):
+                for _ in range(GEN_LEN.get(it["kind"], GOLD_MAX) - 1):
                     o = model_t(input_ids=inp, past_key_values=cur, use_cache=True)
                     cur = o.past_key_values
                     inp = o.logits[:, -1, :].argmax(-1, keepdim=True)
@@ -478,8 +488,9 @@ def main():
             if not it.get("gold"):
                 continue
             cut, warm = enc_cut(it)
+            gm = GMAX.get(it["kind"], GOLD_MAX)
             gold_ids = tok(it["gold"], add_special_tokens=False,
-                           return_tensors="pt")["input_ids"][:, :GOLD_MAX].to("cuda")
+                           return_tensors="pt")["input_ids"][:, :gm].to("cuda")
             if gold_ids.shape[1] < 2:
                 continue
             feed = torch.cat([warm, gold_ids[:, :-1]], 1)
