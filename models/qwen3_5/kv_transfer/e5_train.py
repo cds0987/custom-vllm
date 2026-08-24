@@ -81,6 +81,8 @@ class Mapper:
                  attn_dim, theta_s, theta_t, device="cuda"):
         import torch
         self.theta_s, self.theta_t = theta_s, theta_t
+        self.ckpt = False   # v3.3: bat = recompute map_attn trong backward
+                            # (autograd map_attn fp32 ~0.5GB@1K, ~1GB@2K ctx)
         self.params = []
         self.WK, self.bK, self.WV, self.bV = [], [], [], []
         for _ in range(n_attn_tgt):
@@ -100,6 +102,12 @@ class Mapper:
             self.params += [a, A, B]
 
     def map_attn(self, j, k, v):
+        if self.ckpt:
+            from torch.utils.checkpoint import checkpoint
+            return checkpoint(self._map_attn_impl, j, k, v, use_reentrant=False)
+        return self._map_attn_impl(j, k, v)
+
+    def _map_attn_impl(self, j, k, v):
         """k,v: (1, H, T, dh) source tensors on cuda. Returns mapped bf16."""
         import torch
         _, H, T, dh = k.shape
@@ -201,12 +209,48 @@ def depth_map(n_src, n_tgt):
     return [round(j * (n_src - 1) / max(n_tgt - 1, 1)) for j in range(n_tgt)]
 
 
-def build_student_past(tpl_past, src_past, mapper):
-    """Deepcopy 27B template (positions/shapes right), swap in mapped
-    grad-tracking tensors by ATTRIBUTE replacement (not in-place: autograd)."""
+def clone_cache_struct(past):
+    """v3.3 thay deepcopy: nhan ban CAU TRUC cache (object + dict wrapper),
+    KHONG copy tensor. Ly do: build_student_past thay TOAN BO tensor
+    attn-KV/GDN ngay sau do — deepcopy ~600MB fp32 GDN states cua 5.15 roi
+    vut la phi lon nhat moi buoc train (do v3.2). Dict attrs (recurrent/conv
+    5.15 boc {0: tensor}) duoc tao dict MOI de mutation tren ban sao khong
+    lan sang teacher."""
     import copy
+    new = copy.copy(past)
+    new.layers = []
+    for l in past.layers:
+        c = copy.copy(l)
+        for k, v in list(vars(c).items()):
+            if isinstance(v, dict):
+                setattr(c, k, dict(v))
+            elif isinstance(v, list):
+                setattr(c, k, list(v))
+        new.layers.append(c)
+    return new
+
+
+def force_state_dtype(past, dtype):
+    """v3.3 thu nghiem (--gdn-bf16): ep GDN state fp32->bf16 sau prefill —
+    giam ~300MB/ban cache 27B. Phai sanity 20 buoc truoc khi tin (fla kernel
+    co the ken dtype)."""
+    for l in past.layers:
+        if "LinearAttention" in type(l).__name__:
+            for attr in ("recurrent_states", "conv_states"):
+                cur = getattr(l, attr)
+                if isinstance(cur, dict):
+                    for kk in cur:
+                        cur[kk] = cur[kk].to(dtype)
+                else:
+                    setattr(l, attr, cur.to(dtype))
+    return past
+
+
+def build_student_past(tpl_past, src_past, mapper):
+    """Clone template 27B (positions/shapes right, khong copy tensor), swap in
+    mapped grad-tracking tensors by ATTRIBUTE replacement (not in-place)."""
     import torch
-    past = copy.deepcopy(tpl_past)
+    past = clone_cache_struct(tpl_past)
     attn_s, gdn_s = split_layers(src_past)
     attn_t, gdn_t = split_layers(past)
     ks, kt = sorted(attn_s), sorted(attn_t)

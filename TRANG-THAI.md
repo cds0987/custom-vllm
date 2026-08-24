@@ -116,6 +116,17 @@ Cập nhật: 2026-08-24.
   val ngưỡng). Scope: fn-calling + retrieval ≤1500 tok = dùng được. NỢ
   UPLOAD v32 lên HF — Colab Secrets HF_TOKEN CHƯA SET (user cần thêm).
   Chi tiết STATUS mục E6 v3.2.
+- **E6 v3.3 CODE SẴN SÀNG (2026-08-24, user duyệt hướng: tốc độ + ctx dài +
+  chính xác)**: (tốc độ) bỏ 2 deepcopy ~600MB/bước (`clone_cache_struct`),
+  Phase B1 tiền tính teacher 1 lần/item (top-64 logp + dense caps 4 layer
+  fp16 ra đĩa) → vòng train hết teacher feed-forward, aux chỉ tính khi
+  λ>0; (ctx dài) checkpoint `map_attn` (mặc định BẬT), cờ `--gdn-bf16`
+  thử nghiệm, needle curriculum train 700→2000 + val bucket @2000;
+  (chính xác) BFCL +parallel/multiple (655 bfcl train), trọng số token-
+  xương ×2 cho ifstruct/pbtable, val DUMP text sinh ra (mổ được 0 điểm).
+  Dry-data pass local: 1330 train / 70 val / test niêm phong giữ nguyên.
+  Chế độ `--sanity N`: sandbox riêng, chỉ item DÀI nhất, đo s/bước + peak
+  VRAM. CHỜ DUYỆT: GPU lượt 1 = sanity ctx-2000 (~30-40 phút).
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 

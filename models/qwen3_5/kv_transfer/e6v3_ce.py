@@ -22,10 +22,23 @@ Data (khao sat schema that 2026-08-23):
     structured-retrieval.
   - Needle tong hop (khuon e6.make_train_ids): giu truc truy xuat dai.
 
+v3.3 (user duyet 2026-08-24 — toc do + ctx dai + chinh xac):
+  TOC DO: (1) bo 2 deepcopy ~600MB/buoc (clone_cache_struct trong e5);
+  (2) PHASE B1 tien tinh teacher MOT LAN/item (top-64 logp + dense caps
+  4 layer/item, fp16 ra dia) -> vong train khong con teacher feed-forward
+  + khong deepcopy tch_ext; (3) aux chi tinh khi lam>0.
+  CTX DAI: (4) mapper.ckpt = checkpoint map_attn (autograd fp32 ~1GB@2K);
+  (5) --gdn-bf16 (thu nghiem, can sanity); (6) needle curriculum train
+  700/1200/1600/2000 + val bucket @2000 de thay vach da lui theo thoi gian.
+  CHINH XAC: (7) BFCL them parallel+multiple; (8) trong so token-XUONG
+  (xuong cu phap `([{":` x2) cho ifstruct/pbtable — bai hoc CONV_WARM:
+  token quyet dinh bi bo doi la chet; (9) run_val DUMP text sinh ra vao
+  results (mo no ifstruct/pbtable 0 diem — v3.2 khong luu gi de mo).
+
 Modes:
   --dry-data       : local, khong GPU — dung + in data mix de user duyet
-  (mac dinh)       : Colab — phase A (4B spill) -> phase B (27B train+val)
-                     -> test niem phong -> luu best-by-val
+  (mac dinh)       : Colab — phase A (4B spill) -> B0 pseudo-gold ->
+                     B1 teacher-precompute -> train+val -> test niem phong
 """
 
 import argparse
@@ -64,6 +77,10 @@ GAMMA = 0.05         # dense supervision
 N_NEEDLE_TRAIN = 200
 VAL_EVERY = 250   # v3.2: val 55 mau ~10 phut/lan, 2000 buoc = 8 moc
 SEED = 7
+K_TOP = 64        # v3.3: KL tren top-64 logits teacher (du 99%+ mass, luu dia)
+N_CAP = 4         # v3.3: dense loss lay mau 4/16 layer, xoay vong theo item
+SKEL = set('([{"\':,|`')   # token-xuong cu phay: trong so x2 (ifstruct/pbtable)
+SKEL_W = 2.0
 
 
 # ------------------------------ data ----------------------------------------
@@ -159,12 +176,15 @@ def needle_items(tok, n, seed0, ctx_tok=700):
                   + f"\nIMPORTANT: The secret code for project {name} is {code}.\n"
                   + tok.decode(ids[half:]) + "\n" + e2.build_q(name) + " ")
         items.append({"kind": "needle", "prompt": prompt, "gold": code + ".",
-                      "code": code})
+                      "code": code, "ctx": ctx_tok})
     return items
 
 
 def build_data(tok=None):
-    """v3.2 SCALE-UP (user duyet 2026-08-24). tok=None -> bo needle (dry)."""
+    """v3.3 (user duyet 2026-08-24): BFCL +parallel/multiple; needle
+    curriculum 700/1200/1600/2000 TRONG train (pha vach da — v3.2 train
+    <=950 nen GDN state @2K ngoai phan phoi); val them bucket @2000.
+    tok=None -> bo needle (dry)."""
     rng = random.Random(SEED)
     exec_simple = bfcl_load("BFCL_v3_exec_simple.json", 100)
     test = exec_simple[:20]                      # NIEM PHONG — y het E6
@@ -175,6 +195,17 @@ def build_data(tok=None):
     rng.shuffle(simple)
     val = simple[:15]
     train += simple[15:]
+    # v3.3: category kho hon — nhieu ham ung vien / goi nhieu ham. Gold van
+    # "fn dau tien(" (grading `fn in txt` giu nguyen thang do voi simple).
+    for extra in ("BFCL_v3_parallel.json", "BFCL_v3_multiple.json"):
+        try:
+            xs = bfcl_load(extra, 100)
+        except Exception as ex:            # ten file doi giua cac ban dataset
+            print(f"WARN bo qua {extra}: {ex}")
+            continue
+        xs = [it for it in xs if it["prompt"] not in test_prompts]
+        val += xs[:5]
+        train += xs[5:]
     ifs = ifstruct_load(150)
     val += ifs[:15]
     train += ifs[15:]
@@ -182,12 +213,14 @@ def build_data(tok=None):
     val += pbt[:10]
     train += pbt[10:]
     if tok is not None:
-        # train trong phong bi 1024 (grad); MIEN DAI do o EVAL (no-grad):
-        # val needle 1500 + test 2000 — baselines chung minh eval @2000 OK
-        train += needle_items(tok, 250, 30000)                  # ngan 700
-        train += needle_items(tok, 100, 40000, ctx_tok=950)
+        train += needle_items(tok, 200, 30000)                  # ngan 700
+        train += needle_items(tok, 80, 40000, ctx_tok=950)
+        train += needle_items(tok, 60, 50000, ctx_tok=1200)     # v3.3 curriculum
+        train += needle_items(tok, 50, 60000, ctx_tok=1600)
+        train += needle_items(tok, 40, 70000, ctx_tok=2000)
         val += needle_items(tok, 10, 31000)
         val += needle_items(tok, 5, 41000, ctx_tok=1500)
+        val += needle_items(tok, 5, 42000, ctx_tok=2000)        # xem vach da lui
         test += needle_items(tok, 10, 32000, ctx_tok=2000)   # needle 2K nhu E6
     rng.shuffle(train)
     return {"train": train, "val": val, "test": test}
@@ -222,11 +255,18 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--src-model", default="Qwen/Qwen3.5-4B")
     ap.add_argument("--tgt-model", default="Qwen/Qwen3.5-27B")
-    ap.add_argument("--steps", type=int, default=1500)
+    ap.add_argument("--steps", type=int, default=2600)
     ap.add_argument("--lr", type=float, default=1e-3)
-    ap.add_argument("--out", default="/content/mapper_v3.pt")
-    ap.add_argument("--cache-dir", default="/content/v3_src")
-    ap.add_argument("--results", default="/content/logs/e6v3_results.json")
+    ap.add_argument("--out", default="/content/mapper_v33.pt")
+    ap.add_argument("--cache-dir", default="/content/v33_src")
+    ap.add_argument("--results", default="/content/logs/e6v33_results.json")
+    ap.add_argument("--no-ckpt-mapper", action="store_true",
+                    help="tat checkpoint map_attn (mac dinh BAT tu v3.3)")
+    ap.add_argument("--gdn-bf16", action="store_true",
+                    help="thu nghiem: ep GDN state bf16 sau prefill "
+                         "(-~300MB/cache) — chi bat sau khi sanity 20 buoc")
+    ap.add_argument("--sanity", type=int, default=0,
+                    help="chay N buoc train roi dung + in VRAM (luot do 1)")
     ap.add_argument("--dry-data", action="store_true")
     ap.add_argument("--skip-train", action="store_true")
     ap.add_argument("--train-check", action="store_true",
@@ -234,6 +274,13 @@ def main():
                          "greedy tren 30 mau TRAIN — phai ra dap an neu "
                          "memorization la that")
     args = ap.parse_args()
+
+    # sanity dung SANDBOX rieng: data bi cat/xep lai theo do dai -> chi so
+    # item khong khop voi cache cua run that (train{i}.pt keyed by index)
+    if args.sanity and args.cache_dir == "/content/v33_src":
+        args.cache_dir = "/content/v33_sanity"
+        args.out = "/content/mapper_sanity.pt"
+        print(f"SANITY -> cache-dir {args.cache_dir}")
 
     if args.dry_data:
         data = build_data(tok=None)
@@ -246,8 +293,8 @@ def main():
             print(f"\n===== SAMPLE {kind} =====")
             print("PROMPT:", it["prompt"][:400].replace("\n", " | "))
             print("GOLD:", (it["gold"] or "(pseudo-gold tu 27B)")[:200])
-        print(f"\n(+{N_NEEDLE_TRAIN} needle train / 10 val / 10 test@2K "
-              "them vao khi chay that)")
+        print("\n(+430 needle train [200@700 80@950 60@1200 50@1600 40@2000]"
+              " / 20 val [10@700 5@1500 5@2000] / 10 test@2K khi chay that)")
         return
 
     import torch
@@ -292,6 +339,12 @@ def main():
         tok_s, model_s = e5.load_4bit(args.src_model)
         tok = tok_s
         data = build_data(tok_s)
+        if args.sanity:
+            # do ca XAU NHAT: chi giu cac item train DAI nhat (needle 2000
+            # dung dau) + val rut gon — du de do s/buoc va peak VRAM
+            data["train"].sort(key=lambda x: -len(x["prompt"]))
+            data["train"] = data["train"][:max(2 * args.sanity, 30)]
+            data["val"] = data["val"][:5]
         with open(cdir / "data.json", "w") as fh:
             json.dump(data, fh)
         with torch.no_grad():
@@ -383,6 +436,9 @@ def main():
     a_t, g_t = e5.split_layers(probe)
     Ht = e5._get(next(iter(g_t.values())).recurrent_states).shape[1]
     mapper = e5.Mapper(len(a_t), len(g_t), Hs, Ht, attn_dim, theta_s, theta_t)
+    mapper.ckpt = not args.no_ckpt_mapper
+    if mapper.ckpt:
+        print("mapper.ckpt BAT (map_attn recompute trong backward)")
     if args.skip_train:
         mapper.load(args.out)
     elif Path(args.out + ".last").exists():
@@ -400,6 +456,76 @@ def main():
         if "Attention" in cls and "Linear" not in cls and hasattr(mod, "o_proj"):
             hooks.append(mod.register_forward_hook(_hook))
 
+    def _gold_feed(it, i_train=None):
+        """(cut, warm, gold_ids, feed) — DUY NHAT mot dinh nghia cho ca B1
+        lan train: lech protocol giua hai noi = teacher cache sai lech ngam."""
+        cut, warm = enc_cut(it)
+        gm = GMAX.get(it["kind"], GOLD_MAX)
+        if cut.shape[1] > 850:      # phong thu chu dong: ctx dai x gold dai
+            gm = min(gm, 32)
+        gold_ids = tok(it["gold"], add_special_tokens=False,
+                       return_tensors="pt")["input_ids"][:, :gm].to("cuda")
+        feed = torch.cat([warm, gold_ids[:, :-1]], 1)
+        return cut, warm, gold_ids, feed
+
+    # --- B1 (v3.3): tien tinh teacher MOT LAN/item -> vong train khong con
+    # teacher feed-forward + deepcopy tch_ext. Luu: top-K logp + dense caps
+    # N_CAP layer xoay vong (fp16, ~4MB/item). Idempotent tung file — song
+    # sot restart nhu moi phase khac; item lam B1 chet (OOM cung) -> stub
+    # .skip de khong livelock.
+    n_train = len(data["train"])
+    b1a = cdir / "b1_attempt.txt"
+    if b1a.exists():
+        dead = int(b1a.read_text())
+        (cdir / f"tk{dead}.skip").touch()
+        print(f"B1 OOM-skip item {dead}")
+        b1a.unlink()
+    b1_marker = cdir / "PHASE_B1_DONE"
+    if not b1_marker.exists() and not args.skip_train and not args.train_check:
+        nh = len(hooks)
+        done = 0
+        for i, it in enumerate(data["train"]):
+            tkp = cdir / f"tk{i}.pt"
+            if tkp.exists() or (cdir / f"tk{i}.skip").exists() \
+                    or not it.get("gold"):
+                continue
+            b1a.write_text(str(i))
+            try:
+                with torch.no_grad():
+                    cut, warm, gold_ids, feed = _gold_feed(it)
+                    if gold_ids.shape[1] < 2:
+                        b1a.unlink()
+                        continue
+                    past = model_t(input_ids=cut, use_cache=True,
+                                   logits_to_keep=1).past_key_values
+                    captured.clear()
+                    cap_on["v"] = True
+                    logits = model_t(input_ids=feed, past_key_values=past,
+                                     use_cache=True).logits[:, WARM_P - 1:]
+                    cap_on["v"] = False
+                    logp = torch.log_softmax(logits.float(), -1)
+                    tl, ti = logp.topk(K_TOP, dim=-1)
+                    cidx = sorted({(i + o * nh // N_CAP) % nh
+                                   for o in range(N_CAP)})
+                    caps = [captured[j].detach().to(torch.float16).cpu()
+                            for j in cidx]
+                    torch.save({"ti": ti.to(torch.int32).cpu(),
+                                "tl": tl.to(torch.float16).cpu(),
+                                "cidx": cidx, "caps": caps,
+                                "flen": feed.shape[1]}, tkp)
+                    del past, logits, logp
+            except torch.cuda.OutOfMemoryError:
+                print(f"B1 OOM item {i} -> skip")
+                (cdir / f"tk{i}.skip").touch()
+            captured.clear()
+            gc.collect(); torch.cuda.empty_cache()
+            b1a.unlink(missing_ok=True)
+            done += 1
+            if done % 25 == 0:
+                print(f"B1 {done} items (toi {i}/{n_train})")
+        b1_marker.touch()
+        print("PHASE_B1_DONE")
+
     def student_forward(it, sid, feed):
         src = e5.load_cache(cdir / f"{sid}.pt")
         pre, _ = enc_item(it)
@@ -415,6 +541,7 @@ def main():
         thuoc-long: greedy tren chinh mau da train phai ra dap an)."""
         import statistics
         sc = {"bfcl": [], "needle": [], "ifstruct": [], "pbtable": []}
+        dumps = []   # v3.3: luu text sinh ra — khong co gi de mo la mu
         with torch.no_grad():
             for i, it in enumerate(data[split][:limit]):
                 sid = f"{split}{i}"
@@ -435,19 +562,25 @@ def main():
                     gen.append(int(inp))
                 txt = tok.decode(gen)
                 if it["kind"] == "bfcl":
-                    sc["bfcl"].append(int(it["fn"] in txt))
+                    hit = int(it["fn"] in txt)
+                    sc["bfcl"].append(hit)
                 elif it["kind"] == "needle":
-                    sc["needle"].append(int(it["code"] in re.sub(r"\D", "", txt)))
+                    hit = int(it["code"] in re.sub(r"\D", "", txt))
+                    sc["needle"].append(hit)
                 elif it["kind"] == "ifstruct":
-                    sc["ifstruct"].append(ifstruct_valid(txt, it["spec"]))
+                    hit = ifstruct_valid(txt, it["spec"])
+                    sc["ifstruct"].append(hit)
                 else:
                     gold_head = re.sub(r"\s+", " ", it["gold"])[:60]
-                    sc["pbtable"].append(int(gold_head[:30] in
-                                             re.sub(r"\s+", " ", txt)))
+                    hit = int(gold_head[:30] in re.sub(r"\s+", " ", txt))
+                    sc["pbtable"].append(hit)
+                dumps.append({"i": i, "kind": it["kind"], "hit": hit,
+                              "ctx": it.get("ctx"), "txt": txt[:240]})
                 del past, cur
                 torch.cuda.empty_cache()
         out = {k: f"{sum(v)}/{len(v)}" for k, v in sc.items() if v}
         score = sum(sum(v) for v in sc.values())
+        results.setdefault("val_dumps", {})[tag] = dumps
         print(f"VAL[{tag}]: {out} -> score {score}")
         return score, out
 
@@ -510,40 +643,35 @@ def main():
             if step % 50 == 49:   # day an toan: checkpoint bat ke val
                 torch.save(mapper.state_dict(), args.out + ".last")
                 gstep_f.write_text(str(step + 1))
-            it = data["train"][step % n_train]
-            sid = f"train{step % n_train}"
-            if not it.get("gold") or (step % n_train) in skip_ids:
+            idx = step % n_train
+            it = data["train"][idx]
+            sid = f"train{idx}"
+            tkp = cdir / f"tk{idx}.pt"
+            if not it.get("gold") or idx in skip_ids or not tkp.exists():
                 continue
             att_f.write_text(str(step))   # neu chet o buoc nay -> skip lan sau
-            cut, warm = enc_cut(it)
-            gm = GMAX.get(it["kind"], GOLD_MAX)
-            if cut.shape[1] > 850:      # phong thu chu dong: ctx dai x gold
-                gm = min(gm, 32)        # dai = min — nguon cua bai min OOM
-            gold_ids = tok(it["gold"], add_special_tokens=False,
-                           return_tensors="pt")["input_ids"][:, :gm].to("cuda")
+            cut, warm, gold_ids, feed = _gold_feed(it)
             if gold_ids.shape[1] < 2:
                 continue
-            feed = torch.cat([warm, gold_ids[:, :-1]], 1)
+            tk = torch.load(tkp, map_location="cpu")
+            if tk["flen"] != feed.shape[1]:   # protocol lech giua B1 va train
+                print(f"WARN tk{idx} flen {tk['flen']} != {feed.shape[1]} -> skip")
+                continue
+            ti = tk["ti"].to("cuda").long()
+            tl = tk["tl"].to("cuda").float()
             with torch.no_grad():
-                import copy as _c
                 tch_past = model_t(input_ids=cut, use_cache=True,
                                    logits_to_keep=1).past_key_values
-                captured.clear()
-                cap_on["v"] = True
-                tch_ext = _c.deepcopy(tch_past)
-                tch_logp = torch.log_softmax(
-                    model_t(input_ids=feed, past_key_values=tch_ext,
-                            use_cache=True).logits[:, WARM_P - 1:].float(), -1)
-                cap_on["v"] = False
-                tch_caps = [c.detach() for c in captured]
-                del tch_ext
-                torch.cuda.empty_cache()
+                if args.gdn_bf16:
+                    e5.force_state_dtype(tch_past, torch.bfloat16)
             src = e5.load_cache(cdir / f"{sid}.pt")
             student_past = e5.build_student_past(tch_past, src, mapper)
             lam = max(0.0, 1.0 - step / (0.2 * args.steps))
-            aux = e5.aux_mse(student_past, tch_past)
-            # aux da xong -> giai phong cache teacher TRUOC forward student
-            # (GDN fp32 cua 5.15: ~604MB/ban 27B — tiet kiem dinh bo nho)
+            # v3.3: aux chi tinh khi con trong so (truoc: tinh ca 80% cuoi = phi)
+            aux = (e5.aux_mse(student_past, tch_past) if lam > 0
+                   else torch.zeros((), device="cuda"))
+            # giai phong cache teacher TRUOC forward student (GDN fp32 5.15
+            # ~604MB/ban 27B — template da clone-struct, khong con tham chieu)
             del tch_past
             torch.cuda.empty_cache()
             captured.clear()
@@ -551,28 +679,50 @@ def main():
             out = model_t(input_ids=feed, past_key_values=student_past,
                           use_cache=True)
             cap_on["v"] = False
-            stu_caps = list(captured)
+            stu_caps = [captured[j] for j in tk["cidx"]]
             logp = torch.log_softmax(out.logits[:, WARM_P - 1:].float(), -1)
             nll = -logp.gather(2, gold_ids.unsqueeze(-1)).squeeze(-1)
             wts = torch.ones_like(nll)
             wts[:, 0] = FIRST_W          # token quyet dinh — trong so x3
+            if it["kind"] in ("ifstruct", "pbtable"):
+                # v3.3: token-XUONG cu phap x2 — bai hoc CONV_WARM ap vao
+                # output co cau truc (xuong sai la validator/match rot ngay)
+                pieces = tok.convert_ids_to_tokens(gold_ids[0].tolist())
+                for pi, pc in enumerate(pieces):
+                    if pc and any(ch in SKEL for ch in pc):
+                        wts[0, pi] = max(float(wts[0, pi]), SKEL_W)
             ce = (nll * wts).sum() / wts.sum()
-            kl = F.kl_div(logp, tch_logp, log_target=True, reduction="batchmean")
-            dense = sum((s.float() - t.float()).pow(2).mean()
-                        / (t.float().pow(2).mean() + 1e-6)
+            # v3.3: KL tren top-K cua teacher + duoi gop 1 gio (thay full-vocab)
+            s_top = logp.gather(2, ti)                     # (1, P, K)
+            p_t = tl.exp()
+            rest_t = (1 - p_t.sum(-1)).clamp_min(1e-6)
+            rest_s = (1 - s_top.exp().sum(-1)).clamp_min(1e-6)
+            kl = ((p_t * (tl - s_top)).sum(-1)
+                  + rest_t * (rest_t.log() - rest_s.log())).mean()
+            tch_caps = [c.to("cuda").float() for c in tk["caps"]]
+            dense = sum((s.float() - t).pow(2).mean()
+                        / (t.pow(2).mean() + 1e-6)
                         for s, t in zip(stu_caps, tch_caps)) / max(len(tch_caps), 1)
             loss = ce + BETA * kl + lam * aux + GAMMA * dense
             opt.zero_grad(); loss.backward(); opt.step(); sched.step()
             cev, klv = float(ce), float(kl)
-            del (student_past, out, logp, tch_logp, src, ce, kl,
+            del (student_past, out, logp, src, ce, kl, ti, tl, tk,
                  dense, loss, stu_caps, tch_caps)
             captured.clear()
             torch.cuda.empty_cache()
             att_f.unlink(missing_ok=True)   # buoc nay song sot
             ce_hist.append(cev)
+            n_done = len(ce_hist)
             if step % 25 == 0:
                 print(f"step {step}/{args.steps} CE {cev:.3f} KL {klv:.3f} "
                       f"lam {lam:.2f} ({time.time()-t0:.0f}s)")
+            if args.sanity and n_done >= args.sanity:
+                peak = torch.cuda.max_memory_allocated() / 2**30
+                print(f"SANITY: {n_done} buoc, {(time.time()-t0)/n_done:.2f}"
+                      f" s/buoc (gom ca overhead khoi dong), peak {peak:.2f} GiB"
+                      f" (ckpt={mapper.ckpt} gdn_bf16={args.gdn_bf16})")
+                print("E6V33_SANITY_DONE")
+                return
             if step > 150 and len(ce_hist) >= 50 \
                     and sum(ce_hist[-50:]) / 50 < CE_FLOOR:
                 print(f"CE trung binh 50 buoc < {CE_FLOOR} — nguy co overfit "
