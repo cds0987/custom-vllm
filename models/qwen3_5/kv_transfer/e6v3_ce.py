@@ -487,10 +487,13 @@ def main():
             for _ in range(start_step):
                 sched.step()
         t0 = time.time()
+        # moc val kieu "nguong": crash giua moc -> resume van bat kip
+        next_val = (start_step // VAL_EVERY) * VAL_EVERY + VAL_EVERY - 1
         for step in range(start_step, args.steps):
             gc.collect(); torch.cuda.empty_cache()
             # VAL o DAU vong lap: khong bi item-skip (continue) nuot moc nua
-            if step % VAL_EVERY == VAL_EVERY - 1:
+            if step >= next_val:
+                next_val += VAL_EVERY
                 score, detail = run_val(f"step{step}")
                 results["val_curve"].append({"step": step, "score": score,
                                              **detail})
@@ -514,6 +517,8 @@ def main():
             att_f.write_text(str(step))   # neu chet o buoc nay -> skip lan sau
             cut, warm = enc_cut(it)
             gm = GMAX.get(it["kind"], GOLD_MAX)
+            if cut.shape[1] > 850:      # phong thu chu dong: ctx dai x gold
+                gm = min(gm, 32)        # dai = min — nguon cua bai min OOM
             gold_ids = tok(it["gold"], add_special_tokens=False,
                            return_tensors="pt")["input_ids"][:, :gm].to("cuda")
             if gold_ids.shape[1] < 2:
