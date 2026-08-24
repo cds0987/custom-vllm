@@ -126,7 +126,11 @@ Cập nhật: 2026-08-24.
   xương ×2 cho ifstruct/pbtable, val DUMP text sinh ra (mổ được 0 điểm).
   Dry-data pass local: 1330 train / 70 val / test niêm phong giữ nguyên.
   Chế độ `--sanity N`: sandbox riêng, chỉ item DÀI nhất, đo s/bước + peak
-  VRAM. CHỜ DUYỆT: GPU lượt 1 = sanity ctx-2000 (~30-40 phút).
+  VRAM. **SANITY ĐÃ ĐO (2026-08-24, 20 bước trên item dài nhất ~2000 tok)**:
+  mặc định (ckpt map_attn) **4,05 s/bước, peak 20,32/22,5 GiB — train ctx
+  2000 KHẢ THI trên L4** (v3.2 OOM từ 1536); B1 40 item không OOM nào.
+  `--gdn-bf16` VÔ DỤNG: peak 20,27 (−0,05) mà chậm hơn (4,86 s/bước) →
+  loại. CHỜ DUYỆT: train v3.3 đầy đủ config mặc định (~8-10h cả pipeline).
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
