@@ -1144,6 +1144,49 @@ vách đá độ dài** (`e6v3_ce.py`, data ×2,5, 2000 bước, e6v32_results.j
   token = DÙNG ĐƯỢC; >2K cần train ctx dài (GPU >22GB hoặc tiết kiệm bộ
   nhớ sâu hơn — hướng v3.3/Phase C).
 
+**E6 v3.3 — TỐC ĐỘ + CTX DÀI + CHÍNH XÁC (user duyệt, 2026-08-24→25):
+BFCL 18/20 + needle@2K 10/10 TUYỆT ĐỐI — vách đá độ dài SỤP** (commit
+12cb470/7900c8b, e6v33_results.json):
+
+    Kỹ thuật mới: (tốc độ) clone_cache_struct thay 2×deepcopy ~600MB/bước;
+    Phase B1 tiền tính teacher 1 lần/item (top-64 logp + dense caps 4/16
+    layer fp16 ra đĩa) → vòng train hết teacher feed-forward; aux chỉ khi
+    λ>0. (ctx) checkpoint map_attn (recompute trong backward); needle
+    curriculum train 700/950/1200/1600/2000. (chính xác) BFCL +parallel
+    +multiple (655 bfcl train); trọng số token-xương ×2; val dump text.
+    SANITY trước train (20 bước, toàn item ~2000 tok): 4,05 s/bước,
+    peak 20,32/22,5 GiB → ctx-2000 KHẢ THI trên L4 (v3.2 OOM từ 1536);
+    --gdn-bf16 loại bằng đo (chậm hơn 20%, tiết kiệm 0,05 GiB).
+    Vận hành thật: ~2,2-2,4 s/bước (nhanh ~2× v3.2), 0 RETRY, 0 OOM-skip
+    toàn chiến dịch — lần đầu một run E-series đi hết không ngã lần nào.
+    Data: 1330 train / 70 val (needle bucket 700+1500+2000) / test y cũ.
+    Val curve: score 12→29→29→32→36→37→40 (bfcl 6→9→11→12→16→17→19/25;
+    needle 20/20 TỪ MỐC 2, @2000 = 5/5 suốt 6 mốc); ifstruct 1/15 lần
+    đầu có điểm @1749. CE_FLOOR <0,2 kích hoạt @1750 → dừng sớm đúng
+    kỷ luật, best-by-val giữ checkpoint score 40.
+    TEST NIÊM PHONG: BFCL self 20/20 | MAPPED 18/20 (v3.2: 17, v3.1: 16,
+    4B-self: 11) | no_ctx 0.
+    needle@2K NIÊM PHONG: self 10/10 | MAPPED 10/10 | no_ctx 0 —
+    v3.2 chỉ 1/10. Retention-length law xác nhận chiều THUẬN: vách đá
+    là artifact của phân phối train, KHÔNG phải giới hạn của GDN state
+    hay của mapper — cho state dài vào train là đọc được state dài.
+
+- Mổ ifstruct/pbtable bằng val dumps (nợ v3.2 trả xong): cả hai chết cùng
+  MỘT bệnh = repetition collapse khi sinh dài (>~30 token) — pbtable ra
+  ĐÚNG khung `<tr><td>` (token-xương có tác dụng) nhưng lặp một ô vô hạn;
+  ifstruct trôi vào <think> rồi kẹt vòng. BFCL (24 tok) và needle (16 tok)
+  không dính vì sinh ngắn. Error-placement lần 7: bệnh ở decode-time tích
+  lũy, không phải "không hiểu đề". Nghi vấn bổ sung: pseudo-gold ifstruct
+  là output 27B tự sinh (nhiều bản mở đầu <think>) — có thể CHÍNH teacher
+  cũng không qua validator trong 96 token → trần suite ≈ 0 từ đề bài.
+  Việc v3.4: đo 27B-self trên val ifstruct + repetition penalty/chấm 30
+  token đầu khi eval, trước khi đổ lỗi cho mapper.
+- Scope 4B→27B sau v3.3: function-calling 90% trần + truy xuất ≤2000 token
+  TUYỆT ĐỐI = cascade có giá trị sản phẩm rõ; cửa còn lại là Phase C
+  (KVConnector vLLM + đo trên W4A16 Marlin thật) và sinh-dài (v3.4).
+- NỢ UPLOAD (quy tắc 6d): mapper_v33.pt (+v32) vẫn CHỈ nằm trên runtime —
+  Colab Secrets HF_TOKEN chưa set tại thời điểm chốt (đã nhắc user 3 lần).
+
 ## SPEC DECODING NGRAM (2026-08-14): OFF MẶC ĐỊNH TRÊN L4 — đo 2 model × 2 mức tải
 
 Profile `-spec` (ngram k=4, prompt-lookup 2-4) thêm vào run.sh; cùng runtime,

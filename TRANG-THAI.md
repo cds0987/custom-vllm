@@ -125,12 +125,20 @@ Cập nhật: 2026-08-24.
   (chính xác) BFCL +parallel/multiple (655 bfcl train), trọng số token-
   xương ×2 cho ifstruct/pbtable, val DUMP text sinh ra (mổ được 0 điểm).
   Dry-data pass local: 1330 train / 70 val / test niêm phong giữ nguyên.
-  Chế độ `--sanity N`: sandbox riêng, chỉ item DÀI nhất, đo s/bước + peak
-  VRAM. **SANITY ĐÃ ĐO (2026-08-24, 20 bước trên item dài nhất ~2000 tok)**:
-  mặc định (ckpt map_attn) **4,05 s/bước, peak 20,32/22,5 GiB — train ctx
-  2000 KHẢ THI trên L4** (v3.2 OOM từ 1536); B1 40 item không OOM nào.
-  `--gdn-bf16` VÔ DỤNG: peak 20,27 (−0,05) mà chậm hơn (4,86 s/bước) →
-  loại. CHỜ DUYỆT: train v3.3 đầy đủ config mặc định (~8-10h cả pipeline).
+  Sanity ctx-2000: 4,05 s/bước, peak 20,32 GiB → GO; `--gdn-bf16` loại.
+- **E6 v3.3 XONG (2026-08-25): KỶ LỤC KÉP NIÊM PHONG — BFCL MAPPED 18/20
+  (self 20; v3.2: 17) + needle@2K MAPPED 10/10 TUYỆT ĐỐI (v3.2: 1/10) —
+  VÁCH ĐÁ ĐỘ DÀI SỤP.** Nguyên nhân thắng: needle curriculum train tới
+  2000 (vách đá là artifact phân phối train, không phải giới hạn GDN);
+  tốc độ ~2,2 s/bước (nhanh 2× v3.2 nhờ bỏ deepcopy + teacher tiền tính
+  B1); 0 retry/0 OOM toàn run — lần đầu E-series đi hết không ngã. Val
+  curve 12→40, CE_FLOOR dừng sớm @1750 đúng kỷ luật. ifstruct 1/15 lần
+  đầu có điểm; mổ dumps: ifstruct/pbtable chết chung bệnh repetition
+  collapse sinh dài (>~30 tok) + nghi trần teacher pseudo-gold — thuốc
+  v3.4 ở decode-time. Scope cascade 4B→27B: fn-calling 90% trần +
+  retrieval ≤2000 tuyệt đối. Chi tiết STATUS mục E6 v3.3.
+  **NỢ UPLOAD KHẨN (6d): mapper v33 LẪN v32 chỉ nằm trên runtime —
+  Colab Secrets HF_TOKEN vẫn chưa set (nhắc lần 4).**
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
