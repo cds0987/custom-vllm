@@ -48,7 +48,8 @@ TRAIN_MAX = 1024     # phong bi da kiem chung; 1536/2048 OOM (5.15 luu GDN
 NK_MAXLEN = 4096     # needle khong bao gio duoc cat (bug needle2k cu)
 GOLD_MAX = 64        # fallback
 # v3.2: gold/gen rieng tung loai — ifstruct/pbtable 0 diem vi gold 64 cat cut
-GMAX = {"bfcl": 16, "needle": 12, "ifstruct": 128, "pbtable": 96}
+GMAX = {"bfcl": 16, "needle": 12, "ifstruct": 96, "pbtable": 64}
+# (128/96 OOM: feed 132 vi tri x fp32-states 5.15 trat phong bi L4)
 GEN_LEN = {"bfcl": 24, "needle": 16, "ifstruct": 160, "pbtable": 120}
 CONV_WARM = e5.CONV_WARM   # (v3.0 — giu cho tham chieu)
 # v3.1 (user duyet 2026-08-24): CONV_WARM skip 4 vi tri dau cua GOLD = khong
@@ -515,6 +516,10 @@ def main():
             student_past = e5.build_student_past(tch_past, src, mapper)
             lam = max(0.0, 1.0 - step / (0.2 * args.steps))
             aux = e5.aux_mse(student_past, tch_past)
+            # aux da xong -> giai phong cache teacher TRUOC forward student
+            # (GDN fp32 cua 5.15: ~604MB/ban 27B — tiet kiem dinh bo nho)
+            del tch_past
+            torch.cuda.empty_cache()
             captured.clear()
             cap_on["v"] = True
             out = model_t(input_ids=feed, past_key_values=student_past,
@@ -533,7 +538,7 @@ def main():
             loss = ce + BETA * kl + lam * aux + GAMMA * dense
             opt.zero_grad(); loss.backward(); opt.step(); sched.step()
             cev, klv = float(ce), float(kl)
-            del (student_past, out, logp, tch_logp, src, tch_past, ce, kl,
+            del (student_past, out, logp, tch_logp, src, ce, kl,
                  dense, loss, stu_caps, tch_caps)
             captured.clear()
             torch.cuda.empty_cache()
