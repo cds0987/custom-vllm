@@ -104,9 +104,11 @@ Cập nhật: 2026-08-24.
   "loss CE chưa đúng"). Fix: cache cắt T-5 + warm conv bằng 5 token cuối
   prompt + CE trọn gold, token đầu ×3. Val needle 8/10 @449 (truyền NỘI
   DUNG qua tường GDN, cache chưa gặp); train-check bfcl 7/15 needle 8/9.
-  **Cascade 4B→27B vượt thanh kinh tế — có giá trị sản phẩm thật.** Nợ:
-  needle@2K niêm phong đo lại max_len 4096; UPLOAD mapper lên HF (chờ token
-  write user — quy tắc 6d). Chi tiết STATUS mục E6 v3.1.
+  **Cascade 4B→27B vượt thanh kinh tế — có giá trị sản phẩm thật.**
+  ĐÃ UPLOAD HF (quy tắc 6d): `gunnybd01/qwen35-kv-mapper-4b-27b` (private) —
+  mapper v31 best+last, 3 json kết quả, pseudo_gold, data. Nợ: needle@2K
+  niêm phong đo lại max_len 4096; NHẮC USER REVOKE token (đã lộ trong chat).
+  Chi tiết STATUS mục E6 v3.1.
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
