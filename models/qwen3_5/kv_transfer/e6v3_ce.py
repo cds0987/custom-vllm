@@ -35,8 +35,22 @@ v3.3 (user duyet 2026-08-24 — toc do + ctx dai + chinh xac):
   token quyet dinh bi bo doi la chet; (9) run_val DUMP text sinh ra vao
   results (mo no ifstruct/pbtable 0 diem — v3.2 khong luu gi de mo).
 
+v3.4-long (user duyet 2026-08-25 — tang sequence length, triet ly Unsloth
+tu chinh cho co may cua ta):
+  (10) prefill THEO KHUC (e5.prefill_chunked) — transient khong phu thuoc T;
+  (11) B1 luu them BO XUONG template (e5.cache_meta — shape/int, khong
+  tensor) -> vong train DUNG LAI template bang zeros (build_template_from_
+  meta) khi lam=0: KHONG con teacher prefill moi buoc — chi phi buoc train
+  gan nhu khong phu thuoc do dai context; (12) needle buckets keo dai
+  3000/4000(/8000/16000 sau ladder) qua --max-ctx; (13) --ladder do
+  s/buoc + peak + GB-dia/item tung nac truoc khi chon tran; (14)
+  --tpl-check: doi chieu logits template-that vs template-xuong (bat buoc
+  truoc khi tin duong moi).
+
 Modes:
   --dry-data       : local, khong GPU — dung + in data mix de user duyet
+  --ladder L1,L2.. : sandbox rieng — do tung nac do dai
+  --tpl-check N    : kiem tra duong template-xuong tren N item train
   (mac dinh)       : Colab — phase A (4B spill) -> B0 pseudo-gold ->
                      B1 teacher-precompute -> train+val -> test niem phong
 """
@@ -180,11 +194,10 @@ def needle_items(tok, n, seed0, ctx_tok=700):
     return items
 
 
-def build_data(tok=None):
-    """v3.3 (user duyet 2026-08-24): BFCL +parallel/multiple; needle
-    curriculum 700/1200/1600/2000 TRONG train (pha vach da — v3.2 train
-    <=950 nen GDN state @2K ngoai phan phoi); val them bucket @2000.
-    tok=None -> bo needle (dry)."""
+def build_data(tok=None, max_ctx=4096):
+    """v3.4 (user duyet 2026-08-25): needle curriculum keo dai theo
+    --max-ctx (ladder quyet tran); test niem phong cu GIU NGUYEN de so
+    doi chieu, mien dai co bo niem phong MOI. tok=None -> bo needle."""
     rng = random.Random(SEED)
     exec_simple = bfcl_load("BFCL_v3_exec_simple.json", 100)
     test = exec_simple[:20]                      # NIEM PHONG — y het E6
@@ -213,15 +226,24 @@ def build_data(tok=None):
     val += pbt[:10]
     train += pbt[10:]
     if tok is not None:
-        train += needle_items(tok, 200, 30000)                  # ngan 700
-        train += needle_items(tok, 80, 40000, ctx_tok=950)
-        train += needle_items(tok, 60, 50000, ctx_tok=1200)     # v3.3 curriculum
-        train += needle_items(tok, 50, 60000, ctx_tok=1600)
-        train += needle_items(tok, 40, 70000, ctx_tok=2000)
+        # v3.4: curriculum keo dai — dong o ngan, thua dan o dai (dia la
+        # rang buoc: cache 4B ~T-tuyen tinh). Bucket > max_ctx bi bo.
+        for ctx, n, seed in [(700, 150, 30000), (950, 80, 40000),
+                             (1200, 60, 50000), (1600, 50, 60000),
+                             (2000, 40, 70000), (3000, 30, 80000),
+                             (4000, 20, 90000), (8000, 10, 100000),
+                             (16000, 6, 110000)]:
+            if ctx <= max_ctx:
+                train += needle_items(tok, n, seed, ctx_tok=ctx)
         val += needle_items(tok, 10, 31000)
         val += needle_items(tok, 5, 41000, ctx_tok=1500)
-        val += needle_items(tok, 5, 42000, ctx_tok=2000)        # xem vach da lui
-        test += needle_items(tok, 10, 32000, ctx_tok=2000)   # needle 2K nhu E6
+        val += needle_items(tok, 5, 42000, ctx_tok=2000)
+        for ctx, seed in [(4000, 43000), (8000, 44000), (16000, 45000)]:
+            if ctx <= max_ctx:
+                val += needle_items(tok, 3, seed, ctx_tok=ctx)
+        test += needle_items(tok, 10, 32000, ctx_tok=2000)   # y het E6/v3.3
+        if max_ctx > 2000:   # niem phong MOI cho mien dai (seed chua dung)
+            test += needle_items(tok, 5, 33000, ctx_tok=max_ctx)
     rng.shuffle(train)
     return {"train": train, "val": val, "test": test}
 
@@ -257,9 +279,12 @@ def main():
     ap.add_argument("--tgt-model", default="Qwen/Qwen3.5-27B")
     ap.add_argument("--steps", type=int, default=2600)
     ap.add_argument("--lr", type=float, default=1e-3)
-    ap.add_argument("--out", default="/content/mapper_v33.pt")
-    ap.add_argument("--cache-dir", default="/content/v33_src")
-    ap.add_argument("--results", default="/content/logs/e6v33_results.json")
+    ap.add_argument("--out", default="/content/mapper_v34.pt")
+    ap.add_argument("--cache-dir", default="/content/v34_src")
+    ap.add_argument("--results", default="/content/logs/e6v34_results.json")
+    ap.add_argument("--init-from", default="/content/mapper_v33.pt",
+                    help="v3.4: warm-start tu mapper v3.3 (giu BFCL 18/20 "
+                         "lam von) — bo qua neu file khong ton tai")
     ap.add_argument("--no-ckpt-mapper", action="store_true",
                     help="tat checkpoint map_attn (mac dinh BAT tu v3.3)")
     ap.add_argument("--gdn-bf16", action="store_true",
@@ -267,6 +292,14 @@ def main():
                          "(-~300MB/cache) — chi bat sau khi sanity 20 buoc")
     ap.add_argument("--sanity", type=int, default=0,
                     help="chay N buoc train roi dung + in VRAM (luot do 1)")
+    ap.add_argument("--max-ctx", type=int, default=4096,
+                    help="v3.4: bucket needle dai nhat dua vao train/val")
+    ap.add_argument("--ladder", default="",
+                    help="v3.4: '4096,8192,16384' — do tung nac roi dung")
+    ap.add_argument("--tpl-check", type=int, default=0,
+                    help="v3.4: doi chieu logits template that vs xuong")
+    ap.add_argument("--no-tpl", action="store_true",
+                    help="v3.4: tat duong template-xuong (prefill that)")
     ap.add_argument("--dry-data", action="store_true")
     ap.add_argument("--skip-train", action="store_true")
     ap.add_argument("--train-check", action="store_true",
@@ -277,13 +310,17 @@ def main():
 
     # sanity dung SANDBOX rieng: data bi cat/xep lai theo do dai -> chi so
     # item khong khop voi cache cua run that (train{i}.pt keyed by index)
-    if args.sanity and args.cache_dir == "/content/v33_src":
-        args.cache_dir = "/content/v33_sanity"
+    if args.sanity and args.cache_dir == "/content/v34_src":
+        args.cache_dir = "/content/v34_sanity"
         args.out = "/content/mapper_sanity.pt"
         print(f"SANITY -> cache-dir {args.cache_dir}")
 
+    # v3.4: needle khong bao gio duoc cat — tran token hoa theo max-ctx
+    global NK_MAXLEN
+    NK_MAXLEN = max(4096, args.max_ctx + 128)
+
     if args.dry_data:
-        data = build_data(tok=None)
+        data = build_data(tok=None, max_ctx=args.max_ctx)
         for split, items in data.items():
             from collections import Counter
             cnt = Counter(it["kind"] for it in items)
@@ -293,8 +330,9 @@ def main():
             print(f"\n===== SAMPLE {kind} =====")
             print("PROMPT:", it["prompt"][:400].replace("\n", " | "))
             print("GOLD:", (it["gold"] or "(pseudo-gold tu 27B)")[:200])
-        print("\n(+430 needle train [200@700 80@950 60@1200 50@1600 40@2000]"
-              " / 20 val [10@700 5@1500 5@2000] / 10 test@2K khi chay that)")
+        print(f"\n(v3.4: needle buckets 700..{args.max_ctx} them vao khi chay"
+              " that — so luong theo build_data; test giu needle@2K cu"
+              f" + 5 niem phong moi @{args.max_ctx})")
         return
 
     import torch
@@ -323,6 +361,121 @@ def main():
     except ImportError:
         pass
 
+    # ---------------- LADDER (v3.4): do tung nac do dai roi dung -------------
+    if args.ladder:
+        Ls = [int(x) for x in args.ladder.split(",")]
+        NK_MAXLEN = max(Ls) + 128
+        ldir = Path(args.cache_dir + "_ladder")
+        ldir.mkdir(parents=True, exist_ok=True)
+        N_IT = 6
+        if not (ldir / "LA_DONE").exists():
+            tok_s, model_s = e5.load_4bit(args.src_model)
+            items = {}
+            for L in Ls:
+                its = needle_items(tok_s, N_IT, 200000 + L, ctx_tok=L)
+                items[str(L)] = its
+                for j, it in enumerate(its):
+                    pth = ldir / f"lad{L}_{j}.pt"
+                    if pth.exists():
+                        continue
+                    enc = tok_s(it["prompt"], return_tensors="pt",
+                                truncation=True, max_length=NK_MAXLEN).to("cuda")
+                    past = e5.prefill_chunked(model_s,
+                                              enc["input_ids"][:, :-WARM_P])
+                    e5.spill_cache(past, pth)
+                    del past
+                    torch.cuda.empty_cache()
+                print(f"LA {L} xong")
+            (ldir / "items.json").write_text(json.dumps(items))
+            del model_s
+            gc.collect(); torch.cuda.empty_cache()
+            (ldir / "LA_DONE").touch()
+        items = json.loads((ldir / "items.json").read_text())
+        theta_s = e5.e1.get_rope_theta(
+            AutoConfig.from_pretrained(args.src_model).get_text_config())
+        tok_t, model_t = e5.load_4bit(args.tgt_model)
+        theta_t = e5.e1.get_rope_theta(model_t.config.get_text_config())
+        with torch.no_grad():
+            probe = model_t(input_ids=torch.tensor([[1, 2, 3]], device="cuda"),
+                            use_cache=True, logits_to_keep=1).past_key_values
+        src0 = e5.load_cache(ldir / f"lad{Ls[0]}_0.pt")
+        a_s, g_s = e5.split_layers(src0)
+        Hs = next(iter(g_s.values())).recurrent_states.shape[1]
+        attn_dim = (next(iter(a_s.values())).keys.shape[1]
+                    * next(iter(a_s.values())).keys.shape[3])
+        del src0
+        torch.cuda.empty_cache()
+        a_t, g_t = e5.split_layers(probe)
+        Ht = e5._get(next(iter(g_t.values())).recurrent_states).shape[1]
+        mapper = e5.Mapper(len(a_t), len(g_t), Hs, Ht, attn_dim,
+                           theta_s, theta_t)
+        mapper.ckpt = True
+        import bitsandbytes as bnb
+        opt = bnb.optim.Adam8bit(mapper.params, lr=args.lr)
+        for L in Ls:
+            try:
+                sizes = [(ldir / f"lad{L}_{j}.pt").stat().st_size
+                         for j in range(N_IT)]
+                t0 = time.time()
+                tks = []
+                for j, it in enumerate(items[str(L)]):
+                    enc = tok_t(it["prompt"], return_tensors="pt",
+                                truncation=True, max_length=NK_MAXLEN).to("cuda")
+                    ids = enc["input_ids"]
+                    cut, warm2 = ids[:, :-WARM_P], ids[:, -WARM_P:]
+                    gold_ids = tok_t(it["gold"], add_special_tokens=False,
+                                     return_tensors="pt")["input_ids"][
+                                     :, :GMAX["needle"]].to("cuda")
+                    feed = torch.cat([warm2, gold_ids[:, :-1]], 1)
+                    with torch.no_grad():
+                        past = e5.prefill_chunked(model_t, cut)
+                        tpl_meta = e5.cache_meta(past)
+                        logp = torch.log_softmax(
+                            model_t(input_ids=feed, past_key_values=past,
+                                    use_cache=True).logits[:, WARM_P - 1:]
+                            .float(), -1)
+                        tl, ti2 = logp.topk(K_TOP, -1)
+                    del past, logp
+                    torch.cuda.empty_cache()
+                    tks.append((ti2.long(), tl.float(), tpl_meta,
+                                gold_ids, feed))
+                t_b1 = (time.time() - t0) / N_IT
+                gc.collect(); torch.cuda.empty_cache()
+                torch.cuda.reset_peak_memory_stats()
+                t0, n = time.time(), 0
+                for _rep in range(2):
+                    for j, (ti2, tl, tpl_meta, gold_ids, feed) in enumerate(tks):
+                        with torch.no_grad():
+                            tch = e5.build_template_from_meta(probe, tpl_meta)
+                        src = e5.load_cache(ldir / f"lad{L}_{j}.pt")
+                        sp = e5.build_student_past(tch, src, mapper)
+                        out = model_t(input_ids=feed, past_key_values=sp,
+                                      use_cache=True)
+                        logp = torch.log_softmax(
+                            out.logits[:, WARM_P - 1:].float(), -1)
+                        nll = -logp.gather(2, gold_ids.unsqueeze(-1)).squeeze(-1)
+                        s_top = logp.gather(2, ti2)
+                        p_t = tl.exp()
+                        rest_t = (1 - p_t.sum(-1)).clamp_min(1e-6)
+                        rest_s = (1 - s_top.exp().sum(-1)).clamp_min(1e-6)
+                        kl = ((p_t * (tl - s_top)).sum(-1)
+                              + rest_t * (rest_t.log() - rest_s.log())).mean()
+                        loss = nll.mean() + BETA * kl
+                        opt.zero_grad(); loss.backward(); opt.step()
+                        del tch, src, sp, out, logp, loss
+                        torch.cuda.empty_cache()
+                        n += 1
+                peak = torch.cuda.max_memory_allocated() / 2**30
+                print(f"LADDER {L}: spill {sum(sizes)/N_IT/2**20:.0f} MB/item"
+                      f" | B1 {t_b1:.1f} s/item"
+                      f" | {(time.time()-t0)/n:.2f} s/buoc (template-path)"
+                      f" | peak {peak:.2f} GiB")
+            except torch.cuda.OutOfMemoryError:
+                print(f"LADDER {L}: OOM — TRAN o nac nay")
+                gc.collect(); torch.cuda.empty_cache()
+        print("E6V34_LADDER_DONE")
+        return
+
     cdir = Path(args.cache_dir)
     cdir.mkdir(parents=True, exist_ok=True)
     results = {"val_curve": [], "config": {k: v for k, v in vars(args).items()}}
@@ -338,7 +491,7 @@ def main():
     if not marker.exists():
         tok_s, model_s = e5.load_4bit(args.src_model)
         tok = tok_s
-        data = build_data(tok_s)
+        data = build_data(tok_s, args.max_ctx)
         if args.sanity:
             # do ca XAU NHAT: chi giu cac item train DAI nhat (needle 2000
             # dung dau) + val rut gon — du de do s/buoc va peak VRAM
@@ -357,8 +510,9 @@ def main():
                     enc = tok_s(it["prompt"], return_tensors="pt", truncation=True,
                                 max_length=ml).to("cuda")
                     # v3.1: cache cat tai T-WARM_P (GDN khong tua nguoc duoc)
-                    past = model_s(input_ids=enc["input_ids"][:, :-WARM_P],
-                                   use_cache=True, logits_to_keep=1).past_key_values
+                    # v3.4: prefill theo khuc — item 16K khong lam no transient
+                    past = e5.prefill_chunked(model_s,
+                                              enc["input_ids"][:, :-WARM_P])
                     e5.spill_cache(past, pth)
                     del past
                     torch.cuda.empty_cache()
@@ -444,6 +598,9 @@ def main():
     elif Path(args.out + ".last").exists():
         mapper.load(args.out + ".last")
         print("RESUME tu checkpoint .last")
+    elif args.init_from and Path(args.init_from).exists():
+        mapper.load(args.init_from)   # v3.4: warm-start tu v3.3
+        print(f"WARM-START tu {args.init_from}")
 
     captured = []
     cap_on = {"v": False}   # hook chi ghi khi bat — val/teacher-ctx-prefill
@@ -496,8 +653,8 @@ def main():
                     if gold_ids.shape[1] < 2:
                         b1a.unlink()
                         continue
-                    past = model_t(input_ids=cut, use_cache=True,
-                                   logits_to_keep=1).past_key_values
+                    past = e5.prefill_chunked(model_t, cut)   # v3.4: theo khuc
+                    tpl_meta = e5.cache_meta(past)   # v3.4: bo xuong template
                     captured.clear()
                     cap_on["v"] = True
                     logits = model_t(input_ids=feed, past_key_values=past,
@@ -511,7 +668,7 @@ def main():
                             for j in cidx]
                     torch.save({"ti": ti.to(torch.int32).cpu(),
                                 "tl": tl.to(torch.float16).cpu(),
-                                "cidx": cidx, "caps": caps,
+                                "cidx": cidx, "caps": caps, "tpl": tpl_meta,
                                 "flen": feed.shape[1]}, tkp)
                     del past, logits, logp
             except torch.cuda.OutOfMemoryError:
@@ -525,6 +682,46 @@ def main():
                 print(f"B1 {done} items (toi {i}/{n_train})")
         b1_marker.touch()
         print("PHASE_B1_DONE")
+
+    # --- tpl-check (v3.4): duong template-xuong co cho logits Y HET duong
+    # teacher-prefill that khong? PHAI pass truoc khi train tin no. ---
+    if args.tpl_check:
+        checked = 0
+        with torch.no_grad():
+            for i, it in enumerate(data["train"]):
+                tkp = cdir / f"tk{i}.pt"
+                if not tkp.exists() or not it.get("gold"):
+                    continue
+                tk = torch.load(tkp, map_location="cpu")
+                if "tpl" not in tk:
+                    continue
+                cut, warm, gold_ids, feed = _gold_feed(it)
+                if tk["flen"] != feed.shape[1]:
+                    continue
+                src = e5.load_cache(cdir / f"train{i}.pt")
+                real = e5.prefill_chunked(model_t, cut)
+                o1 = model_t(input_ids=feed,
+                             past_key_values=e5.build_student_past(
+                                 real, src, mapper),
+                             use_cache=True).logits.float()
+                del real
+                torch.cuda.empty_cache()
+                syn = e5.build_template_from_meta(probe, tk["tpl"])
+                o2 = model_t(input_ids=feed,
+                             past_key_values=e5.build_student_past(
+                                 syn, src, mapper),
+                             use_cache=True).logits.float()
+                agree = float((o1.argmax(-1) == o2.argmax(-1)).float().mean())
+                print(f"tpl-check item {i} ({it['kind']}, ctx {cut.shape[1]}):"
+                      f" max|dlogit| {float((o1 - o2).abs().max()):.4f}"
+                      f" | argmax-agree {agree:.3f}")
+                del o1, o2, syn, src
+                torch.cuda.empty_cache()
+                checked += 1
+                if checked >= args.tpl_check:
+                    break
+        print("E6V34_TPLCHECK_DONE")
+        return
 
     def student_forward(it, sid, feed):
         src = e5.load_cache(cdir / f"{sid}.pt")
@@ -547,8 +744,7 @@ def main():
                 sid = f"{split}{i}"
                 cut, warm = enc_cut(it)
                 src = e5.load_cache(cdir / f"{sid}.pt")
-                tpl = model_t(input_ids=cut, use_cache=True,
-                              logits_to_keep=1).past_key_values
+                tpl = e5.prefill_chunked(model_t, cut)
                 past = e5.build_student_past(tpl, src, mapper)
                 del src, tpl
                 o = model_t(input_ids=warm, past_key_values=past, use_cache=True)
@@ -659,16 +855,25 @@ def main():
                 continue
             ti = tk["ti"].to("cuda").long()
             tl = tk["tl"].to("cuda").float()
+            lam = max(0.0, 1.0 - step / (0.2 * args.steps))
+            # v3.4: khi lam=0 khong can teacher that nua — dung template-XUONG
+            # (zeros dung shape/vi tri, moi tensor deu bi thay/zero) -> bo han
+            # teacher prefill: chi phi buoc train ~doc lap voi do dai context.
+            # Duong nay PHAI qua --tpl-check truoc khi tin.
+            use_tpl = (lam <= 0 and not args.no_tpl and "tpl" in tk)
             with torch.no_grad():
-                tch_past = model_t(input_ids=cut, use_cache=True,
-                                   logits_to_keep=1).past_key_values
-                if args.gdn_bf16:
-                    e5.force_state_dtype(tch_past, torch.bfloat16)
+                if use_tpl:
+                    tch_past = e5.build_template_from_meta(probe, tk["tpl"])
+                else:
+                    tch_past = e5.prefill_chunked(model_t, cut)
+                    if args.gdn_bf16:
+                        e5.force_state_dtype(tch_past, torch.bfloat16)
             src = e5.load_cache(cdir / f"{sid}.pt")
             student_past = e5.build_student_past(tch_past, src, mapper)
-            lam = max(0.0, 1.0 - step / (0.2 * args.steps))
-            # v3.3: aux chi tinh khi con trong so (truoc: tinh ca 80% cuoi = phi)
-            aux = (e5.aux_mse(student_past, tch_past) if lam > 0
+            # v3.3: aux chi tinh khi con trong so (va chi co nghia voi teacher
+            # that — template xuong toan zeros)
+            aux = (e5.aux_mse(student_past, tch_past)
+                   if (lam > 0 and not use_tpl)
                    else torch.zeros((), device="cuda"))
             # giai phong cache teacher TRUOC forward student (GDN fp32 5.15
             # ~604MB/ban 27B — template da clone-struct, khong con tham chieu)
@@ -750,8 +955,7 @@ def main():
             pre, last = enc_item(it)
             for cond in ("self", "mapped", "no_ctx"):
                 if cond == "self":
-                    past = model_t(input_ids=pre, use_cache=True,
-                                   logits_to_keep=1).past_key_values
+                    past = e5.prefill_chunked(model_t, pre)
                     cur, gen, inp = past, [], last
                 elif cond == "no_ctx":
                     past = model_t(input_ids=last, use_cache=True,
@@ -760,8 +964,7 @@ def main():
                 else:   # v3.1: warm conv bang WARM_P token cuoi prompt
                     cut, warm = enc_cut(it)
                     src = e5.load_cache(cdir / f"test{i}.pt")
-                    tpl = model_t(input_ids=cut, use_cache=True,
-                                  logits_to_keep=1).past_key_values
+                    tpl = e5.prefill_chunked(model_t, cut)
                     past = e5.build_student_past(tpl, src, mapper)
                     del src, tpl
                     o = model_t(input_ids=warm, past_key_values=past,

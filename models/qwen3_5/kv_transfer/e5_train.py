@@ -246,6 +246,76 @@ def force_state_dtype(past, dtype):
     return past
 
 
+def prefill_chunked(model, ids, chunk=1024):
+    """v3.4: prefill dai theo khuc — transient peak khong phu thuoc T.
+    (Triet ly Unsloth: cai gi khong can giu thi dung de no phinh.)"""
+    import torch
+    past = None
+    with torch.no_grad():
+        for s in range(0, ids.shape[1], chunk):
+            o = model(input_ids=ids[:, s:s + chunk], past_key_values=past,
+                      use_cache=True, logits_to_keep=1)
+            past = o.past_key_values
+    return past
+
+
+_DT = None
+
+
+def _dtype(s):
+    import torch
+    return getattr(torch, s.replace("torch.", ""))
+
+
+def cache_meta(past):
+    """v3.4: bo XUONG template — shape/dtype/int-attr, KHONG tensor.
+    Du de dung lai template ma khong can teacher prefill (moi tensor deu
+    bi build_student_past thay hoac zero; chi vi tri/cau truc la that)."""
+    cache_ints = {k: v for k, v in vars(past).items()
+                  if isinstance(v, (int, bool))}
+    metas = []
+    for l in past.layers:
+        m = {"ints": {k: v for k, v in vars(l).items()
+                      if isinstance(v, (int, bool))}}
+        if "LinearAttention" in type(l).__name__:
+            r, c = _get(l.recurrent_states), _get(l.conv_states)
+            m["kind"] = "g"
+            m["rec"] = (tuple(r.shape), str(r.dtype))
+            m["conv"] = (tuple(c.shape), str(c.dtype))
+        else:
+            m["kind"] = "a"
+            m["k"] = (tuple(l.keys.shape), str(l.keys.dtype))
+            m["v"] = (tuple(l.values.shape), str(l.values.dtype))
+        metas.append(m)
+    return {"cache_ints": cache_ints, "layers": metas}
+
+
+def build_template_from_meta(probe_past, meta, device="cuda"):
+    """v3.4: dung template tu probe (cau truc lop that) + meta (shape that).
+    Thay the teacher prefill moi buoc train — PHAI qua --tpl-check truoc."""
+    import torch
+    past = clone_cache_struct(probe_past)
+    for k, v in meta["cache_ints"].items():
+        setattr(past, k, v)
+    for l, m in zip(past.layers, meta["layers"]):
+        for k, v in m["ints"].items():
+            setattr(l, k, v)
+        if m["kind"] == "g":
+            sh, dt = m["rec"]
+            z = torch.zeros(sh, dtype=_dtype(dt), device=device)
+            l.recurrent_states = ({0: z} if isinstance(l.recurrent_states, dict)
+                                  else z)
+            sh, dt = m["conv"]
+            z = torch.zeros(sh, dtype=_dtype(dt), device=device)
+            l.conv_states = ({0: z} if isinstance(l.conv_states, dict) else z)
+        else:
+            sh, dt = m["k"]
+            l.keys = torch.zeros(sh, dtype=_dtype(dt), device=device)
+            sh, dt = m["v"]
+            l.values = torch.zeros(sh, dtype=_dtype(dt), device=device)
+    return past
+
+
 def build_student_past(tpl_past, src_past, mapper):
     """Clone template 27B (positions/shapes right, khong copy tensor), swap in
     mapped grad-tracking tensors by ATTRIBUTE replacement (not in-place)."""
