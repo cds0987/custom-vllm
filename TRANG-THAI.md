@@ -170,9 +170,20 @@ Cập nhật: 2026-08-24.
   **LMCACHE_EXT_OK 0.5.4** — connector external import được, không rơi
   vào fallback builtin (vốn crash trên model lai). Kiến trúc 1-GPU cho
   C2b: TUẦN TỰ qua L2 POSIX (4B producer ghi đĩa → stop → 9B consumer
-  đọc) — né hẳn bài đồng trú E3B. CHỜ DUYỆT C2b (~2h GPU): vá
-  key-namespace lmcache + 3 cổng đúng đắn (logprob-parity → needle →
-  TTFT).
+  đọc) — né hẳn bài đồng trú E3B.
+- **C2b LƯỢT 1 XONG (2026-08-25, kết quả HF c2b/)**: pipeline cross-model
+  qua LMCache CHẠY TRỌN (vá key `qwen35-shared` + http-port 8081 né 8080
+  Colab + gpuwait giữa stage). Số: ctx 1500/8000 cross = self **giống
+  hệt từng ký tự**, needle 4/4 — nhưng latency không đổi → các prompt
+  ngắn KHÔNG hit trang 4B (tự prefill). **ctx 30K: trang 4B THẬT SỰ
+  được nạp — TTFT 24s → 10,5s và 1,15s (tiềm năng ×20) NHƯNG output RÁC
+  (hit 0/2, token-match 0/48)** → gate đúng đắn FAIL đúng ở miền hit.
+  Nghi phạm số 1: **fp8_e4m3 KV có scale RIÊNG từng model** — trang 4B
+  giải mã bằng scale 9B = rác (E1-E3 chứng minh copy đúng ở bf16
+  transformers, fp8-vLLM là biến chưa từng kiểm). CHỜ DUYỆT C2b-2
+  (~40p): chạy lại cả chuỗi với --kv-cache-dtype auto (bf16) hai server
+  — nếu 30K sạch thì chốt thủ phạm fp8-scale và bf16 là điều kiện
+  serving của cross-model copy.
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
