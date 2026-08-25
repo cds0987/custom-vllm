@@ -905,7 +905,11 @@ def main():
             # (zeros dung shape/vi tri, moi tensor deu bi thay/zero) -> bo han
             # teacher prefill: chi phi buoc train ~doc lap voi do dai context.
             # Duong nay PHAI qua --tpl-check truoc khi tin.
-            use_tpl = (lam <= 0 and not args.no_tpl and "tpl" in tk)
+            # item DAI di duong template tu buoc 0: prefill-that + aux +
+            # student la combo nang nhat (2 OOM dau v3.4 deu o day) — hy
+            # sinh aux cho rieng item dai, CE/KL van day du
+            use_tpl = (not args.no_tpl and "tpl" in tk
+                       and (lam <= 0 or cut.shape[1] > 2500))
             with torch.no_grad():
                 if use_tpl:
                     tch_past = e5.build_template_from_meta(probe, tk["tpl"])
