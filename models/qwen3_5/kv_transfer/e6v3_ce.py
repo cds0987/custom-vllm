@@ -300,6 +300,10 @@ def main():
                     help="v3.4: doi chieu logits template that vs xuong")
     ap.add_argument("--no-tpl", action="store_true",
                     help="v3.4: tat duong template-xuong (prefill that)")
+    ap.add_argument("--v35-eval", action="store_true",
+                    help="v3.5: do benh sinh-dai ifstruct/pbtable — 4 dieu "
+                         "kien (self/map x greedy/rep-penalty), khong train")
+    ap.add_argument("--rep-pen", type=float, default=1.3)
     ap.add_argument("--hf-repo", default="gunnybd01/qwen35-kv-mapper-4b-27b",
                     help="tu upload checkpoint/results moi moc val (quy tac "
                          "6d — hoc phi 2 lan). Rong = tat. Token doc tu env "
@@ -678,7 +682,8 @@ def main():
         print(f"B1 OOM-skip item {dead}")
         b1a.unlink()
     b1_marker = cdir / "PHASE_B1_DONE"
-    if not b1_marker.exists() and not args.skip_train and not args.train_check:
+    if not b1_marker.exists() and not args.skip_train \
+            and not args.train_check and not args.v35_eval:
         nh = len(hooks)
         done = 0
         for i, it in enumerate(data["train"]):
@@ -761,6 +766,72 @@ def main():
                 if checked >= args.tpl_check:
                     break
         print("E6V34_TPLCHECK_DONE")
+        return
+
+    # --- v3.5 (user chot 2026-08-25): mo benh SINH-DAI bang thuoc decode-time
+    # Cau hoi 1: TRAN teacher — 27B-self co qua noi validator khong? (nghi van
+    # pseudo-gold <think>). Cau hoi 2: repetition penalty co pha vong lap?
+    if args.v35_eval:
+        if not Path(args.out).exists():
+            from huggingface_hub import hf_hub_download
+            import shutil
+            shutil.copy(hf_hub_download(args.hf_repo,
+                                        f"v34/{Path(args.out).name}"), args.out)
+            print("mapper tai tu HF v34/")
+        mapper.load(args.out)
+        sc, dumps = {}, []
+        with torch.no_grad():
+            for i, it in enumerate(data["val"]):
+                if it["kind"] not in ("ifstruct", "pbtable"):
+                    continue
+                cut, warm = enc_cut(it)
+                gl = GEN_LEN[it["kind"]]
+                for cond in ("self", "self-rp", "map", "map-rp"):
+                    rp = args.rep_pen if cond.endswith("rp") else 1.0
+                    if cond.startswith("self"):
+                        past = e5.prefill_chunked(model_t, cut)
+                    else:
+                        src = e5.load_cache(cdir / f"val{i}.pt")
+                        tpl = e5.prefill_chunked(model_t, cut)
+                        past = e5.build_student_past(tpl, src, mapper)
+                        del src, tpl
+                    o = model_t(input_ids=warm, past_key_values=past,
+                                use_cache=True)
+                    cur = o.past_key_values
+                    inp = o.logits[:, -1, :].argmax(-1, keepdim=True)
+                    gen_ids = [int(inp)]
+                    for _ in range(gl - 1):
+                        o = model_t(input_ids=inp, past_key_values=cur,
+                                    use_cache=True)
+                        cur = o.past_key_values
+                        logits = o.logits[:, -1, :].float()
+                        if rp != 1.0:
+                            idx = torch.tensor(sorted(set(gen_ids)),
+                                               device="cuda")
+                            sel = logits[0, idx]
+                            logits[0, idx] = torch.where(sel > 0, sel / rp,
+                                                         sel * rp)
+                        inp = logits.argmax(-1, keepdim=True)
+                        gen_ids.append(int(inp))
+                    txt = tok.decode(gen_ids)
+                    if it["kind"] == "ifstruct":
+                        hit = ifstruct_valid(txt, it["spec"])
+                    else:
+                        gh = re.sub(r"\s+", " ", it["gold"])[:60]
+                        hit = int(gh[:30] in re.sub(r"\s+", " ", txt))
+                    sc.setdefault((it["kind"], cond), []).append(hit)
+                    dumps.append({"i": i, "kind": it["kind"], "cond": cond,
+                                  "hit": hit, "txt": txt[:200]})
+                    del past, cur
+                    torch.cuda.empty_cache()
+        for k, v in sorted(sc.items()):
+            print(f"V35 {k[0]:9s} {k[1]:8s} {sum(v)}/{len(v)}")
+        results["v35"] = {f"{k[0]}|{k[1]}": f"{sum(v)}/{len(v)}"
+                          for k, v in sc.items()}
+        results["v35_dumps"] = dumps
+        save_results()
+        hf_up(args.results, "v35/e6v35_decode.json")
+        print("E6V35_DONE")
         return
 
     def student_forward(it, sid, feed):
