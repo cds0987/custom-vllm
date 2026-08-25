@@ -1186,6 +1186,43 @@ BFCL 18/20 + needle@2K 10/10 TUYỆT ĐỐI — vách đá độ dài SỤP** (c
   (KVConnector vLLM + đo trên W4A16 Marlin thật) và sinh-dài (v3.4).
 - NỢ UPLOAD (quy tắc 6d): mapper_v33.pt (+v32) vẫn CHỈ nằm trên runtime —
   Colab Secrets HF_TOKEN chưa set tại thời điểm chốt (đã nhắc user 3 lần).
+  → THÀNH HỌC PHÍ LẦN 2: runtime recycle 2026-08-25 nuốt cả v33 lẫn v32.
+  Hệ quả: token flow đổi (user chốt: .env root repo, dùng trực tiếp) +
+  script TỰ upload mỗi mốc val (--hf-repo) — xem E6 v3.4.
+
+**E6 v3.4-long — TĂNG SEQUENCE LENGTH (user duyệt 2026-08-25): TÁI LẬP
+18/20 BFCL + needle NIÊM PHONG 15/15 TUYỆT ĐỐI (10@2K + 5@4K)** (commit
+edf9232→3ed64d4, e6v34_results.json, HF v34/):
+
+    Ky thuat (triet ly Unsloth may do lai): prefill_chunked (transient
+    doc lap T); TEMPLATE-XUONG — B1 luu cache_meta (shape/int, khong
+    tensor), train dung lai template bang zeros khi khong can aux →
+    BO HAN teacher prefill moi buoc; tpl-check 8/8 item @4K:
+    max|dlogit| 0.0000, argmax-agree 1.000 (dung tung bit).
+    LADDER (L4 22GiB): 4096 = 4,86s/buoc peak 21,26 GiB spill 155MB/item
+    → GO; 8192/16384 OOM = TRAN PHAN CUNG L4 (khong phai code).
+    16K tren L4: KHONG — can GPU lon hon (A100 40GB) neu muon.
+    Van hanh: ~1,4 s/buoc khi full template-path (nhanh 40% hon v3.3 du
+    data dai gap doi); 3 OOM dau (combo prefill-that+aux+student o item
+    dai) → fix 3ed64d4: item >2500 di template tu buoc 0, skip.json xoa
+    1 lan; sau do 0 nga. AUTO-UPLOAD HF moi moc val chay that (best +
+    .last + results) — recycle giua train gio chi mat ≤250 buoc.
+    Data: 1330 train (needle buckets 700..4000) / 73 val / test 35 =
+    20 BFCL cu + 10 needle@2K cu + 5 needle@4K MOI (niem phong).
+    Val: 18→27→32→30→36→39→39→38 (needle 23/23 TUYET DOI tu moc 1249 —
+    moi bucket 700/1500/2000/4000); CE_FLOOR dung @2016.
+    TEST NIEM PHONG: BFCL self 20/20 | MAPPED 18/20 (= v3.3, tai lap
+    sau khi mat sach checkpoint — cong thuc la that, khong phai may);
+    needle self 15/15 | MAPPED 15/15 | no_ctx 0 — gom TRON 5 de @4K
+    chua tung gap.
+
+- Ket luan v3.4: (1) retention-length law xac nhan chieu thuan LAN 2 —
+  train toi dau doc toi do, 4K = tran L4 chu khong phai tran phuong phap;
+  (2) template-xuong la phat kien tai su dung duoc cho Phase C (dung
+  template khong can teacher = KVConnector khong can chay 27B prefill);
+  (3) ifstruct/pbtable van 0 (benh sinh-dai decode-time, thuoc o v3.5);
+  (4) chuoi tu dong hoa tron ven: recon → chon nac → train → cuu ho →
+  niem phong khong cham tay.
 
 ## SPEC DECODING NGRAM (2026-08-14): OFF MẶC ĐỊNH TRÊN L4 — đo 2 model × 2 mức tải
 

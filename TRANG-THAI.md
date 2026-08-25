@@ -143,11 +143,19 @@ Cập nhật: 2026-08-24.
   thức còn nguyên trong git; tái tạo = ~10h GPU (xác định). TỪ GIỜ:
   KHÔNG phóng train dài khi chưa có đường upload sống (điều kiện cứng
   trước v3.4 full).**
-- **E6 v3.4-long CODE SẴN (2026-08-25, commit edf9232)**: prefill theo
-  khúc; template-XƯƠNG thay teacher prefill mỗi bước (λ=0) + --tpl-check
-  đối chiếu; buckets tới 16K (--max-ctx); --ladder đo từng nấc; warm-start
-  --init-from (giờ vô hiệu vì v33 mất). Recon ladder 4K/8K/16K + tpl-check
-  ĐANG CHẠY trên runtime mới (kèm bootstrap ~15p vì env trắng).
+- **E6 v3.4-long XONG (2026-08-25): TÁI LẬP 18/20 BFCL + needle NIÊM
+  PHONG 15/15 TUYỆT ĐỐI (10@2K + 5@4K chưa từng gặp).** Ladder phán: L4
+  trần ở 4096 (8K/16K OOM phần cứng — 16K cần A100); tpl-check 8/8 đúng
+  từng bit → template-XƯƠNG thay hẳn teacher prefill: ~1,4 s/bước (nhanh
+  40% hơn v3.3 dù data dài ×2). Val needle 23/23 mọi bucket từ mốc 1249;
+  CE_FLOOR dừng @2016. Tái lập 18/20 sau khi MẤT SẠCH checkpoint = công
+  thức thật. **AUTO-UPLOAD HF mỗi mốc val chạy thật** — mapper_v34 (best,
+  .last), results, pseudo_gold, data đều đã ở `gunnybd01/qwen35-kv-mapper-
+  4b-27b/v34/` ngay trong phiên. Token flow mới: .env root repo (user
+  chốt), cell launch tự dựng lại sau recycle. ifstruct/pbtable vẫn 0
+  (bệnh sinh-dài decode-time — v3.5). Chi tiết STATUS mục E6 v3.4.
+  Ngã rẽ kế: Phase C (KVConnector vLLM — template-xương tái dùng được)
+  vs v3.5 (decode-time cho sinh dài) vs A100 cho 8K/16K.
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
