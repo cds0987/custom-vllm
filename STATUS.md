@@ -1224,6 +1224,31 @@ edf9232→3ed64d4, e6v34_results.json, HF v34/):
   (4) chuoi tu dong hoa tron ven: recon → chon nac → train → cuu ho →
   niem phong khong cham tay.
 
+**E6 v3.5 — MỔ BỆNH SINH-DÀI (user chốt "C, v3.5", 2026-08-25): TRẦN
+TEACHER XÁC NHẬN — suite ifstruct/pbtable không đo được mapper** (25 item
+val × 4 điều kiện, mapper v34 best, HF v35/e6v35_decode.json):
+
+    suite      | 27B-SELF | self+rp1.3 | MAPPED | map+rp1.3
+    ifstruct   |   1/15   |    0/15    |  0/15  |   0/15
+    pbtable    |   2/10   |    0/10    |  0/10  |   0/10
+
+- **Phán quyết 1 — trần teacher**: chính 27B tự đọc prompt cũng chỉ đạt
+  4-8% dưới cùng giao thức (GEN_LEN 160/120, validator/head-match).
+  Mapper 0 vs teacher 1-2 = mapper BÁM SÁT TRẦN, không phải hỏng riêng.
+  Món nợ "ifstruct/pbtable 0 điểm" từ v3.2 là nợ của ĐỀ (pseudo-gold
+  nhiễm <think>, GEN_LEN quá ngắn cho câu trả lời thật, validator đòi
+  fmt+key trong cửa sổ hẹp), không phải của model/mapper.
+- **Phán quyết 2 — repetition-penalty 1.3 PHẢN TÁC DỤNG**: self-rp 0 <
+  self 1-2. Lý do nhìn từ dumps cũ: output hợp lệ của các suite này vốn
+  LẶP CẤU TRÚC (bảng lặp <td>, JSON lặp dấu ") — penalty đè chết đúng
+  token-xương. "Rep-penalty phá vòng lặp" nghe hợp lý nhưng đo ra sai —
+  đo-hơn-suy-luận thêm một lần.
+- Hành động: LOẠI ifstruct/pbtable khỏi thang điểm chính thức của mapper
+  (giữ file kết quả để tái kiểm); scope sản phẩm cascade giữ nguyên =
+  function-calling 90% trần + retrieval ≤4K tuyệt đối. Muốn đo sinh-dài
+  tử tế cần suite mới: gold THẬT (không pseudo), GEN_LEN đủ dài, chấm
+  khớp nội dung — để ngỏ, không chặn Phase C.
+
 ## SPEC DECODING NGRAM (2026-08-14): OFF MẶC ĐỊNH TRÊN L4 — đo 2 model × 2 mức tải
 
 Profile `-spec` (ngram k=4, prompt-lookup 2-4) thêm vào run.sh; cùng runtime,
