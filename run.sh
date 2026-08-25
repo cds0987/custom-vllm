@@ -95,6 +95,9 @@ serve() {  # $1 = 9b|27b, optionally with -spec suffix (ngram speculative decodi
     *) echo "unknown model: $base (want 9b|27b|4b, optional -spec)"; exit 1;;
   esac
   [ "$base" = "9b" ] && flags="$flags --gpu-memory-utilization ${GPU_UTIL:-0.97}"
+  # Phase C: EXTRA_FLAGS env cho phep them --kv-transfer-config ... (JSON
+  # KHONG chua space vi flags expansion tach theo space)
+  flags="$flags ${EXTRA_FLAGS:-}"
   # GPU_UTIL env overrides. Default 0.97 (measured 2026-08-14: KV +38.5% vs 0.85,
   # 12-session tasks/hr +27% warm; 0.98 identical perf; 1.0 dies at engine start)
   if [ "$variant" != "$base" ]; then
