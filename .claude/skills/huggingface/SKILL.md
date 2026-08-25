@@ -5,27 +5,24 @@ description: Cách dùng HuggingFace trong dự án - login đúng cách (accoun
 
 # Cách dùng HuggingFace
 
-## Account & token (quy trình mới, user chốt 2026-08-24 — KHÔNG paste token nữa)
+## Account & token (user chốt LẠI 2026-08-25 — dùng trực tiếp, bỏ Colab Secrets)
 
-- Account free, username `gunnybd01`.
-- **Local (Windows)**: token nằm ở env var `HF_TOKEN` (User scope) — Python/CLI
-  local tự đọc; MCP server `huggingface` trong `.mcp.json` cũng đọc qua
-  `${HF_TOKEN}` (remote https://huggingface.co/mcp — search/browse hub).
-- **File `.env` ở root repo** (user yêu cầu 2026-08-24, cho linh hoạt): chứa
-  `HF_TOKEN=...`, ĐÃ nằm trong `.gitignore` (kiểm bằng `git check-ignore .env`
-  trước khi đụng). Shell mới chưa nạp env User scope thì đọc từ đây. Khi
-  rotate token: sửa cả 3 nơi (.env + env User scope + Colab Secrets).
-- **Colab**: dùng **Colab Secrets** (icon chìa khóa, panel trái) — user thêm key
-  `HF_TOKEN` MỘT LẦN cho notebook A + bật "Notebook access". Cell login:
-
-  ```python
-  from google.colab import userdata
-  from huggingface_hub import login
-  login(token=userdata.get("HF_TOKEN"))   # token KHÔNG xuất hiện trong cell
-  ```
-
-- Tuyệt đối **không ghi token vào file/commit/log/cell text**. Token nào từng
-  xuất hiện trong chat = coi như lộ → nhắc user rotate (tạo mới, revoke cũ).
+- Account free, username `gunnybd01` — user xác nhận là account THÍ NGHIỆM,
+  chấp nhận dùng token trực tiếp cho tiện đa môi trường.
+- **Nguồn chân lý: file `.env` ở root repo** (gitignored — kiểm
+  `git check-ignore .env` trước khi đụng), format `HF_TOKEN=hf_...`.
+  Local Windows còn có env var `HF_TOKEN` (User scope) + MCP `huggingface`
+  đọc `${HF_TOKEN}`.
+- **Colab**: recycle xóa /content nên cell launch phải TỰ DỰNG LẠI `.env`
+  (ghi token vào `/content/custom-vllm/.env` ngay sau clone) và/hoặc set
+  `os.environ["HF_TOKEN"]` trước khi Popen. Token nằm trong cell notebook
+  (Drive riêng tư) = user đã chấp nhận. KHÔNG dùng Colab Secrets nữa
+  (user bỏ 2026-08-25 — 5 lần nhắc không thêm, mất 2 đời checkpoint).
+- `e6v3_ce.py` (v3.4+) TỰ upload best/.last/results mỗi mốc val qua
+  `--hf-repo` (mặc định `gunnybd01/qwen35-kv-mapper-4b-27b`); token tự đọc
+  từ env `HF_TOKEN` hoặc `.env` (root repo / /content/custom-vllm/.env).
+- **Ranh giới tuyệt đối còn lại: token KHÔNG BAO GIỜ vào git commit/push**
+  — GitHub public + HF quét & tự revoke token lộ = mất đường upload.
 - Account free đủ dùng: repo model public/private không giới hạn dung lượng thực tế
   cho cỡ dự án này (champion 9.1GB upload 1.1 phút từ Colab).
 

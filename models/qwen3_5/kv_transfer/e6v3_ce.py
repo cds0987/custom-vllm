@@ -300,6 +300,10 @@ def main():
                     help="v3.4: doi chieu logits template that vs xuong")
     ap.add_argument("--no-tpl", action="store_true",
                     help="v3.4: tat duong template-xuong (prefill that)")
+    ap.add_argument("--hf-repo", default="gunnybd01/qwen35-kv-mapper-4b-27b",
+                    help="tu upload checkpoint/results moi moc val (quy tac "
+                         "6d — hoc phi 2 lan). Rong = tat. Token doc tu env "
+                         "HF_TOKEN hoac .env o root repo (KHONG commit .env)")
     ap.add_argument("--dry-data", action="store_true")
     ap.add_argument("--skip-train", action="store_true")
     ap.add_argument("--train-check", action="store_true",
@@ -318,6 +322,39 @@ def main():
     # v3.4: needle khong bao gio duoc cat — tran token hoa theo max-ctx
     global NK_MAXLEN
     NK_MAXLEN = max(4096, args.max_ctx + 128)
+
+    # token flow (user chot 2026-08-25): .env o root repo, dung truc tiep moi
+    # moi truong; .env nam trong .gitignore — TUYET DOI khong commit (HF tu
+    # revoke token lo trong repo public = mat duong upload).
+    import os as _os
+    if not _os.environ.get("HF_TOKEN"):
+        for _p in (Path(__file__).resolve().parents[3] / ".env",
+                   Path("/content/custom-vllm/.env")):
+            try:
+                for _l in _p.read_text().splitlines():
+                    if _l.strip().startswith("HF_TOKEN="):
+                        _os.environ["HF_TOKEN"] = _l.split("=", 1)[1].strip()
+                        break
+            except OSError:
+                continue
+            if _os.environ.get("HF_TOKEN"):
+                break
+    have_token = bool(_os.environ.get("HF_TOKEN"))
+    if args.hf_repo and not have_token and not args.dry_data:
+        print("CANH BAO 6d: khong tim thay HF_TOKEN (env/.env) — se KHONG "
+              "auto-upload duoc; checkpoint chi nam tren runtime!")
+
+    def hf_up(local, dest):
+        """Best-effort upload — that bai khong duoc lam do train."""
+        if not args.hf_repo or not have_token:
+            return
+        try:
+            from huggingface_hub import HfApi
+            HfApi().upload_file(path_or_fileobj=str(local), path_in_repo=dest,
+                                repo_id=args.hf_repo)
+            print(f"HF-UP {dest}")
+        except Exception as ex:
+            print(f"HF-UP FAIL {dest}: {type(ex).__name__}")
 
     if args.dry_data:
         data = build_data(tok=None, max_ctx=args.max_ctx)
@@ -827,10 +864,15 @@ def main():
                 results["val_curve"].append({"step": step, "score": score,
                                              **detail})
                 save_results()
+                # 6d: moi moc val la mot lan cuu ho — best + .last + results
+                hf_up(args.results, f"v34/{Path(args.results).name}")
+                if Path(args.out + ".last").exists():
+                    hf_up(args.out + ".last", f"v34/{Path(args.out).name}.last")
                 if score > best:
                     best, stale = score, 0
                     torch.save(mapper.state_dict(), args.out)
                     print(f"  best-by-val {best} -> saved")
+                    hf_up(args.out, f"v34/{Path(args.out).name}")
                 else:
                     stale += 1
                     if stale >= 3:
@@ -939,6 +981,7 @@ def main():
                 if score > best:
                     best = score
                     torch.save(mapper.state_dict(), args.out)
+                    hf_up(args.out, f"v34/{Path(args.out).name}")
                 break
         print("TRAIN_DONE")
         mapper.load(args.out)
@@ -988,6 +1031,14 @@ def main():
     save_results()
     print("===== E6V3 KET QUA NIEM PHONG =====")
     print(json.dumps(test_res, indent=1))
+    # 6d: cuu ho cuoi chien dich — moi thu quy len HF ngay trong phien
+    hf_up(args.out, f"v34/{Path(args.out).name}")
+    if Path(args.out + ".last").exists():
+        hf_up(args.out + ".last", f"v34/{Path(args.out).name}.last")
+    hf_up(args.results, f"v34/{Path(args.results).name}")
+    for extra in ("pseudo_gold.json", "data.json"):
+        if (cdir / extra).exists():
+            hf_up(cdir / extra, f"v34/{extra}")
     print("E6V3_DONE")
 
 

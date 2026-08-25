@@ -35,6 +35,15 @@
     bằng `bash run.sh status` / tail log. Task nhỏ (<1-2 phút) chạy thẳng được.
 
 ## An toàn
-11. KHÔNG ghi HF token vào file/commit/log; nhắc user revoke sau chiến dịch.
+11. (User sửa 2026-08-25) Token HF là account FREE thí nghiệm, user chấp nhận
+    dùng trực tiếp: sống ở `.env` root repo (gitignored) + cell notebook —
+    mọi môi trường đọc từ đó. Ranh giới còn lại TUYỆT ĐỐI: không commit/push
+    token lên git (GitHub public + HF tự revoke token lộ = mất đường upload);
+    kiểm `git check-ignore .env` trước khi đụng.
+11b. (Học phí 2 lần — 2026-08-24 mất mapper E6v3 .last, 2026-08-25 mất
+    mapper v3.3 kỷ lục + v3.2) KHÔNG phóng train dài khi đường upload chưa
+    sống: script train phải tự upload best/.last mỗi mốc val (--hf-repo
+    trong e6v3_ce.py), và cell launch phải dựng lại `.env` trên runtime
+    (recycle xóa /content).
 12. Bản nháp `upstream/` không nộp ra ngoài khi chưa có user duyệt.
 13. Commit/push khi user yêu cầu hoặc khi chốt kết quả; message mô tả đúng thực tế đo.
