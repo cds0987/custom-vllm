@@ -164,7 +164,15 @@ Cập nhật: 2026-08-24.
   cascade giữ nguyên (fn-calling 90% + retrieval ≤4K tuyệt đối). Chi
   tiết STATUS mục E6 v3.5. **Phase C design đã chốt**
   (docs/phase-c-design.md): 2 vLLM + LMCache MP + vá key-namespace;
-  CHỜ DUYỆT C2a (dựng 9B+LMCache đơn lẻ, đọc block/shape, ~1h GPU).
+  **C2a XONG (2026-08-25): 3/3 tiền đề PASS** — (1) block size 9B = 4B
+  = **1056** (cùng dòng log "attention page >= mamba page"); (2) cả hai
+  boot sạch flags production (9B 471s fresh / 4B 311s); (3)
+  **LMCACHE_EXT_OK 0.5.4** — connector external import được, không rơi
+  vào fallback builtin (vốn crash trên model lai). Kiến trúc 1-GPU cho
+  C2b: TUẦN TỰ qua L2 POSIX (4B producer ghi đĩa → stop → 9B consumer
+  đọc) — né hẳn bài đồng trú E3B. CHỜ DUYỆT C2b (~2h GPU): vá
+  key-namespace lmcache + 3 cổng đúng đắn (logprob-parity → needle →
+  TTFT).
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
