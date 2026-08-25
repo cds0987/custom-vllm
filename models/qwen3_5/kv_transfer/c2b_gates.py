@@ -40,12 +40,14 @@ def build_prompts():
     danh so deterministic, needle giua, hoi cuoi."""
     import random
     prompts = []
-    for ctx, n in [(1500, 2), (8000, 2), (30000, 2)]:
+    # (ctx_label_token, so_WORD) — moi "wNNNN" ~2.5 token (bai hoc 400: 30K
+    # word ~75K token > mml 65536). Word count = token_target / 2.5.
+    for ctx, nw, n in [(1500, 600, 2), (8000, 3200, 2), (30000, 12000, 2)]:
         for j in range(n):
             rng = random.Random(1000 * ctx + j)
             code = "".join(rng.choice("0123456789") for _ in range(6))
             name = f"PRJ{rng.randint(100, 999)}"
-            words = [f"w{rng.randint(0, 9999)}" for _ in range(ctx)]
+            words = [f"w{rng.randint(0, 9999)}" for _ in range(nw)]
             half = len(words) // 2
             txt = (" ".join(words[:half])
                    + f"\nIMPORTANT: The secret code for project {name} is {code}.\n"
