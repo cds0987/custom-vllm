@@ -137,8 +137,17 @@ Cập nhật: 2026-08-24.
   collapse sinh dài (>~30 tok) + nghi trần teacher pseudo-gold — thuốc
   v3.4 ở decode-time. Scope cascade 4B→27B: fn-calling 90% trần +
   retrieval ≤2000 tuyệt đối. Chi tiết STATUS mục E6 v3.3.
-  **NỢ UPLOAD KHẨN (6d): mapper v33 LẪN v32 chỉ nằm trên runtime —
-  Colab Secrets HF_TOKEN vẫn chưa set (nhắc lần 4).**
+  ~~NỢ UPLOAD KHẨN (6d)~~ → **ĐÃ THÀNH HỌC PHÍ LẦN 2 (2026-08-25):
+  runtime recycle NUỐT SẠCH mapper_v33.pt (18/20+10/10) + mapper_v32.pt
+  — 5 lần nhắc Colab Secrets HF_TOKEN không được thêm. Số liệu/code/công
+  thức còn nguyên trong git; tái tạo = ~10h GPU (xác định). TỪ GIỜ:
+  KHÔNG phóng train dài khi chưa có đường upload sống (điều kiện cứng
+  trước v3.4 full).**
+- **E6 v3.4-long CODE SẴN (2026-08-25, commit edf9232)**: prefill theo
+  khúc; template-XƯƠNG thay teacher prefill mỗi bước (λ=0) + --tpl-check
+  đối chiếu; buckets tới 16K (--max-ctx); --ladder đo từng nấc; warm-start
+  --init-from (giờ vô hiệu vì v33 mất). Recon ladder 4K/8K/16K + tpl-check
+  ĐANG CHẠY trên runtime mới (kèm bootstrap ~15p vì env trắng).
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
