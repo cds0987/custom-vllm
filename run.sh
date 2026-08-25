@@ -114,7 +114,7 @@ serve() {  # $1 = 9b|27b, optionally with -spec suffix (ngram speculative decodi
   ( source /tmp/vllm_env.sh 2>/dev/null; \
     nohup vllm serve "$model" $flags \
       --enable-prefix-caching --mamba-cache-mode align \
-      --kv-cache-dtype fp8_e4m3 --port 8000 \
+      --kv-cache-dtype "${KV_DTYPE:-fp8_e4m3}" --port 8000 \
       > "$LOGS/serve.log" 2>&1 & echo "PID:$!" )
   t0=$(date +%s)
   while ! port_open; do
