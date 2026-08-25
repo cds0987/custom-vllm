@@ -507,8 +507,11 @@ def main():
                       f" | B1 {t_b1:.1f} s/item"
                       f" | {(time.time()-t0)/n:.2f} s/buoc (template-path)"
                       f" | peak {peak:.2f} GiB")
-            except torch.cuda.OutOfMemoryError:
-                print(f"LADDER {L}: OOM — TRAN o nac nay")
+            except (torch.cuda.OutOfMemoryError, RuntimeError) as ex:
+                # Triton OOM cua fla kernel nem RuntimeError thuong —
+                # phai bat rong de nac sau van duoc do (hoc phi recon 1)
+                print(f"LADDER {L}: {type(ex).__name__} — TRAN o nac nay"
+                      f" ({str(ex)[:90]})")
                 gc.collect(); torch.cuda.empty_cache()
         print("E6V34_LADDER_DONE")
         return
