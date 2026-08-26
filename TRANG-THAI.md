@@ -214,9 +214,20 @@ Cập nhật: 2026-08-24.
   thông tin TRUYỀN ĐƯỢC; lỗi ở DECODE trên cache ngoại. Nghi phạm xếp
   hạng: (1) W4A16 hai đầu (E6c: lượng tử hóa gánh nửa vết nứt — E1-E3
   sạch là bf16↔bf16); (2) champion 9B là hàng GHÉP (GDN graft từ GGUF
-  — luật CCA-GDN đo trên model gốc); (3) độ chính xác trang GDN. CHỜ
-  DUYỆT C2b-6 (~30p): consumer = RedHatAI 9B w4a16 GỐC không graft —
-  tách biến (2).
+  — luật CCA-GDN đo trên model gốc); (3) độ chính xác trang GDN.
+- **C2b-6 XONG (2026-08-26, HF c2b6/)**: consumer đổi sang RedHatAI 9B
+  w4a16 GỐC — kết quả **GIỐNG HỆT từng ký tự** ('4398.', 025150 trọn,
+  '0714' lặp, '9346666...'), self 4/4, cross 1/4. **Champion-graft
+  MINH OAN**; lỗi tái lập xác định trên 2 checkpoint 9B khác nhau →
+  thuộc tính của đường truyền, nghi phạm cuối: **W4A16 (cả producer
+  4B lẫn consumer 9B)** — khớp E6c (lượng tử hóa gánh nửa vết nứt;
+  E1-E3 sạch là bf16↔bf16). CHỜ DUYỆT C2b-7 (~35p, lượt phân xử CUỐI):
+  producer = Qwen/Qwen3.5-4B bf16 GỐC (re-produce trang bf16) +
+  consumer champion — nếu cross bật lên → chốt "cross-serving cần
+  producer bf16" (2-GPU thành kịch bản chính); vẫn 1/4 → viết verdict
+  Phase C interim: copy-path serving đúng-một-phần (hit + tốc độ ×12 +
+  retrieval token đầu), exact-retrieval cần bf16 hai đầu = ngoài L4
+  1-GPU.
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
