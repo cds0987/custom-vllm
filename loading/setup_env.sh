@@ -16,8 +16,9 @@ else
   echo "=== uv unavailable; falling back to pip ==="
 fi
 
-echo "=== Installing vllm ==="
-$PIP vllm requests
+echo "=== Installing vllm (GHIM 0.27.1 — toan bo so do Phase C/production tren ban nay;"
+echo "    2026-08-26 runtime moi keo 0.28.0/torch 2.13 khong ghim -> drift ngam) ==="
+$PIP "vllm==${VLLM_VERSION:-0.27.1}" requests
 
 # vLLM 0.27.1 (2026-08-12) pulls a torchaudio built against a different CUDA
 # minor than the torch it installs (torch cu13.0 vs torchaudio cu12.8).

@@ -13,7 +13,11 @@ export KV_DTYPE=auto
 # torch) TRUOC -> lmcache cung torch -> va key-namespace 4B/9B chia se trang
 bash run.sh setup 2>&1 | tail -3
 source /tmp/vllm_env.sh 2>/dev/null
-python -c "import lmcache" 2>/dev/null || pip install -q 'lmcache>=0.5.2' 2>&1 | tail -1
+# lmcache PHAI cai sau setup va cai lai neu torch doi (import check khong du:
+# wheel cu gan torch cu van import duoc nhung CUDA-IPC lech "future torch")
+pip install -q 'lmcache>=0.5.2' 2>&1 | tail -1
+pip install -q --force-reinstall --no-deps 'lmcache>=0.5.2' 2>&1 | tail -1
+python -c "import torch,vllm,lmcache;print('STACK torch',torch.__version__,'vllm',vllm.__version__,'lmcache',lmcache.__version__)" || { echo STACK_FAIL; exit 6; }
 R=$(python -c 'import lmcache,os;print(os.path.dirname(lmcache.__file__))')
 grep -q qwen35-shared "$R/integration/vllm/lmcache_mp_connector.py" || sed -i 's/model_name=vllm_config.model_config.model,/model_name="qwen35-shared",/' "$R/integration/vllm/lmcache_mp_connector.py" "$R/integration/vllm/lmcache_mp_connector_0201.py"
 grep -q qwen35-shared "$R/integration/vllm/lmcache_mp_connector.py" && echo C2C_PATCHED || { echo PATCH_FAIL; exit 5; }

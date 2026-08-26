@@ -35,7 +35,9 @@ port_open() { curl -s -m 2 http://127.0.0.1:8000/v1/models >/dev/null 2>&1; }
 
 ensure_setup() {
   # Marker-based: setup once per runtime, cheap check afterwards.
-  if python -c "import vllm" 2>/dev/null && [ -f /tmp/custom_vllm_setup_done ]; then
+  # marker + DUNG phien ban (2026-08-26: runtime moi keo vllm 0.28.0 khong ghim)
+  if python -c "import vllm,sys; sys.exit(vllm.__version__ != '${VLLM_VERSION:-0.27.1}')" 2>/dev/null \
+     && [ -f /tmp/custom_vllm_setup_done ]; then
     say "setup: OK (cached)"; return 0
   fi
   say "setup: installing env + patches (~3-5 min on a fresh runtime)"
@@ -111,7 +113,9 @@ serve() {  # $1 = 9b|27b, optionally with -spec suffix (ngram speculative decodi
   sleep 5
   say "starting vllm serve $model"
   # shellcheck disable=SC2086
-  ( source /tmp/vllm_env.sh 2>/dev/null; \
+  # `|| true`: set -e + source file thieu -> subshell fail -> run.sh chet CAM
+  # ngay sau "starting" (khong PID, khong serve.log) — hoc phi 2026-08-26
+  ( { source /tmp/vllm_env.sh 2>/dev/null || true; }; \
     nohup vllm serve "$model" $flags \
       --enable-prefix-caching --mamba-cache-mode align \
       --kv-cache-dtype "${KV_DTYPE:-fp8_e4m3}" --port 8000 \
