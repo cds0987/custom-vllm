@@ -308,6 +308,12 @@ def main():
                     help="tu upload checkpoint/results moi moc val (quy tac "
                          "6d — hoc phi 2 lan). Rong = tat. Token doc tu env "
                          "HF_TOKEN hoac .env o root repo (KHONG commit .env)")
+    ap.add_argument("--hf-prefix", default="",
+                    help="thu muc con trong hf-repo (mac dinh: suy tu ten "
+                         "--out, vd mapper_v49.pt -> 'v49'). TRUOC day GHIM "
+                         "CUNG 'v34/' cho moi target — hoc phi 2026-08-26: "
+                         "chien dich 4->9 se de len mapper 4->27B neu khong "
+                         "tach thu muc.")
     ap.add_argument("--dry-data", action="store_true")
     ap.add_argument("--skip-train", action="store_true")
     ap.add_argument("--train-check", action="store_true",
@@ -344,6 +350,7 @@ def main():
             if _os.environ.get("HF_TOKEN"):
                 break
     have_token = bool(_os.environ.get("HF_TOKEN"))
+    hf_prefix = args.hf_prefix or Path(args.out).stem.replace("mapper_", "")
     if args.hf_repo and not have_token and not args.dry_data:
         print("CANH BAO 6d: khong tim thay HF_TOKEN (env/.env) — se KHONG "
               "auto-upload duoc; checkpoint chi nam tren runtime!")
@@ -942,14 +949,14 @@ def main():
                                              **detail})
                 save_results()
                 # 6d: moi moc val la mot lan cuu ho — best + .last + results
-                hf_up(args.results, f"v34/{Path(args.results).name}")
+                hf_up(args.results, f"{hf_prefix}/{Path(args.results).name}")
                 if Path(args.out + ".last").exists():
-                    hf_up(args.out + ".last", f"v34/{Path(args.out).name}.last")
+                    hf_up(args.out + ".last", f"{hf_prefix}/{Path(args.out).name}.last")
                 if score > best:
                     best, stale = score, 0
                     torch.save(mapper.state_dict(), args.out)
                     print(f"  best-by-val {best} -> saved")
-                    hf_up(args.out, f"v34/{Path(args.out).name}")
+                    hf_up(args.out, f"{hf_prefix}/{Path(args.out).name}")
                 else:
                     stale += 1
                     if stale >= 3:
@@ -1062,7 +1069,7 @@ def main():
                 if score > best:
                     best = score
                     torch.save(mapper.state_dict(), args.out)
-                    hf_up(args.out, f"v34/{Path(args.out).name}")
+                    hf_up(args.out, f"{hf_prefix}/{Path(args.out).name}")
                 break
         print("TRAIN_DONE")
         mapper.load(args.out)
@@ -1113,13 +1120,13 @@ def main():
     print("===== E6V3 KET QUA NIEM PHONG =====")
     print(json.dumps(test_res, indent=1))
     # 6d: cuu ho cuoi chien dich — moi thu quy len HF ngay trong phien
-    hf_up(args.out, f"v34/{Path(args.out).name}")
+    hf_up(args.out, f"{hf_prefix}/{Path(args.out).name}")
     if Path(args.out + ".last").exists():
-        hf_up(args.out + ".last", f"v34/{Path(args.out).name}.last")
-    hf_up(args.results, f"v34/{Path(args.results).name}")
+        hf_up(args.out + ".last", f"{hf_prefix}/{Path(args.out).name}.last")
+    hf_up(args.results, f"{hf_prefix}/{Path(args.results).name}")
     for extra in ("pseudo_gold.json", "data.json"):
         if (cdir / extra).exists():
-            hf_up(cdir / extra, f"v34/{extra}")
+            hf_up(cdir / extra, f"{hf_prefix}/{extra}")
     print("E6V3_DONE")
 
 
