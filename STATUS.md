@@ -1351,6 +1351,37 @@ Hạ tầng: gen-n 240 prompt aligned (rem 2-4), self-baseline 1 lượt +
 - kv_role kv_producer/kv_consumer chạy sạch (lần đầu dùng, 10 wave 0 lỗi
   role); toàn chuỗi 2h tự động không ngã.
 
+## MAPPER 4B→9B — sanity XONG (2026-08-27, user chốt "tune thay copy nguyên")
+
+User: copy-nguyên 4→9 "hên xui", đòi mapper functional-loss như 4→27
+(v3.4). Tin tốt xác nhận bằng đo: `e6v3_ce.py` tổng quát theo
+`--tgt-model` — đổi tham số 9B thay 27B, KHÔNG SỬA CODE, chạy trọn
+20 bước sanity không lỗi ngay lần đầu (0 giả định ngầm 27B-only lộ ra).
+
+    20 bước, 4.72 s/bước (gồm cả overhead khởi động lần đầu ~61s)
+    peak VRAM 8.76 GiB (so với 27B bnb-4bit sát trần L4 22GB)
+    CE bước 0: 7.089 (điểm khởi đầu bình thường, chưa đủ bước để thấy xu hướng)
+
+- **VRAM rẻ hơn 27B rất nhiều** (8,76 GiB vs sát trần 22GB) — còn nhiều
+  dư địa tăng `--max-ctx`, batch, hoặc bỏ `mapper.ckpt` (checkpoint
+  autograd) để đổi tốc độ lấy VRAM, khác hẳn ràng buộc chật của 27B.
+  Sau khi trừ ~61s khởi động lần đầu, tốc độ ổn định ước ~1,7-1,8
+  s/bước — cùng dải với 27B (1,4-2,2 s/bước ở v3.3/v3.4) dù it hơn.
+- Sửa 1 bug hạ tầng trước khi chạy: `hf_up()` từng **ghim cứng thư
+  mục `"v34/"`** cho mọi target — nếu không tách, chiến dịch 4→9 sẽ
+  đè lên kết quả mapper 4→27B trên HF. Đã thêm `--hf-prefix` (mặc
+  định suy từ tên `--out`).
+- Chưa đủ bước để đánh giá hội tụ (sanity chỉ đo tốc độ/VRAM, không
+  đo chất lượng — đúng mục đích ban đầu). Theo E7 (CCA-GDN 4→9 ≥0,9,
+  dễ hơn 4→27's 0,785), kỳ vọng hội tụ nhanh hơn — cần chạy train
+  thật (vài trăm-nghìn bước, có val curve) để xác nhận.
+- **Bước kế (chờ user duyệt riêng — GPU dài hơi)**: phóng train thật
+  4→9, tái dùng nguyên data BFCL/needle/ifstruct/pbtable cũ trước
+  (đã kiểm chứng cho 27B), val mỗi 250 bước, auto-upload HF
+  `v49/` (không đụng `v34/`). Nếu val lên nhanh → tích hợp thêm data
+  4 họ đề mới (`suite_gen.py`: rag/mid-info/reasoning-math/swe) làm
+  Giai đoạn B, rồi đo trên `c2suite.sh` (đã dựng, chưa phóng).
+
 ## C2c sem (2026-08-26, user duyệt bước 1 "scope ngữ nghĩa") — N=60 @8K
 
 Câu hỏi: cross 4B→9B qua serving có sống ở bài **hiểu** (QA/RAG paraphrase,

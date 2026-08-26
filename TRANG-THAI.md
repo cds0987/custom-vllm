@@ -247,6 +247,13 @@ Cập nhật: 2026-08-24.
   Kế hoạch 2 giai đoạn: A) sanity mapper 4→9 với data cũ (0 code mới,
   ~1-2h) → tín hiệu đi/không; B) nếu khả quan, tích hợp data 4 họ mới
   vào train loop rồi đo trên `c2suite.sh`.
+- **Giai đoạn A XONG (2026-08-27): sanity 4→9 chạy trọn KHÔNG SỬA
+  CODE, 0 lỗi ngay lần đầu** — 20 bước, ~1,7-1,8 s/bước ổn định, peak
+  VRAM chỉ **8,76 GiB** (27B bnb-4bit sát trần 22GB — 4→9 rẻ hơn
+  nhiều, còn dư địa tăng ctx/tốc độ). Vá 1 bug trước khi chạy:
+  `hf_up()` ghim cứng `"v34/"` → thêm `--hf-prefix` (né đè lên mapper
+  4→27B). Sanity chỉ đo tốc độ/VRAM, CHƯA đo hội tụ — chờ user duyệt
+  train thật (vài trăm-nghìn bước, val curve) trước khi phóng.
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
