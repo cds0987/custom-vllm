@@ -1296,6 +1296,39 @@ cổng (ss -tlnp + /proc/PID/cmdline); pkill -f 'vllm serve' TỰ KHỚP bash
 chứa pattern → dùng '[e]'; 2-writer-1-log = null bytes (python con sống
 sót kill cha vẫn giữ fd); L1 lmcache = pinned RAM cấp háo hức lúc boot.
 
+## PHASE C VERDICT CUỐI (2026-08-26, sau lab-check + khám kho + C2b-8)
+
+Ba lượt cuối (user chỉ đạo "kiểm ngoài vLLM trước"):
+
+    Lab-check (transformers bf16, protocol E1, CÙNG bộ đề): self 4/4,
+      copy-nguyên 3/4 MÃ TRỌN (ca 30K-2 degenerate '9346666').
+    Khám kho (đầu dò OBJGRP-PROBE): plan chạy ĐỐI XỨNG 2 nhóm object
+      76/76 (attention + mamba/GDN), cả store lẫn retrieve → giả thuyết
+      "trang GDN rơi" BỊ BÁC.
+    C2b-8 (vLLM consumer 9B bf16-WEIGHTS, 8K-only vì 30K không vừa L4
+      bf16): self 2/2, cross 1/2 — ca 0 vẫn '4398' cụt, GIỐNG W4A16
+      → giả thuyết "W4A16-consumer" CŨNG BỊ BÁC.
+
+**Kết luận cuối**: đã loại HẾT các giả thuyết "một con bug rời rạc"
+(fp8-scale*, block-align*, suffix-re-prefill, graft, producer-W4A16,
+GDN-trang-rơi, consumer-W4A16). [* = hai cái này là điều kiện cần thật,
+đã vá]. Cái còn lại là ĐỊNH LUẬT BIÊN MỎNG: cross-model cache đặt decode
+đứng sát mép vực số học — mọi nhiễu nhỏ (khác kernel GDN vLLM vs fla,
+roundtrip trang, lượng tử hóa) lật các ca cận biên. Bằng chứng chuỗi:
+cùng ca 0, lab-fla ra mã trọn còn vLLM-kernel ra 4 số; junk '<|1|1|'
+sau mã xuất hiện Ở CẢ LAB — biên vốn mỏng sẵn (E6c đã đo nửa vết nứt
+là lượng tử hóa, E2 đã đo retention giảm theo độ dài trên đề khó).
+
+**Hệ quả sản phẩm**: (1) exact-retrieval dài qua cross-serving = CHƯA
+bán được, cần gia cố biên (polisher phía consumer — đúng công nghệ
+mapper/calibration đã có, E6-series); (2) scope AN TOÀN từ E2-E3 vẫn
+đứng: chat/QA/RAG ngữ nghĩa (không đòi khớp chuỗi chính xác) — chưa đo
+lại trên serving, là bài đo kế tiếp hợp lý; (3) transport stack đã
+ĐÚNG và ĐỦ (bf16 KV + block-align + L1 đủ + cùng-torch): TTFT ×12-16
+là trần thật, kho vận hành chuẩn — mọi thứ sẵn sàng cho ngày biên được
+gia cố; (4) 4B→27B batch (transformers, mapper v3.4) KHÔNG bị ảnh
+hưởng — vẫn là đường sản phẩm sạch nhất hiện tại.
+
 ## SPEC DECODING NGRAM (2026-08-14): OFF MẶC ĐỊNH TRÊN L4 — đo 2 model × 2 mức tải
 
 Profile `-spec` (ngram k=4, prompt-lookup 2-4) thêm vào run.sh; cùng runtime,

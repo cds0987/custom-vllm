@@ -204,10 +204,19 @@ Cập nhật: 2026-08-24.
   DUY NHẤT sau khi đối chiếu lab-check: **trọng số consumer W4A16**
   — lab 3/4 dùng 9B bf16-weights; mọi lượt vLLM đều consumer W4A16
   (champion lẫn stock); E6c từng đo: student lượng tử hóa mất nửa biên.
-  CHỜ DUYỆT C2b-8 (~30p, phân xử cuối thật): vLLM consumer = Qwen 9B
-  bf16-weights (mml hạ 30720 cho vừa L4) — cross bật lên ~3/4 = khớp
-  lab, chốt toàn cảnh: transport ĐÚNG, điều kiện chất lượng là
-  consumer bf16 (GPU lớn hơn) hoặc gia cố biên cho consumer nén.
+- **C2b-8 + VERDICT CUỐI PHASE C (2026-08-26, HF c2b8/)**: consumer
+  bf16-weights trong vLLM (8K-only, 30K không vừa L4 bf16) → cross VẪN
+  1/2, ca 0 cụt '4398' giống hệt W4A16 → giả thuyết W4A16-consumer CŨNG
+  bị bác. **Kết luận: không còn "một con bug" — là ĐỊNH LUẬT BIÊN MỎNG**:
+  cross-cache decode đứng sát mép vực số học, nhiễu nhỏ nào (kernel GDN
+  vLLM≠fla, roundtrip trang, lượng tử hóa) cũng lật ca cận biên (lab-fla
+  cùng ca ra mã trọn; junk sau mã có Ở CẢ lab). Transport stack đã ĐÚNG
+  (2 nhóm object giao đủ 76/76; bf16 KV + block-align + L1 + cùng-torch
+  = điều kiện cần, đã vá; TTFT ×12-16 thật). Hệ quả: exact-retrieval
+  serving cần POLISHER gia cố biên (công nghệ mapper sẵn có); scope ngữ
+  nghĩa chat/QA/RAG (E2-E3) chưa đo trên serving = bài đo kế; 4B→27B
+  batch không ảnh hưởng. Chi tiết STATUS mục PHASE C VERDICT CUỐI.
+  GPU trống, không job nền — chờ user định hướng.
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
