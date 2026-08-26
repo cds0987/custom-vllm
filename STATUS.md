@@ -1351,6 +1351,57 @@ Hạ tầng: gen-n 240 prompt aligned (rem 2-4), self-baseline 1 lượt +
 - kv_role kv_producer/kv_consumer chạy sạch (lần đầu dùng, 10 wave 0 lỗi
   role); toàn chuỗi 2h tự động không ngã.
 
+## MAPPER 4B→27B — thử giải pháp mở rộng context (2026-08-27, user: "ko được kết luận sớm phải làm kỹ")
+
+User chất vấn kết luận cũ (27B kẹt ở 4096 trên L4) — đúng quy tắc 4, đã
+tranh luận và ĐO THẬT 2 đòn bẩy trên chính forward+backward thật (cache
+có gradient tiêm vào, đúng cơ chế mapper), không suy luận. Đối chứng
+baseline trước (tái lập đúng ladder cũ): 4096 OK 20,19GiB / 8192 OOM.
+
+    Baseline           : 4096 OK 20,19GiB (54s) | 8192 OOM
+    + gradient ckpt     : 4096 OK 20,18GiB (6s)  | 8192 OOM (giống hệt baseline)
+    + CPU offload I/O   : load peak 12,94GiB (−4,72GiB so 17,66GiB)
+                          | 4096 VÀ 8192 đều FAIL (lỗi khác — không phải OOM)
+    + cả hai            : load 12,94GiB | 8192/16384 FAIL (cùng lỗi offload)
+
+**Đòn bẩy 1 (gradient checkpointing trên backbone) — THUA THẬT, có cơ
+chế rõ ràng, không phải bug**: peak VRAM giống hệt baseline (20,18 vs
+20,19 GiB). Lý do: `gradient_checkpointing_enable()` của HF chỉ xả bớt
+activation TÍCH LŨY QUA NHIỀU LỚP (giữa các decoder layer), trong khi
+OOM ở đây xảy ra NGAY TRONG MỘT LỚP — do `repeat_kv` (mở rộng GQA)
+tạo tensor tạm khổng lồ khi attention phải quét toàn bộ 8192 token
+cache. Hai cơ chế lệch nhau hoàn toàn → đòn bẩy này đóng, có bằng
+chứng cơ học, không phải "chưa thử kỹ".
+- Tốc độ 6s vs 54s ở cùng T=4096 là do cache CUDA/cuDNN đã ấm từ lượt
+  chạy trước trong cùng process, không phải hiệu ứng thật của gradient
+  checkpointing (ghi chú tránh hiểu lầm khi đọc lại số này).
+
+**Đòn bẩy 2 (CPU offload embed_tokens+lm_head, `llm_int8_enable_
+fp32_cpu_offload=True`) — THẮNG MỘT NỬA, CHƯA ĐÓNG**: tiết kiệm bộ
+nhớ tĩnh THẬT và tái lập được 2 lần (12,94GiB, giảm 4,72GiB so với
+17,66GiB) — xác nhận đúng nghi ngờ ban đầu (embed/lm_head không bị
+lượng tử hóa là thủ phạm chính). NHƯNG vướng lỗi tích hợp thật:
+`NotImplementedError: Cannot copy out of meta tensor; no data!` — xảy
+ra ở CẢ 4096 (đáng lẽ dư sức chứa) lẫn 8192, kèm cảnh báo "Some
+parameters are on the meta device because they were offloaded to the
+cpu". Chẩn đoán: cơ chế offload của `accelerate`/`bitsandbytes` dùng
+hook nạp trọng số thật "vừa lúc" (lazy) trong đúng luồng forward đã
+đăng ký — việc mapper tự ý sửa tensor trong `past_key_values` NGOÀI
+luồng đó (clone + requires_grad_) phá vỡ hợp đồng lazy-load này. Đây
+KHÔNG phải bằng chứng offload vô dụng — là bằng chứng đường ống
+`device_map` thủ công + hook tự động không tương thích với cách mapper
+thao túng cache. Đường thoát chưa thử: tự tay `.to('cpu')`/`.to('cuda')`
+quanh 2 module đó SAU khi load bình thường (không qua accelerate
+dispatch hook), viết forward thủ công — tốn công hơn 1 cờ nhưng khả
+thi về nguyên lý (bộ nhớ đã xác nhận đủ rẻ).
+
+**Kết luận (không phải "hết đường", là "cần đầu tư sâu hơn nếu muốn
+theo tiếp")**: gradient checkpointing đóng hẳn. CPU offload còn cửa —
+tiềm năng thật (4,72GiB) nhưng cần viết lại đường nạp trọng số thủ
+công thay vì dựa vào cờ có sẵn, ước thêm 1-2h kỹ thuật + đo lại. Chưa
+làm vì cần user xác nhận có đáng đầu tư tiếp hay ưu tiên nhánh 4→9
+(đã duyệt, đang chờ phóng) trước.
+
 ## MAPPER 4B→9B — sanity XONG (2026-08-27, user chốt "tune thay copy nguyên")
 
 User: copy-nguyên 4→9 "hên xui", đòi mapper functional-loss như 4→27

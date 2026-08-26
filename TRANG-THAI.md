@@ -258,6 +258,16 @@ Cập nhật: 2026-08-24.
   (27B từng kẹt ở 4096) — peak 9,1/10,0/11,9 GiB, còn dư ~11GiB dưới
   trần L4 tại 16384. Khuyến nghị max-ctx=16384 cho train thật (khớp
   mục tiêu gốc "Unsloth 16K"). Đang chờ user duyệt phóng train.
+- **Probe mở-context cho 27B XONG (2026-08-27, user "ko được kết luận
+  sớm phải làm kỹ")**: đo thật gradient-checkpoint + CPU-offload
+  embed/lm_head trên forward+backward thật. **Gradient checkpointing
+  ĐÓNG hẳn** (peak VRAM giống hệt baseline 20,18=20,19GiB — cơ chế
+  lệch nhau: OOM do 1 lớp attention `repeat_kv`, không phải tích lũy
+  qua nhiều lớp). **CPU offload THẮNG MỘT NỬA**: tiết kiệm thật
+  4,72GiB (12,94 vs 17,66GiB, tái lập 2 lần) nhưng vướng lỗi tích hợp
+  "meta tensor" giữa accelerate dispatch hook và cách mapper tự sửa
+  cache — cần viết lại đường nạp thủ công (không qua cờ có sẵn) để
+  test tiếp, ước 1-2h kỹ thuật. CHƯA làm — chờ user chọn ưu tiên.
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
