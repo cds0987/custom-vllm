@@ -18,6 +18,12 @@ import json
 import time
 import urllib.request
 
+import importlib.util as _ilu
+from pathlib import Path as _P
+_sp = _ilu.spec_from_file_location("suite_gen", _P(__file__).parent / "suite_gen.py")
+sg = _ilu.module_from_spec(_sp)
+_sp.loader.exec_module(sg)
+
 API = "http://127.0.0.1:8000/v1"
 PROMPTS_F = "/content/c2b_prompts.json"
 
@@ -110,6 +116,50 @@ def build_prompts_n(n, ctx_t):
     with open(PROMPTS_F, "w") as fh:
         json.dump(prompts, fh)
     print(f"gen-n: {n} prompts ctx{ctx_t} -> {PROMPTS_F}")
+
+
+def agg_suite():
+    """Bang ho de x do dai: self vs cross tren CUNG item (chi tinh item co
+    ca hai) + ma tran chuyen trang thai."""
+    import glob
+    from collections import defaultdict
+    P = json.load(open(PROMPTS_F))
+    res = {}
+    for kind in ("suitebase", "suitecross"):
+        d = {}
+        for f in sorted(glob.glob(f"/content/logs/c2b_{kind}*.json")):
+            blob = json.load(open(f))
+            for r in (blob["runs"] if isinstance(blob, dict) else blob):
+                d[r["i"]] = r
+        res[kind] = d
+    both = sorted(set(res["suitebase"]) & set(res["suitecross"]))
+    print(f"=== SUITE AGG: {len(both)} item co ca self lan cross ===")
+    cells = defaultdict(lambda: [0, 0, 0, [], []])
+    for i in both:
+        p = P[i]
+        b, c = res["suitebase"][i], res["suitecross"][i]
+        for key in ((p["family"], p["ctx"]), (p["family"], "all"),
+                    ("ALL", "all")):
+            cell = cells[key]
+            cell[0] += 1
+            cell[1] += b["hit"]
+            cell[2] += c["hit"]
+            cell[3].append(b["lat"])
+            cell[4].append(c["lat"])
+    print(f"{'ho de':<8}{'ctx':>7}{'n':>6}{'self':>9}{'cross':>9}"
+          f"{'ty le':>9}{'lat_s':>8}{'lat_c':>8}")
+    for key in sorted(cells, key=lambda k: (str(k[0]), str(k[1]))):
+        n, sb, sc, ls, lc = cells[key]
+        ls.sort(); lc.sort()
+        ratio = f"{sc / sb:.0%}" if sb else "-"
+        print(f"{str(key[0]):<8}{str(key[1]):>7}{n:>6}"
+              f"{sb / n:>8.0%}{sc / n:>9.0%}{ratio:>9}"
+              f"{ls[len(ls) // 2]:>8.2f}{lc[len(lc) // 2]:>8.2f}")
+    out = {f"{k[0]}|{k[1]}": {"n": v[0], "self": v[1], "cross": v[2]}
+           for k, v in cells.items()}
+    with open("/content/logs/suite_report.json", "w") as fh:
+        json.dump(out, fh, indent=1)
+    print("AGG_SUITE_DONE")
 
 
 def build_prompts_sem(n, ctx_t):
@@ -300,12 +350,15 @@ def run_pass(tag, sl=""):
         toks = ch.get("logprobs", {}).get("tokens", [])
         lps = ch.get("logprobs", {}).get("token_logprobs", [])
         txt = ch["text"]
-        if "kw" in p:                     # C2c sem: cham keyword
+        if "expect" in p:                 # SUITE: rag/mid/math/swe
+            hit = sg.score(p, txt)
+        elif "kw" in p:                   # C2c sem: cham keyword
             hit = int(p["kw"].lower() in txt.lower())
         else:                             # needle: cham chuoi so
             hit = int(p["code"] in "".join(c for c in txt if c.isdigit()))
         out.append({"i": i, "ctx": p["ctx"], "hit": hit, "lat": round(dt, 3),
-                    "text": txt[:80], "tokens": toks, "logprobs": lps})
+                    "family": p.get("family", "-"), "text": txt[:120],
+                    "tokens": toks, "logprobs": lps})
         print(f"{tag} {i} ctx{p['ctx']} hit={hit} lat={dt:.2f}s "
               f"text={txt[:40]!r}")
     res = {"runs": out, "ttft_30k_repeat": ttft_stream(mid, pairs[-1][1]["prompt"])}
@@ -362,11 +415,16 @@ def compare():
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("mode", choices=["gen", "gen-aligned", "gen-n", "gen-sem",
-                                     "produce", "baseline", "cross", "compare",
-                                     "agg", "sembase", "semcross", "agg-sem"])
+                                     "gen-suite", "produce", "baseline",
+                                     "cross", "compare", "agg", "sembase",
+                                     "semcross", "agg-sem", "suitebase",
+                                     "suitecross", "agg-suite"])
     ap.add_argument("--n", type=int, default=240)
     ap.add_argument("--ctx", type=int, default=8000)
     ap.add_argument("--slice", default="")
+    ap.add_argument("--ctxs", default="2000,4000,8000")
+    ap.add_argument("--families", default="rag,mid,math,swe")
+    ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
     if args.mode == "gen":
         build_prompts()
@@ -384,5 +442,16 @@ if __name__ == "__main__":
         agg()
     elif args.mode == "agg-sem":
         agg(("sembase", "semcross"))
+    elif args.mode == "gen-suite":
+        import os
+        from transformers import AutoTokenizer
+        src = "/content/models/frame4b"
+        if not os.path.isdir(src):
+            src = "Qwen/Qwen3.5-4B"
+        sg.build_suite(args.n, [int(c) for c in args.ctxs.split(",")],
+                       args.families.split(","), PROMPTS_F,
+                       AutoTokenizer.from_pretrained(src), seed=args.seed)
+    elif args.mode == "agg-suite":
+        agg_suite()
     else:
         run_pass(args.mode, args.slice)
