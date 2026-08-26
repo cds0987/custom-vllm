@@ -61,6 +61,17 @@ Bẫy đã dính — tránh:
   nhầm file cũ (stale).
 - Cần lệnh chuỗi (pip build dài + train): `bash -c "buoc1; buoc2; exec python ..."`
   trong Popen — build `causal-conv1d` mất ~13 phút, đừng chờ trong cell.
+- **pkill -f 'vllm serve' TỰ SÁT**: bash -c đang chạy có pattern trong cmdline
+  → pkill giết chính shell, output rỗng không dấu vết. Dùng `'vllm serv[e]'`.
+- **Kill cha không chết con giữ cổng** (lmcache, server spawn): tìm chủ cổng
+  bằng `ss -tlnp` → đọc `/proc/PID/cmdline` → `kill -9` đích danh; xác minh
+  `ss -tln` sạch RỒI MỚI phóng cái mới (ZMQ bind fail là chết câm).
+- **2 tiến trình chia CUDA-IPC phải CÙNG torch**: tiến trình phụ (lmcache
+  server...) phải khởi động SAU khi env vLLM đã setup (source /tmp/vllm_env.sh)
+  — lệch bản torch = "sharable handle from a future version of torch".
+- Cổng 8080 bị dịch vụ Colab chiếm — service phụ dời 8081+.
+- Python con của chuỗi cũ sống sót kill cha vẫn giữ fd log → chuỗi mới cùng
+  file log = null bytes; mỗi lần relaunch dùng TÊN LOG MỚI + pkill cả tên script.
 
 ## Bố cục notebook: ĐÚNG 1 CELL DUY NHẤT
 

@@ -1249,6 +1249,53 @@ val × 4 điều kiện, mapper v34 best, HF v35/e6v35_decode.json):
   tử tế cần suite mới: gold THẬT (không pseudo), GEN_LEN đủ dài, chấm
   khớp nội dung — để ngỏ, không chặn Phase C.
 
+## PHASE C (2026-08-25→26): cross-model KV vào vLLM serving — C2a→C2b-7, verdict interim
+
+Thiết kế `docs/phase-c-design.md`: 2 vLLM + LMCache MP, vá key-namespace
+(`model_name="qwen35-shared"` trong lmcache_mp_connector), 1-GPU tuần tự
+qua kho lmcache sống xuyên restart. Kết quả HF `c2b/`..`c2b7/`.
+
+**C2a (3/3 PASS)**: block size 4B = 9B = 1056; boot sạch; lmcache external
+0.5.4 import OK.
+
+**Chuỗi phân xử C2b (7 lượt, mỗi lượt một biến)**:
+
+    Lượt | Biến               | Hit?      | Cross needle | Chữ ký
+    1    | fp8 KV             | chỉ 30K   | 0/2 miền hit | RÁC thuần
+    2    | bf16, L1 8GB       | KHÔNG     | (giả sạch)   | kho tràn evict
+    3    | bf16, L1 20GB      | toàn tuyến| 0/6→ttft×16  | gần đúng rồi đứt
+    4    | + align rem 3-5    | toàn tuyến| 1/4          | ca sạch ĐẦU TIÊN
+    5    | + pad sạch, rem=2  | toàn tuyến| 1/4          | 4-6 số đầu ĐÚNG cả 4 ca
+    6    | consumer 9B GỐC    | toàn tuyến| 1/4          | GIỐNG HỆT từng ký tự
+    7    | producer 4B bf16   | toàn tuyến| 1/4          | GIỐNG HỆT
+
+**Đã chốt bằng đo**: (a) cơ chế vận chuyển HOÀN CHỈNH — hit mọi độ dài,
+TTFT 30K 11-24s → ~1s (×12-16); (b) fp8-scale là tầng lỗi thật (rác vs
+gần-đúng) — bf16 KV là điều kiện; (c) block-align cần để hit; (d) LOẠI:
+suffix-re-prefill (rem=2), champion-graft (stock giống hệt), producer
+W4A16 (bf16 giống hệt). **Bất biến còn lại**: mọi biến thể đều lấy đúng
+4-6 chữ số đầu rồi degenerate lặp.
+
+**Giả thuyết tầng lỗi thật (khớp mọi bằng chứng, CHƯA kiểm)**: trang
+GDN-state KHÔNG được truyền/áp — chỉ attention KV sang được. Khớp E0
+(context sống ở CẢ GDN lẫn KV — thiếu một là chết) + E7 (attention thẳng
+hàng toàn họ → retrieval tức thời 1-2 token đầu vẫn chạy bằng attention)
++ bất biến qua mọi dtype/checkpoint. Chẩn đoán kế (chưa chạy): instrument
+key/nhóm object GDN trong lmcache store — xem nhóm `--separate-object-
+groups` có ghi/đọc trang mamba dưới key nào, consumer có lookup trúng.
+
+**Giá trị đã giao được của Phase C interim**: đường ống sản phẩm đầu
+tiên chạy trọn (patch 1 dòng lmcache + EXTRA_FLAGS/KV_DTYPE trong run.sh
++ c2b_gates.py làm harness 3 cổng tái dùng); con số TTFT ×12-16 là trần
+tốc độ thật khi chất lượng được giải.
+
+**Bài học hạ tầng mới (đã trả giá)**: 2 tiến trình chia CUDA-IPC phải
+CÙNG torch (lmcache chạy SAU run.sh setup); cổng 8080 Colab chiếm
+(--http-port 8081); pkill cha không giết con giữ cổng → kill theo chủ
+cổng (ss -tlnp + /proc/PID/cmdline); pkill -f 'vllm serve' TỰ KHỚP bash
+chứa pattern → dùng '[e]'; 2-writer-1-log = null bytes (python con sống
+sót kill cha vẫn giữ fd); L1 lmcache = pinned RAM cấp háo hức lúc boot.
+
 ## SPEC DECODING NGRAM (2026-08-14): OFF MẶC ĐỊNH TRÊN L4 — đo 2 model × 2 mức tải
 
 Profile `-spec` (ngram k=4, prompt-lookup 2-4) thêm vào run.sh; cùng runtime,

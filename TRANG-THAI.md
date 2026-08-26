@@ -171,63 +171,20 @@ Cập nhật: 2026-08-24.
   vào fallback builtin (vốn crash trên model lai). Kiến trúc 1-GPU cho
   C2b: TUẦN TỰ qua L2 POSIX (4B producer ghi đĩa → stop → 9B consumer
   đọc) — né hẳn bài đồng trú E3B.
-- **C2b LƯỢT 1 XONG (2026-08-25, kết quả HF c2b/)**: pipeline cross-model
-  qua LMCache CHẠY TRỌN (vá key `qwen35-shared` + http-port 8081 né 8080
-  Colab + gpuwait giữa stage). Số: ctx 1500/8000 cross = self **giống
-  hệt từng ký tự**, needle 4/4 — nhưng latency không đổi → các prompt
-  ngắn KHÔNG hit trang 4B (tự prefill). **ctx 30K: trang 4B THẬT SỰ
-  được nạp — TTFT 24s → 10,5s và 1,15s (tiềm năng ×20) NHƯNG output RÁC
-  (hit 0/2, token-match 0/48)** → gate đúng đắn FAIL đúng ở miền hit.
-  Nghi phạm số 1: **fp8_e4m3 KV có scale RIÊNG từng model** — trang 4B
-  giải mã bằng scale 9B = rác (E1-E3 chứng minh copy đúng ở bf16
-  transformers, fp8-vLLM là biến chưa từng kiểm).
-- **C2b-2/3 XONG (2026-08-26, HF c2b2/ c2b3/)**: chuỗi bf16 KV. Lượt 2:
-  L1 8GB TRÀN (watermark 0.8 evict trang 30K trước khi 9B đọc → miss
-  toàn tuyến, "sạch" chỉ vì 9B tự prefill). Lượt 3 (L1 20GB): **HIT
-  TOÀN TUYẾN — TTFT 30K 23,7s → 1,45s (×16), 8K 5,9→1,1s** NHƯNG
-  needle cross 0/6, token-match 17/144. Chữ ký quyết định: bf16 ra
-  **"gần đúng rồi đứt"** (307643→"3076.", 517912→"5179.", 864267→
-  "8642." — 4 chữ số đầu ĐÚNG) so với fp8 ra rác thuần → fp8-scale LÀ
-  một tầng lỗi thật (đã loại bằng bf16); tầng còn lại KHÔNG phải nội
-  dung trang (transformers E1-E3 copy sạch 12/12) mà là **GIAO THỨC
-  RESUME vLLM**: phần dư T mod 1056 bị 9B re-prefill trên nền cache
-  ngoại — đúng luật nhất quán nội tại E6b (suffix re-prefill phản tác
-  dụng, đo ≥4 lần ở transformers). Bài học hạ tầng: 2 tiến trình chia
-  CUDA-IPC phải CÙNG torch (lmcache phải chạy sau run.sh setup); port
-  8080 Colab chiếm; lmcache con sống sót pkill cha (fuser -k theo cổng).
-  **C2b-4 XONG (2026-08-26, HF c2b4/)**: align chuẩn (rem 3-5 token đo
-  bằng tokenizer thật). Kết quả 1/4: **ca ctx8K-j0 (rem=3) là needle
-  cross ĐÚNG + MẠCH LẠC ĐẦU TIÊN trong vLLM** ('094384' chuẩn, tiếp nối
-  sạch) — bằng chứng đường copy 4B→9B qua serving CÓ THỂ đúng trọn.
-  3/4 còn lại vẫn chết kiểu lặp. NHƯNG thí nghiệm dính 2 nhiễu tự gây:
-  (a) filler pad 'x0 x1..x96' LẶP CHU KỲ ngay trước câu hỏi — tự nó dụ
-  degeneration; (b) đếm token lệch thang: bộ "8K/30K" thật ra 15,8K/59K
-  token (sát mml) — chưa có self-baseline trên đúng bộ này nên chưa
-  tách được lỗi cross khỏi lỗi đề.
-- **C2b-5 XONG (2026-08-26, HF c2b5/; 3 lượt vá hạ tầng: null-bytes
-  2-writer-1-log, lmcache giữ cổng sống dai → kill theo chủ cổng
-  ss+/proc, binary-search token thay số học pad)**: bộ đề chuẩn rem=2
-  cả 4 ca, hit toàn tuyến (TTFT 30K 11,3s→0,94s ×12). SELF 4/4. CROSS
-  1/4 — chữ ký quyết định: **CẢ 4 ca lấy ĐÚNG 4-6 chữ số đầu**
-  (439814→'4398', 025150→TRỌN, 071412→'0714', 934699→'9346') rồi
-  degenerate lặp → suffix-re-prefill ĐÃ LOẠI (rem=2 = liều WARM_P);
-  thông tin TRUYỀN ĐƯỢC; lỗi ở DECODE trên cache ngoại. Nghi phạm xếp
-  hạng: (1) W4A16 hai đầu (E6c: lượng tử hóa gánh nửa vết nứt — E1-E3
-  sạch là bf16↔bf16); (2) champion 9B là hàng GHÉP (GDN graft từ GGUF
-  — luật CCA-GDN đo trên model gốc); (3) độ chính xác trang GDN.
-- **C2b-6 XONG (2026-08-26, HF c2b6/)**: consumer đổi sang RedHatAI 9B
-  w4a16 GỐC — kết quả **GIỐNG HỆT từng ký tự** ('4398.', 025150 trọn,
-  '0714' lặp, '9346666...'), self 4/4, cross 1/4. **Champion-graft
-  MINH OAN**; lỗi tái lập xác định trên 2 checkpoint 9B khác nhau →
-  thuộc tính của đường truyền, nghi phạm cuối: **W4A16 (cả producer
-  4B lẫn consumer 9B)** — khớp E6c (lượng tử hóa gánh nửa vết nứt;
-  E1-E3 sạch là bf16↔bf16). CHỜ DUYỆT C2b-7 (~35p, lượt phân xử CUỐI):
-  producer = Qwen/Qwen3.5-4B bf16 GỐC (re-produce trang bf16) +
-  consumer champion — nếu cross bật lên → chốt "cross-serving cần
-  producer bf16" (2-GPU thành kịch bản chính); vẫn 1/4 → viết verdict
-  Phase C interim: copy-path serving đúng-một-phần (hit + tốc độ ×12 +
-  retrieval token đầu), exact-retrieval cần bf16 hai đầu = ngoài L4
-  1-GPU.
+- **C2b VERDICT INTERIM (2026-08-26, 7 lượt phân xử C2b→C2b-7, chi tiết
+  bảng trong STATUS mục PHASE C; kết quả HF c2b/..c2b7/)**:
+  (1) **Cơ chế vận chuyển HOÀN CHỈNH** — vá 1 dòng key lmcache
+  (`qwen35-shared`), hit mọi độ dài, **TTFT 30K 11-24s → ~1s (×12-16)**;
+  (2) đã chốt bằng đo: fp8-scale là tầng lỗi thật (bf16 KV bắt buộc),
+  block-align cần để hit; ĐÃ LOẠI: suffix-re-prefill (rem=2),
+  champion-graft (stock giống hệt), producer-W4A16 (bf16 giống hệt);
+  (3) **bất biến qua MỌI biến thể: cross lấy đúng 4-6 chữ số đầu rồi
+  degenerate** → giả thuyết tầng lỗi thật (chưa kiểm): **trang GDN-state
+  KHÔNG được truyền/áp — chỉ attention KV sang** (khớp E0: thiếu 1 trong
+  2 là chết; E7: attention thẳng hàng → token đầu vẫn chạy). Chẩn đoán
+  kế: instrument key nhóm object GDN trong lmcache. 6 bài học hạ tầng
+  ghi STATUS (cùng-torch CUDA-IPC, port 8080, kill theo chủ cổng, pkill
+  tự khớp → '[e]', 2-writer null-bytes, L1 pinned háo hức).
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
