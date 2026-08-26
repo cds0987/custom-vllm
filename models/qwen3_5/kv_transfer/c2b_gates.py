@@ -60,6 +60,45 @@ def build_prompts():
     print(f"gen: {len(prompts)} prompts -> {PROMPTS_F}")
 
 
+def build_prompts_aligned():
+    """C2b-4: prompt co T ≡ ~5 (mod 1056) — phan du re-prefill cua 9B chi
+    con vai token (dung lieu WARM_P transformers da chung minh vo hai).
+    Phan xu gia thuyet suffix-re-prefill."""
+    import random
+    from transformers import AutoTokenizer
+    tok = AutoTokenizer.from_pretrained("/content/models/frame4b")
+    prompts = []
+    for ctx, nw, n in [(8000, 3200, 2), (30000, 12000, 2)]:
+        for j in range(n):
+            rng = random.Random(2000 * ctx + j)
+            code = "".join(rng.choice("0123456789") for _ in range(6))
+            name = f"PRJ{rng.randint(100, 999)}"
+            words = [f"w{rng.randint(0, 9999)}" for _ in range(nw)]
+            half = nw // 2
+
+            def mk(extra):
+                pad = " ".join(f"x{k % 97}" for k in range(extra))
+                return (" ".join(words[:half])
+                        + f"\nIMPORTANT: The secret code for project {name} is {code}.\n"
+                        + " ".join(words[half:]) + " " + pad
+                        + f"\nQuestion: What is the secret code for project {name}?"
+                        + "\nAnswer: The secret code is ")
+            extra, T = 0, 0
+            for _ in range(40):
+                txt = mk(extra)
+                T = len(tok(txt)["input_ids"])
+                need = (5 - T) % 1056
+                if need <= 3 or need >= 1053:
+                    break
+                extra += max(1, need // 3)
+            prompts.append({"ctx": ctx, "code": code, "prompt": txt,
+                            "T": T, "rem": T % 1056})
+            print(f"aligned ctx{ctx} j{j}: T={T} rem={T % 1056}")
+    with open(PROMPTS_F, "w") as fh:
+        json.dump(prompts, fh)
+    print(f"gen-aligned: {len(prompts)} prompts -> {PROMPTS_F}")
+
+
 def ttft_stream(mid, prompt):
     """Do TTFT bang stream SSE — timestamp chunk token dau tien."""
     body = json.dumps({"model": mid, "prompt": prompt, "max_tokens": 8,
@@ -149,11 +188,13 @@ def compare():
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["gen", "produce", "baseline", "cross",
-                                     "compare"])
+    ap.add_argument("mode", choices=["gen", "gen-aligned", "produce",
+                                     "baseline", "cross", "compare"])
     args = ap.parse_args()
     if args.mode == "gen":
         build_prompts()
+    elif args.mode == "gen-aligned":
+        build_prompts_aligned()
     elif args.mode == "produce":
         produce()
     elif args.mode == "compare":
