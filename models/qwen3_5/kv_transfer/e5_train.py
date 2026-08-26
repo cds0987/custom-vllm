@@ -60,6 +60,62 @@ def load_4bit(name):
     return tok, model
 
 
+def _mod_to_cpu_with_hooks(mod):
+    """Chuyen mot module single-tensor-io (Embedding/Linear) xuong CPU +
+    hook chuyen tensor qua lai — phan con lai cua model (tren GPU) khong
+    can sua gi. Xem load_4bit_cpu_offload_io."""
+    import torch
+    mod.to("cpu")
+
+    def _pre(m, inp):
+        return tuple(x.to("cpu") if torch.is_tensor(x) else x for x in inp)
+
+    def _post(m, inp, out):
+        return out.to("cuda") if torch.is_tensor(out) else out
+
+    mod.register_forward_pre_hook(_pre)
+    mod.register_forward_hook(_post)
+    return mod
+
+
+def load_4bit_cpu_offload_io(name):
+    """(user 2026-08-27, "dau tu ky thuat vao duong CPU-offload thu
+    cong") — sau khi probe_27b_context_levers.py bat loi "meta tensor"
+    khi dua device_map dict + llm_int8_enable_fp32_cpu_offload cho
+    accelerate: nguyen nhan la accelerate dispatch hook doi moi forward
+    di dung luong dang ky cua no, con mapper lai tu sua tensor trong
+    past_key_values NGOAI luong do -> pha hop dong lazy-load.
+
+    Duong nay TRANH accelerate dispatch hoan toan: nap BINH THUONG tren
+    GPU (device_map="cuda" don gian, giong het load_4bit — khong co
+    device_map dict, khong co accelerate hook nao ca), roi TU TAY
+    chuyen 2 module KHONG bi luong tu hoa (embed_tokens, lm_head — thu
+    pham chinh cua ~18GB static, da do trong STATUS.md muc MAPPER
+    4B->27B) xuong CPU bang .to('cpu') + hook forward_pre/forward
+    thuong (khong phai co che dispatch cua accelerate) de chuyen tensor
+    qua lai — phan con lai cua model khong doi.
+
+    Canh bao CHUA DO: matmul lm_head tren CPU voi vocab lon co the CHAM
+    (probe cu qua duong accelerate: 1 lan goi @T=8192 mat >870s TRUOC
+    KHI that bai vi ly do khac — chua co so do thoi gian THAT cua duong
+    nay). BAT BUOC do latency 1 lan goi truoc khi dua vao vong train
+    (hang nghin buoc) — neu moi buoc mat hang chuc giay thi khong dung
+    duoc cho train du bo nho co du."""
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+    tok = AutoTokenizer.from_pretrained(name)
+    model = AutoModelForCausalLM.from_pretrained(
+        name, device_map="cuda",
+        quantization_config=BitsAndBytesConfig(
+            load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16))
+    model.eval()
+    for p in model.parameters():
+        p.requires_grad_(False)
+    _mod_to_cpu_with_hooks(model.model.embed_tokens)
+    _mod_to_cpu_with_hooks(model.lm_head)
+    return tok, model
+
+
 def rope_cs(T, dim, theta, device):
     import torch
     inv = 1.0 / (theta ** (torch.arange(0, dim, 2, device=device).float() / dim))
