@@ -3,24 +3,47 @@
     "huggingface": {
       "type": "http",
       "url": "https://huggingface.co/mcp",
-      "headers": { "Authorization": "Bearer ${HF_TOKEN}" }
+      "headers": {
+        "Authorization": "Bearer ${HF_TOKEN}"
+      }
     },
     "colab-mcp": {
       "command": "C:\\Users\\TOMAP\\AppData\\Local\\Programs\\Python\\Python313\\Scripts\\uvx.exe",
-      "args": ["--from", "D:\\Training\\AI_Module\\colab-mcp", "colab-mcp"],
-      "env": { "COLAB_MCP_NOTEBOOK": "/drive/134iXTgK_uXdwx4-yZerjkfhyZJTW4dgs" },
+      "args": [
+        "--from",
+        "D:\\Training\\AI_Module\\colab-mcp",
+        "colab-mcp"
+      ],
+      "env": {
+        "COLAB_MCP_NOTEBOOK": "/drive/134iXTgK_uXdwx4-yZerjkfhyZJTW4dgs",
+        "FASTMCP_CHECK_FOR_UPDATES": "off"
+      },
       "timeout": 1800000
     },
     "colab-mcp-2": {
       "command": "C:\\Users\\TOMAP\\AppData\\Local\\Programs\\Python\\Python313\\Scripts\\uvx.exe",
-      "args": ["--from", "D:\\Training\\AI_Module\\colab-mcp", "colab-mcp"],
-      "env": { "COLAB_MCP_NOTEBOOK": "/drive/1qzdKjAo44KB_Q-nrPurGbo-IOY8ZsqpW" },
+      "args": [
+        "--from",
+        "D:\\Training\\AI_Module\\colab-mcp",
+        "colab-mcp"
+      ],
+      "env": {
+        "COLAB_MCP_NOTEBOOK": "/drive/1qzdKjAo44KB_Q-nrPurGbo-IOY8ZsqpW",
+        "FASTMCP_CHECK_FOR_UPDATES": "off"
+      },
       "timeout": 1800000
     },
     "colab-mcp-3": {
       "command": "C:\\Users\\TOMAP\\AppData\\Local\\Programs\\Python\\Python313\\Scripts\\uvx.exe",
-      "args": ["--from", "D:\\Training\\AI_Module\\colab-mcp", "colab-mcp"],
-      "env": { "COLAB_MCP_NOTEBOOK": "/drive/1dhgbZejNZ9_t0ddBIzcGVlvMjFYV6HGV" },
+      "args": [
+        "--from",
+        "D:\\Training\\AI_Module\\colab-mcp",
+        "colab-mcp"
+      ],
+      "env": {
+        "COLAB_MCP_NOTEBOOK": "/drive/1dhgbZejNZ9_t0ddBIzcGVlvMjFYV6HGV",
+        "FASTMCP_CHECK_FOR_UPDATES": "off"
+      },
       "timeout": 1800000
     }
   }

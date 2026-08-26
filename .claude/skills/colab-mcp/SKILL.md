@@ -94,3 +94,15 @@ liệt kê: setup / serve 9b|27b|4b / status / logs / bench <tên> / eval / regi
 - Kernel GDN nhanh cho transformers (train/nghiên cứu): `pip install
   flash-linear-attention` + `pip install causal-conv1d --no-build-isolation`
   (build isolation không thấy torch là lý do fail chuẩn).
+
+## Server MCP không lên sau reload (học phí 2026-08-26)
+
+Triệu chứng: tool `mcp__colab-mcp__*` không xuất hiện; log
+`%TEMP%\colab-mcp-logs-*\colab-mcp.*.log` cho thấy sau "Starting WebSocket
+server" kẹt ~10s ở `GET https://pypi.org/pypi/fastmcp/json` (fastmcp
+update-check), rồi "Starting worker" → NGAY "server closing" (client đã hết
+kiên nhẫn, đóng stdin). Lúc reload 3 server + uvx cùng gọi pypi → nghẽn.
+Fix: `.mcp.json` đặt `FASTMCP_CHECK_FOR_UPDATES=off` cho cả 3 server (đã
+làm). Chẩn đoán nhanh: `ls -t %TEMP% | grep colab-mcp-logs` → cat log mới
+nhất; đo tay: pipe JSON `initialize` vào `uvx --from D:\...\colab-mcp
+colab-mcp` — bình thường trả lời sau ~3s.
