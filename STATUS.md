@@ -1329,6 +1329,28 @@ là trần thật, kho vận hành chuẩn — mọi thứ sẵn sàng cho ngày
 gia cố; (4) 4B→27B batch (transformers, mapper v3.4) KHÔNG bị ảnh
 hưởng — vẫn là đường sản phẩm sạch nhất hiện tại.
 
+## C2b-N (2026-08-26, user: "3/4 quá ít samples, thử 2-300") — N=240 @8K
+
+Hạ tầng: gen-n 240 prompt aligned (rem 2-4), self-baseline 1 lượt +
+10 wave × 24 (4B bf16 kv_producer ghi kho → xả → 9B champion kv_consumer
+đọc; kho L1 20GB chỉ chứa ~30 vở 8K nên phải wave). Kết quả HF c2bN/.
+
+    Self (champion tự đọc):  240/240 = 100,0%   p50 4,33s
+    Cross (vở 4B qua kho):   137/240 = 57,1%    p50 1,58s (×2,7 @8K)
+    95% CI cross: ~[51%, 63%]
+
+- Tỷ lệ THẬT của cross-serving exact-retrieval @8K là **~57%** — các mẫu
+  nhỏ trước đó (1/4=25%, lab 3/4=75%) đều là nhiễu quanh dải này.
+  KHÔNG phải vách đá về 0, cũng không gần-hoàn-hảo: đúng hình dạng của
+  hiện tượng BIÊN MỎNG xác suất — mỗi ca có biên riêng, ~57% ca sống
+  qua nhiễu kernel/roundtrip, phần còn lại rơi.
+- Kèm tốc độ ×2,7 ở 8K (×12-16 ở 30K đã đo): bức tranh kinh tế rõ —
+  polisher cần kéo 57% → ~95%+ để bán exact-retrieval; hoặc bán ngay
+  cho workload chấp nhận fallback (miss thì tự prefill lại — hybrid
+  "thử cross trước, fail thì cold" vẫn lời lớn về TTFT trung bình).
+- kv_role kv_producer/kv_consumer chạy sạch (lần đầu dùng, 10 wave 0 lỗi
+  role); toàn chuỗi 2h tự động không ngã.
+
 ## SPEC DECODING NGRAM (2026-08-14): OFF MẶC ĐỊNH TRÊN L4 — đo 2 model × 2 mức tải
 
 Profile `-spec` (ngram k=4, prompt-lookup 2-4) thêm vào run.sh; cùng runtime,

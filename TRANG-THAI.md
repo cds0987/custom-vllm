@@ -216,7 +216,14 @@ Cập nhật: 2026-08-24.
   serving cần POLISHER gia cố biên (công nghệ mapper sẵn có); scope ngữ
   nghĩa chat/QA/RAG (E2-E3) chưa đo trên serving = bài đo kế; 4B→27B
   batch không ảnh hưởng. Chi tiết STATUS mục PHASE C VERDICT CUỐI.
-  GPU trống, không job nền — chờ user định hướng.
+- **C2b-N XONG (2026-08-26, user đòi N lớn; HF c2bN/)**: 240 prompt @8K,
+  10 wave tự động 2h không ngã → **self 240/240 = 100% | cross 137/240
+  = 57,1% (CI ~51-63%) | tốc độ ×2,7 @8K**. Tỷ lệ thật của biên-mỏng:
+  không phải vách đá, không phải gần-hoàn-hảo — ~57% ca sống qua nhiễu.
+  Kinh tế: hybrid "thử cross, miss thì cold-prefill" đã lời TTFT ngay;
+  polisher cần kéo 57→95%+ cho exact-retrieval thuần. GPU trống, không
+  job nền — chờ user định hướng (polisher / hybrid-fallback / cascade
+  4→27 batch / kernel-diff bước 1).
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
