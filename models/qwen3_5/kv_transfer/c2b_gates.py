@@ -68,32 +68,44 @@ def build_prompts_aligned():
     from transformers import AutoTokenizer
     tok = AutoTokenizer.from_pretrained("/content/models/frame4b")
     prompts = []
-    for ctx, nw, n in [(8000, 3200, 2), (30000, 12000, 2)]:
+    for ctx_t, n in [(8000, 2), (30000, 2)]:
         for j in range(n):
-            rng = random.Random(2000 * ctx + j)
+            rng = random.Random(3000 * ctx_t + j)
             code = "".join(rng.choice("0123456789") for _ in range(6))
             name = f"PRJ{rng.randint(100, 999)}"
-            words = [f"w{rng.randint(0, 9999)}" for _ in range(nw)]
-            half = nw // 2
 
-            def mk(extra):
-                pad = " ".join(f"x{k % 97}" for k in range(extra))
-                return (" ".join(words[:half])
+            def mk(ws, pad):
+                half = len(ws) // 2
+                return (" ".join(ws[:half])
                         + f"\nIMPORTANT: The secret code for project {name} is {code}.\n"
-                        + " ".join(words[half:]) + " " + pad
+                        + " ".join(ws[half:])
+                        + (" " + " ".join(pad) if pad else "")
                         + f"\nQuestion: What is the secret code for project {name}?"
                         + "\nAnswer: The secret code is ")
-            extra, T = 0, 0
+
+            def nt(txt):
+                return len(tok(txt)["input_ids"])
+            # C2b-5: target TOKEN that (calib 2 vong) + pad NGAU NHIEN
+            # khong lap (nhieu C2b-4: pad chu ky x0..x96 tu du degeneration)
+            nw = ctx_t // 3
+            words = [f"w{rng.randint(0, 9999)}" for _ in range(nw)]
+            for _ in range(3):
+                T = nt(mk(words, []))
+                if abs(T - ctx_t) < ctx_t * 0.04:
+                    break
+                nw = max(20, int(nw * ctx_t / T))
+                words = [f"w{rng.randint(0, 9999)}" for _ in range(nw)]
+            pad = []
             for _ in range(40):
-                txt = mk(extra)
-                T = len(tok(txt)["input_ids"])
+                txt = mk(words, pad)
+                T = nt(txt)
                 need = (5 - T) % 1056
                 if need <= 3 or need >= 1053:
                     break
-                extra += max(1, need // 3)
-            prompts.append({"ctx": ctx, "code": code, "prompt": txt,
+                pad += [f"z{rng.randint(0, 9999)}" for _ in range(max(1, need // 3))]
+            prompts.append({"ctx": ctx_t, "code": code, "prompt": txt,
                             "T": T, "rem": T % 1056})
-            print(f"aligned ctx{ctx} j{j}: T={T} rem={T % 1056}")
+            print(f"aligned ctx{ctx_t} j{j}: T={T} rem={T % 1056}")
     with open(PROMPTS_F, "w") as fh:
         json.dump(prompts, fh)
     print(f"gen-aligned: {len(prompts)} prompts -> {PROMPTS_F}")
