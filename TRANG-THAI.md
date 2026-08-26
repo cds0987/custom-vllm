@@ -180,10 +180,25 @@ Cập nhật: 2026-08-24.
   (hit 0/2, token-match 0/48)** → gate đúng đắn FAIL đúng ở miền hit.
   Nghi phạm số 1: **fp8_e4m3 KV có scale RIÊNG từng model** — trang 4B
   giải mã bằng scale 9B = rác (E1-E3 chứng minh copy đúng ở bf16
-  transformers, fp8-vLLM là biến chưa từng kiểm). CHỜ DUYỆT C2b-2
-  (~40p): chạy lại cả chuỗi với --kv-cache-dtype auto (bf16) hai server
-  — nếu 30K sạch thì chốt thủ phạm fp8-scale và bf16 là điều kiện
-  serving của cross-model copy.
+  transformers, fp8-vLLM là biến chưa từng kiểm).
+- **C2b-2/3 XONG (2026-08-26, HF c2b2/ c2b3/)**: chuỗi bf16 KV. Lượt 2:
+  L1 8GB TRÀN (watermark 0.8 evict trang 30K trước khi 9B đọc → miss
+  toàn tuyến, "sạch" chỉ vì 9B tự prefill). Lượt 3 (L1 20GB): **HIT
+  TOÀN TUYẾN — TTFT 30K 23,7s → 1,45s (×16), 8K 5,9→1,1s** NHƯNG
+  needle cross 0/6, token-match 17/144. Chữ ký quyết định: bf16 ra
+  **"gần đúng rồi đứt"** (307643→"3076.", 517912→"5179.", 864267→
+  "8642." — 4 chữ số đầu ĐÚNG) so với fp8 ra rác thuần → fp8-scale LÀ
+  một tầng lỗi thật (đã loại bằng bf16); tầng còn lại KHÔNG phải nội
+  dung trang (transformers E1-E3 copy sạch 12/12) mà là **GIAO THỨC
+  RESUME vLLM**: phần dư T mod 1056 bị 9B re-prefill trên nền cache
+  ngoại — đúng luật nhất quán nội tại E6b (suffix re-prefill phản tác
+  dụng, đo ≥4 lần ở transformers). Bài học hạ tầng: 2 tiến trình chia
+  CUDA-IPC phải CÙNG torch (lmcache phải chạy sau run.sh setup); port
+  8080 Colab chiếm; lmcache con sống sót pkill cha (fuser -k theo cổng).
+  CHỜ DUYỆT C2b-4 (~25p): thí nghiệm phân xử giao thức — prompt có
+  T ≡ ~5 (mod 1056) để phần dư re-prefill chỉ vài token (đúng liều
+  WARM_P transformers đã chứng minh) → needle sống = chốt thủ phạm
+  suffix, giải pháp sản phẩm là block-align điểm ghi phía producer.
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
