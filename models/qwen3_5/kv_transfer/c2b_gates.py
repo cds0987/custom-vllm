@@ -85,24 +85,29 @@ def build_prompts_aligned():
 
             def nt(txt):
                 return len(tok(txt)["input_ids"])
-            # C2b-5: target TOKEN that (calib 2 vong) + pad NGAU NHIEN
-            # khong lap (nhieu C2b-4: pad chu ky x0..x96 tu du degeneration)
-            nw = ctx_t // 3
-            words = [f"w{rng.randint(0, 9999)}" for _ in range(nw)]
-            for _ in range(3):
-                T = nt(mk(words, []))
-                if abs(T - ctx_t) < ctx_t * 0.04:
-                    break
-                nw = max(20, int(nw * ctx_t / T))
-                words = [f"w{rng.randint(0, 9999)}" for _ in range(nw)]
+            # C2b-5 v2: BINARY SEARCH so tu theo tokenizer that (don dieu)
+            # — vong pad so hoc cu overshoot roi quan vong mod 1056 (T no
+            # len 49K/71K, rem ket 410). Tstar = m*1056 + 5 gan ctx_t.
+            m = max(1, round((ctx_t - 5) / 1056))
+            tstar = m * 1056 + 5
+            bank = [f"w{rng.randint(0, 9999)}" for _ in range(ctx_t)]
+            lo, hi = 0, len(bank)
+            while lo < hi:
+                mid = (lo + hi) // 2
+                if nt(mk(bank[:mid], [])) < tstar:
+                    lo = mid + 1
+                else:
+                    hi = mid
+            k = max(2, lo - 1)
             pad = []
-            for _ in range(40):
-                txt = mk(words, pad)
-                T = nt(txt)
-                need = (5 - T) % 1056
-                if need <= 3 or need >= 1053:
+            txt = mk(bank[:k], pad)
+            T = nt(txt)
+            for _ in range(12):   # tinh chinh tung token don " a"
+                if T >= tstar - 3:
                     break
-                pad += [f"z{rng.randint(0, 9999)}" for _ in range(max(1, need // 3))]
+                pad.append("a")
+                txt = mk(bank[:k], pad)
+                T = nt(txt)
             prompts.append({"ctx": ctx_t, "code": code, "prompt": txt,
                             "T": T, "rem": T % 1056})
             print(f"aligned ctx{ctx_t} j{j}: T={T} rem={T % 1056}")
