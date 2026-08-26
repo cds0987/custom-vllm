@@ -185,6 +185,17 @@ Cập nhật: 2026-08-24.
   kế: instrument key nhóm object GDN trong lmcache. 6 bài học hạ tầng
   ghi STATUS (cùng-torch CUDA-IPC, port 8080, kill theo chủ cổng, pkill
   tự khớp → '[e]', 2-writer null-bytes, L1 pinned háo hức).
+- **LAB-CHECK (2026-08-26, user chỉ đạo "kiểm ngoài vLLM trước"; HF
+  c2b_lab/)**: 4B→9B copy-NGUYÊN transformers bf16, protocol E1, trên
+  ĐÚNG 4 prompt aligned đang fail ở vLLM → **self 4/4 | copy 3/4 mã
+  TRỌN VẸN** (439814✓ 025150✓ 071412✓; ca 30K-2 ra '9346666' — đúng
+  chữ ký degeneration). Hai tầng sự thật: (1) **vLLM làm MẤT THÊM
+  thật** — lab 3/4 mã trọn vs vLLM 1/4 chỉ 4 số đầu, CÙNG đề → nghi
+  án trang GDN rơi trong kho ĐỨNG VỮNG, giờ có mốc đối chứng định
+  lượng; (2) biên phương pháp MỎNG hơn E1 trên đề filler tổng hợp 30K
+  (E1 12/12 là FineWeb thật; continuation sau mã cũng lú nhẹ) — fail
+  vLLM một phần là khuếch đại biên mỏng sẵn. Bước kế đề xuất: khám kho
+  GDN lmcache (log store/retrieve theo nhóm object).
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
