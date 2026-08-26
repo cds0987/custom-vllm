@@ -125,7 +125,7 @@ def build_prompts_sem(n, ctx_t):
     if not os.path.isdir(tok_src):
         tok_src = "Qwen/Qwen3.5-4B"
     tok = AutoTokenizer.from_pretrained(tok_src)
-    ds = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
+    ds = load_dataset("Salesforce/wikitext", "wikitext-2-raw-v1", split="train")
     corpus = " ".join(t.strip() for t in ds["text"] if t.strip()).split()
     subs = ["Doctor Vance", "Professor Ito", "Captain Reyes", "Curator Lam",
             "Engineer Bok", "Archivist Pena", "Colonel Draye", "Sister Maud"]
