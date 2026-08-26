@@ -194,8 +194,20 @@ Cập nhật: 2026-08-24.
   án trang GDN rơi trong kho ĐỨNG VỮNG, giờ có mốc đối chứng định
   lượng; (2) biên phương pháp MỎNG hơn E1 trên đề filler tổng hợp 30K
   (E1 12/12 là FineWeb thật; continuation sau mã cũng lú nhẹ) — fail
-  vLLM một phần là khuếch đại biên mỏng sẵn. Bước kế đề xuất: khám kho
-  GDN lmcache (log store/retrieve theo nhóm object).
+  vLLM một phần là khuếch đại biên mỏng sẵn.
+- **KHÁM KHO GDN (2026-08-26, đầu dò OBJGRP-PROBE tiêm vào
+  _run_object_group_transfer_plan)**: **GIẢ THUYẾT TRANG-GDN-RƠI BỊ
+  BÁC** — plan chạy ĐỐI XỨNG cho cả 2 nhóm object (group 0 attention +
+  group 1 mamba/GDN: 76/76 lần, cặp đôi từng timestamp, cả store lẫn
+  retrieve; 4 lần RETRIEVE = đủ 4 prompt). Kho giao đủ hai nửa vở —
+  đo-hơn-suy-luận thêm một lần (kết quả âm quý). Nghi phạm còn lại
+  DUY NHẤT sau khi đối chiếu lab-check: **trọng số consumer W4A16**
+  — lab 3/4 dùng 9B bf16-weights; mọi lượt vLLM đều consumer W4A16
+  (champion lẫn stock); E6c từng đo: student lượng tử hóa mất nửa biên.
+  CHỜ DUYỆT C2b-8 (~30p, phân xử cuối thật): vLLM consumer = Qwen 9B
+  bf16-weights (mml hạ 30720 cho vừa L4) — cross bật lên ~3/4 = khớp
+  lab, chốt toàn cảnh: transport ĐÚNG, điều kiện chất lượng là
+  consumer bf16 (GPU lớn hơn) hoặc gia cố biên cho consumer nén.
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
