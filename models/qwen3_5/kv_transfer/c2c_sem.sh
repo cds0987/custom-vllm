@@ -74,7 +74,9 @@ python - <<'EOF'
 import glob
 import os
 from huggingface_hub import HfApi
-a = HfApi()
+# 401 hoc phi 2026-08-26: HfApi() KHONG tu doc env HF_TOKEN trong ban
+# huggingface_hub tren runtime nay -> phai truyen token= tuong minh.
+a = HfApi(token=os.environ["HF_TOKEN"])
 files = (glob.glob('/content/logs/c2b_sembase*.json')
          + glob.glob('/content/logs/c2b_semcross*.json')
          + ['/content/c2b_prompts.json'])

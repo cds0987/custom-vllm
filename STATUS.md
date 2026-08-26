@@ -1351,6 +1351,38 @@ Hạ tầng: gen-n 240 prompt aligned (rem 2-4), self-baseline 1 lượt +
 - kv_role kv_producer/kv_consumer chạy sạch (lần đầu dùng, 10 wave 0 lỗi
   role); toàn chuỗi 2h tự động không ngã.
 
+## C2c sem (2026-08-26, user duyệt bước 1 "scope ngữ nghĩa") — N=60 @8K
+
+Câu hỏi: cross 4B→9B qua serving có sống ở bài **hiểu** (QA/RAG paraphrase,
+không đòi khớp nguyên văn) hay chỉ hỏng ở bài trích chuỗi số? Harness
+`gen-sem` (c2b_gates.py): filler wikitext THẬT, 1 câu fact tự nhiên giấu
+giữa bài, câu hỏi paraphrase cuối bài, chấm bằng keyword (không phải
+substring số) — tránh trùng bài "trích nguyên văn" của C2b-N.
+
+    Self  (champion tự đọc):  54/60 = 90,0%   p50 4,42s
+    Cross (vở 4B qua kho):    33/60 = 55,0%   p50 1,63s (×2,7 @8K)
+
+- **Kết luận: scope ngữ nghĩa KHÔNG miễn nhiễm** — 55% gần với needle số
+  (57,1% @N=240) hơn là với E2 transformers (9/9). Tức bài toán không
+  phải "trích xuất chính xác riêng khó" mà đúng là **định luật biên
+  mỏng áp dụng cho MỌI decode đầu tiên trên cache ngoại**, bất kể dạng
+  câu hỏi — cache 4B mang đủ thông tin (soi lỗi: nhiều ca cross đúng
+  nghĩa nhưng lệch từ, vd "barn" thay "stables") nhưng bước decode đầu
+  bị nhiễu kernel/roundtrip lật ngẫu nhiên ~45% ca.
+- Vá bug hạ tầng phát hiện giữa chiến dịch (bài học, xem thêm mục
+  RUNTIME HYGIENE bên dưới): runtime mới kéo vllm 0.28.0 không ghim
+  (drift ngầm) → ghim `vllm==0.27.1`; `run.sh serve` chết câm khi thiếu
+  `/tmp/vllm_env.sh` do `set -e` + `source` fail → vá `|| true`; upload
+  HF 401 hàng loạt do **gõ nhầm token khi nhúng cell** (37→36 ký tự,
+  không phải lỗi code) → sửa bằng cách đọc token từ file + assert độ
+  dài, không bao giờ gõ tay secret nữa; mọi `HfApi()` trong repo đã vá
+  sang `HfApi(token=...)` tường minh.
+- Kết quả + prompt gốc trên HF `c2c_sem/`. Quyết định: KHÔNG bán cross
+  4→9 ở dạng "dùng thẳng" cho bất kỳ bài nào (số hay chữ); đường sản
+  phẩm khả thi = polisher hoặc hybrid-fallback, HOẶC (hướng user chốt
+  2026-08-26) train mapper functional-loss riêng cho 4→9 thay copy
+  nguyên — xem mục MAPPER 4→9 (đang mở).
+
 ## SPEC DECODING NGRAM (2026-08-14): OFF MẶC ĐỊNH TRÊN L4 — đo 2 model × 2 mức tải
 
 Profile `-spec` (ngram k=4, prompt-lookup 2-4) thêm vào run.sh; cùng runtime,

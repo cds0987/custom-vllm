@@ -224,6 +224,29 @@ Cập nhật: 2026-08-24.
   polisher cần kéo 57→95%+ cho exact-retrieval thuần. GPU trống, không
   job nền — chờ user định hướng (polisher / hybrid-fallback / cascade
   4→27 batch / kernel-diff bước 1).
+- **C2c sem XONG (2026-08-26, bước 1 user duyệt)**: scope ngữ nghĩa
+  (QA paraphrase trên văn bản wikitext thật, chấm keyword) trên serving
+  **self 54/60=90% | cross 33/60=55%** — KHÔNG miễn nhiễm, sát mức needle
+  số (57%). Kết luận: định luật biên mỏng áp cho mọi decode đầu trên
+  cache ngoại, không riêng bài trích nguyên văn. HF `c2c_sem/`.
+- **Hạ tầng vá cùng đợt**: ghim `vllm==0.27.1` trong `setup_env.sh`
+  (runtime mới từng kéo 0.28.0 không ghim = drift ngầm âm thầm — MỌI
+  số Phase C trước đó đo trên 0.27.1, phải cảnh giác runtime mới);
+  `run.sh serve` từng chết câm khi thiếu `/tmp/vllm_env.sh` (set -e +
+  source fail) → vá `|| true`; **học phí token**: gõ tay HF_TOKEN vào
+  Colab cell làm mất 1 ký tự → 401 hàng loạt — từ nay đọc token từ
+  file + assert độ dài, không gõ tay secret; mọi `HfApi()` trong repo
+  đã vá `token=` tường minh.
+- **User chốt hướng mới (2026-08-26)**: copy-nguyên 4→9 "hên xui" →
+  chuyển sang **train mapper functional-loss cho 4→9** (tái dùng
+  `e6v3_ce.py`, chỉ đổi `--tgt-model`; theo E7 cặp 4→9 CCA-GDN≥0,9 dễ
+  hơn 4→27 CCA 0,785 — kỳ vọng hội tụ nhanh). Đã dựng thêm `suite_gen.py`
+  (4 họ đề rag/mid-info/reasoning-math/swe, đích user "vài ngàn prompt,
+  target 80-90% như normal decode") + `c2suite.sh` (chiến dịch lớn,
+  resume-được theo wave) — CHƯA phóng, chờ mapper Giai đoạn A xong.
+  Kế hoạch 2 giai đoạn: A) sanity mapper 4→9 với data cũ (0 code mới,
+  ~1-2h) → tín hiệu đi/không; B) nếu khả quan, tích hợp data 4 họ mới
+  vào train loop rồi đo trên `c2suite.sh`.
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 

@@ -48,7 +48,7 @@ hfup() {  # quy tac 6d: day ket qua len HF NGAY moi wave
   python - "$1" <<'EOF' || echo HF_UP_SKIP
 import glob, os, sys
 from huggingface_hub import HfApi
-a = HfApi()
+a = HfApi(token=os.environ["HF_TOKEN"])
 for f in glob.glob('/content/logs/c2b_suite*.json') + glob.glob('/content/c2b_prompts*.json'):
     try:
         a.upload_file(path_or_fileobj=f, path_in_repo=sys.argv[1] + '/' + os.path.basename(f),

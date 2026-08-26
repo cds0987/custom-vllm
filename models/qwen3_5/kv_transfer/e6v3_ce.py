@@ -354,8 +354,11 @@ def main():
             return
         try:
             from huggingface_hub import HfApi
-            HfApi().upload_file(path_or_fileobj=str(local), path_in_repo=dest,
-                                repo_id=args.hf_repo)
+            # 401 hoc phi 2026-08-26 (c2c_sem): HfApi() khong tu doc HF_TOKEN
+            # tren moi phien ban/runtime — luon truyen token= tuong minh.
+            HfApi(token=_os.environ["HF_TOKEN"]).upload_file(
+                path_or_fileobj=str(local), path_in_repo=dest,
+                repo_id=args.hf_repo)
             print(f"HF-UP {dest}")
         except Exception as ex:
             print(f"HF-UP FAIL {dest}: {type(ex).__name__}")

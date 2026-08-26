@@ -331,7 +331,7 @@ def main():
     json.dump(res, open(args.results, "w"), indent=1)
     if args.hf_up and load_token():
         from huggingface_hub import HfApi
-        HfApi().upload_file(path_or_fileobj=args.results,
+        HfApi(token=load_token()).upload_file(path_or_fileobj=args.results,
                             path_in_repo="cascade427/" + Path(args.results).name,
                             repo_id=HF_REPO)
         print("HF-UP cascade427")
