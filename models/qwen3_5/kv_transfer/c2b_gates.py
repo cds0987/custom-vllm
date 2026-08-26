@@ -112,10 +112,86 @@ def build_prompts_n(n, ctx_t):
     print(f"gen-n: {n} prompts ctx{ctx_t} -> {PROMPTS_F}")
 
 
-def agg():
-    """Gom tat ca c2b_baseline*.json + c2b_cross*.json -> ty le."""
+def build_prompts_sem(n, ctx_t):
+    """C2c — scope NGU NGHIA tren serving (protocol E2, filler wikitext THAT):
+    fact tu nhien giau giua van ban thuc, cau hoi PARAPHRASE cuoi, cham diem
+    KEYWORD (khong doi khop nguyen van chuoi so — tranh dung mep vuc bien mong
+    cua exact-retrieval). Van align T ≡ ~5 (mod 1056) de lmcache hit."""
+    import os
+    import random
+    from datasets import load_dataset
+    from transformers import AutoTokenizer
+    tok_src = "/content/models/frame4b"
+    if not os.path.isdir(tok_src):
+        tok_src = "Qwen/Qwen3.5-4B"
+    tok = AutoTokenizer.from_pretrained(tok_src)
+    ds = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
+    corpus = " ".join(t.strip() for t in ds["text"] if t.strip()).split()
+    subs = ["Doctor Vance", "Professor Ito", "Captain Reyes", "Curator Lam",
+            "Engineer Bok", "Archivist Pena", "Colonel Draye", "Sister Maud"]
+    objs = ["telescope", "manuscript", "compass", "violin", "microscope",
+            "chalice", "ledger", "sextant", "tapestry", "astrolabe"]
+    cols = ["silver", "crimson", "ivory", "emerald", "bronze", "cobalt"]
+    plcs = ["attic", "basement", "greenhouse", "chapel", "lighthouse",
+            "archive", "cellar", "observatory", "stables", "pantry"]
+    m = max(1, round((ctx_t - 5) / 1056))
+    tstar = m * 1056 + 5
+    prompts = []
+    stride = max(1, (len(corpus) - ctx_t - 600) // max(n, 1))
+    for j in range(n):
+        rng = random.Random(9100 * ctx_t + j)
+        s, o = rng.choice(subs), rng.choice(objs)
+        c, pl = rng.choice(cols), rng.choice(plcs)
+        fact = (f"For many years {s} kept the {c} {o} hidden away in the "
+                f"{pl}, and almost nobody ever knew about it.")
+        if j % 2 == 0:
+            q = f"Where did {s} hide the {o}?"
+            ans, kw = "It was hidden in the ", pl
+        else:
+            q = f"What color was the {o} that {s} hid?"
+            ans, kw = "The color of it was ", c
+        start = (j * stride + rng.randint(0, 500)) % max(1, len(corpus) - ctx_t)
+        bank = corpus[start:start + ctx_t]
+
+        def mk(ws, pad):
+            half = len(ws) // 2
+            return (" ".join(ws[:half]) + "\n" + fact + "\n"
+                    + " ".join(ws[half:])
+                    + (" " + " ".join(pad) if pad else "")
+                    + f"\nQuestion: {q}\nAnswer: {ans}")
+
+        def nt(txt):
+            return len(tok(txt)["input_ids"])
+        lo, hi = 0, len(bank)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if nt(mk(bank[:mid], [])) < tstar:
+                lo = mid + 1
+            else:
+                hi = mid
+        k = max(2, lo - 1)
+        pad = []
+        txt = mk(bank[:k], pad)
+        T = nt(txt)
+        for _ in range(12):
+            if T >= tstar - 3:
+                break
+            pad.append("a")
+            txt = mk(bank[:k], pad)
+            T = nt(txt)
+        prompts.append({"ctx": ctx_t, "kw": kw, "prompt": txt,
+                        "T": T, "rem": T % 1056})
+        if j % 10 == 0:
+            print(f"gen-sem {j}/{n} T={T} rem={T % 1056} kw={kw}")
+    with open(PROMPTS_F, "w") as fh:
+        json.dump(prompts, fh)
+    print(f"gen-sem: {n} prompts ctx{ctx_t} -> {PROMPTS_F}")
+
+
+def agg(kinds=("baseline", "cross")):
+    """Gom tat ca c2b_<kind>*.json -> ty le."""
     import glob
-    for kind in ("baseline", "cross"):
+    for kind in kinds:
         hits = tot = 0
         lats = []
         for f in sorted(glob.glob(f"/content/logs/c2b_{kind}*.json")):
@@ -224,7 +300,10 @@ def run_pass(tag, sl=""):
         toks = ch.get("logprobs", {}).get("tokens", [])
         lps = ch.get("logprobs", {}).get("token_logprobs", [])
         txt = ch["text"]
-        hit = int(p["code"] in "".join(c for c in txt if c.isdigit()))
+        if "kw" in p:                     # C2c sem: cham keyword
+            hit = int(p["kw"].lower() in txt.lower())
+        else:                             # needle: cham chuoi so
+            hit = int(p["code"] in "".join(c for c in txt if c.isdigit()))
         out.append({"i": i, "ctx": p["ctx"], "hit": hit, "lat": round(dt, 3),
                     "text": txt[:80], "tokens": toks, "logprobs": lps})
         print(f"{tag} {i} ctx{p['ctx']} hit={hit} lat={dt:.2f}s "
@@ -282,8 +361,9 @@ def compare():
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["gen", "gen-aligned", "gen-n", "produce",
-                                     "baseline", "cross", "compare", "agg"])
+    ap.add_argument("mode", choices=["gen", "gen-aligned", "gen-n", "gen-sem",
+                                     "produce", "baseline", "cross", "compare",
+                                     "agg", "sembase", "semcross", "agg-sem"])
     ap.add_argument("--n", type=int, default=240)
     ap.add_argument("--ctx", type=int, default=8000)
     ap.add_argument("--slice", default="")
@@ -294,11 +374,15 @@ if __name__ == "__main__":
         build_prompts_aligned()
     elif args.mode == "gen-n":
         build_prompts_n(args.n, args.ctx)
+    elif args.mode == "gen-sem":
+        build_prompts_sem(args.n, args.ctx)
     elif args.mode == "produce":
         produce(args.slice)
     elif args.mode == "compare":
         compare()
     elif args.mode == "agg":
         agg()
+    elif args.mode == "agg-sem":
+        agg(("sembase", "semcross"))
     else:
         run_pass(args.mode, args.slice)
