@@ -203,9 +203,20 @@ Cập nhật: 2026-08-24.
   (a) filler pad 'x0 x1..x96' LẶP CHU KỲ ngay trước câu hỏi — tự nó dụ
   degeneration; (b) đếm token lệch thang: bộ "8K/30K" thật ra 15,8K/59K
   token (sát mml) — chưa có self-baseline trên đúng bộ này nên chưa
-  tách được lỗi cross khỏi lỗi đề. CHỜ DUYỆT C2b-5 (~30p): pad ngẫu
-  nhiên không lặp + target token đúng 8K/30K + CHẠY CẢ self-baseline
-  cùng bộ — một biến, đủ đối chứng.
+  tách được lỗi cross khỏi lỗi đề.
+- **C2b-5 XONG (2026-08-26, HF c2b5/; 3 lượt vá hạ tầng: null-bytes
+  2-writer-1-log, lmcache giữ cổng sống dai → kill theo chủ cổng
+  ss+/proc, binary-search token thay số học pad)**: bộ đề chuẩn rem=2
+  cả 4 ca, hit toàn tuyến (TTFT 30K 11,3s→0,94s ×12). SELF 4/4. CROSS
+  1/4 — chữ ký quyết định: **CẢ 4 ca lấy ĐÚNG 4-6 chữ số đầu**
+  (439814→'4398', 025150→TRỌN, 071412→'0714', 934699→'9346') rồi
+  degenerate lặp → suffix-re-prefill ĐÃ LOẠI (rem=2 = liều WARM_P);
+  thông tin TRUYỀN ĐƯỢC; lỗi ở DECODE trên cache ngoại. Nghi phạm xếp
+  hạng: (1) W4A16 hai đầu (E6c: lượng tử hóa gánh nửa vết nứt — E1-E3
+  sạch là bf16↔bf16); (2) champion 9B là hàng GHÉP (GDN graft từ GGUF
+  — luật CCA-GDN đo trên model gốc); (3) độ chính xác trang GDN. CHỜ
+  DUYỆT C2b-6 (~30p): consumer = RedHatAI 9B w4a16 GỐC không graft —
+  tách biến (2).
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
