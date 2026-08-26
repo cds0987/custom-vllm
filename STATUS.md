@@ -1375,6 +1375,22 @@ User: copy-nguyên 4→9 "hên xui", đòi mapper functional-loss như 4→27
   đo chất lượng — đúng mục đích ban đầu). Theo E7 (CCA-GDN 4→9 ≥0,9,
   dễ hơn 4→27's 0,785), kỳ vọng hội tụ nhanh hơn — cần chạy train
   thật (vài trăm-nghìn bước, có val curve) để xác nhận.
+- **Ladder XONG (2026-08-27): CẢ 3 MỐC 4096/8192/16384 CHẠY SẠCH,
+  KHÔNG OOM** — khác hẳn 27B từng kẹt ở 4096 (8K/16K OOM phần cứng).
+
+      4096  : 0,74 s/bước (template-path) | peak  9,11 GiB
+      8192  : 1,07 s/bước (template-path) | peak 10,04 GiB
+      16384 : 1,88 s/bước (template-path) | peak 11,92 GiB
+
+  Số đo "template-path" đại diện ĐÚNG cho mọi bước train ở các độ dài
+  này: điều kiện `cut.shape[1] > 2500` (đã có sẵn từ bản vá 27B, dòng
+  993) buộc MỌI item train >2500 token luôn đi đường template dù đang
+  ở pha λ>0 — tức tổ hợp nặng nhất (prefill thật + aux + student, nơi
+  27B từng OOM 2 lần) không bao giờ xảy ra ở các độ dài này. Số đo
+  không phải ngoại suy — đã đo trực tiếp.
+- **Khuyến nghị max-ctx cho train thật: 16384** — còn dư ~11 GiB dưới
+  trần L4 23GB, khớp đúng mục tiêu gốc user hỏi ("Unsloth hỗ trợ tới
+  16K"). Đang CHỜ USER DUYỆT trước khi phóng (GPU dài hơi, khác sanity).
 - **Bước kế (chờ user duyệt riêng — GPU dài hơi)**: phóng train thật
   4→9, tái dùng nguyên data BFCL/needle/ifstruct/pbtable cũ trước
   (đã kiểm chứng cho 27B), val mỗi 250 bước, auto-upload HF

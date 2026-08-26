@@ -254,6 +254,10 @@ Cập nhật: 2026-08-24.
   `hf_up()` ghim cứng `"v34/"` → thêm `--hf-prefix` (né đè lên mapper
   4→27B). Sanity chỉ đo tốc độ/VRAM, CHƯA đo hội tụ — chờ user duyệt
   train thật (vài trăm-nghìn bước, val curve) trước khi phóng.
+- **Ladder 4→9 XONG (2026-08-27): 4096/8192/16384 đều KHÔNG OOM**
+  (27B từng kẹt ở 4096) — peak 9,1/10,0/11,9 GiB, còn dư ~11GiB dưới
+  trần L4 tại 16384. Khuyến nghị max-ctx=16384 cho train thật (khớp
+  mục tiêu gốc "Unsloth 16K"). Đang chờ user duyệt phóng train.
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
