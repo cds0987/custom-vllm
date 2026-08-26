@@ -195,10 +195,17 @@ Cập nhật: 2026-08-24.
   dụng, đo ≥4 lần ở transformers). Bài học hạ tầng: 2 tiến trình chia
   CUDA-IPC phải CÙNG torch (lmcache phải chạy sau run.sh setup); port
   8080 Colab chiếm; lmcache con sống sót pkill cha (fuser -k theo cổng).
-  CHỜ DUYỆT C2b-4 (~25p): thí nghiệm phân xử giao thức — prompt có
-  T ≡ ~5 (mod 1056) để phần dư re-prefill chỉ vài token (đúng liều
-  WARM_P transformers đã chứng minh) → needle sống = chốt thủ phạm
-  suffix, giải pháp sản phẩm là block-align điểm ghi phía producer.
+  **C2b-4 XONG (2026-08-26, HF c2b4/)**: align chuẩn (rem 3-5 token đo
+  bằng tokenizer thật). Kết quả 1/4: **ca ctx8K-j0 (rem=3) là needle
+  cross ĐÚNG + MẠCH LẠC ĐẦU TIÊN trong vLLM** ('094384' chuẩn, tiếp nối
+  sạch) — bằng chứng đường copy 4B→9B qua serving CÓ THỂ đúng trọn.
+  3/4 còn lại vẫn chết kiểu lặp. NHƯNG thí nghiệm dính 2 nhiễu tự gây:
+  (a) filler pad 'x0 x1..x96' LẶP CHU KỲ ngay trước câu hỏi — tự nó dụ
+  degeneration; (b) đếm token lệch thang: bộ "8K/30K" thật ra 15,8K/59K
+  token (sát mml) — chưa có self-baseline trên đúng bộ này nên chưa
+  tách được lỗi cross khỏi lỗi đề. CHỜ DUYỆT C2b-5 (~30p): pad ngẫu
+  nhiên không lặp + target token đúng 8K/30K + CHẠY CẢ self-baseline
+  cùng bộ — một biến, đủ đối chứng.
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
