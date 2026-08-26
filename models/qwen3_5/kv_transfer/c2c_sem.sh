@@ -9,7 +9,14 @@ cd /content/custom-vllm || exit 9
 git pull -q
 export HF_TOKEN=$(grep -oP '(?<=HF_TOKEN=).*' .env)
 export KV_DTYPE=auto
+# bootstrap runtime moi (idempotent, thu tu song con C2b-2): env vLLM (nang
+# torch) TRUOC -> lmcache cung torch -> va key-namespace 4B/9B chia se trang
+bash run.sh setup 2>&1 | tail -3
 source /tmp/vllm_env.sh 2>/dev/null
+python -c "import lmcache" 2>/dev/null || pip install -q 'lmcache>=0.5.2' 2>&1 | tail -1
+R=$(python -c 'import lmcache,os;print(os.path.dirname(lmcache.__file__))')
+grep -q qwen35-shared "$R/integration/vllm/lmcache_mp_connector.py" || sed -i 's/model_name=vllm_config.model_config.model,/model_name="qwen35-shared",/' "$R/integration/vllm/lmcache_mp_connector.py" "$R/integration/vllm/lmcache_mp_connector_0201.py"
+grep -q qwen35-shared "$R/integration/vllm/lmcache_mp_connector.py" && echo C2C_PATCHED || { echo PATCH_FAIL; exit 5; }
 
 PROD='--kv-transfer-config={"kv_connector":"LMCacheMPConnector","kv_role":"kv_producer","kv_connector_extra_config":{"lmcache.mp.host":"tcp://localhost","lmcache.mp.port":5555}} --enforce-eager'
 CONS='--kv-transfer-config={"kv_connector":"LMCacheMPConnector","kv_role":"kv_consumer","kv_connector_extra_config":{"lmcache.mp.host":"tcp://localhost","lmcache.mp.port":5555}} --enforce-eager'
