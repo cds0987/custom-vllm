@@ -60,6 +60,78 @@ def build_prompts():
     print(f"gen: {len(prompts)} prompts -> {PROMPTS_F}")
 
 
+def build_prompts_n(n, ctx_t):
+    """C2b-N (user 2026-08-26: '3/4 qua it samples, thu 2-300'): N prompt
+    aligned mot do dai — thong ke that."""
+    import random
+    from transformers import AutoTokenizer
+    tok = AutoTokenizer.from_pretrained("/content/models/frame4b")
+    m = max(1, round((ctx_t - 5) / 1056))
+    tstar = m * 1056 + 5
+    prompts = []
+    for j in range(n):
+        rng = random.Random(7000 * ctx_t + j)
+        code = "".join(rng.choice("0123456789") for _ in range(6))
+        name = f"PRJ{rng.randint(100, 999)}"
+
+        def mk(ws, pad):
+            half = len(ws) // 2
+            return (" ".join(ws[:half])
+                    + f"\nIMPORTANT: The secret code for project {name} is {code}.\n"
+                    + " ".join(ws[half:])
+                    + (" " + " ".join(pad) if pad else "")
+                    + f"\nQuestion: What is the secret code for project {name}?"
+                    + "\nAnswer: The secret code is ")
+
+        def nt(txt):
+            return len(tok(txt)["input_ids"])
+        bank = [f"w{rng.randint(0, 9999)}" for _ in range(ctx_t)]
+        lo, hi = 0, len(bank)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if nt(mk(bank[:mid], [])) < tstar:
+                lo = mid + 1
+            else:
+                hi = mid
+        k = max(2, lo - 1)
+        pad = []
+        txt = mk(bank[:k], pad)
+        T = nt(txt)
+        for _ in range(12):
+            if T >= tstar - 3:
+                break
+            pad.append("a")
+            txt = mk(bank[:k], pad)
+            T = nt(txt)
+        prompts.append({"ctx": ctx_t, "code": code, "prompt": txt,
+                        "T": T, "rem": T % 1056})
+        if j % 40 == 0:
+            print(f"gen-n {j}/{n} T={T} rem={T % 1056}")
+    with open(PROMPTS_F, "w") as fh:
+        json.dump(prompts, fh)
+    print(f"gen-n: {n} prompts ctx{ctx_t} -> {PROMPTS_F}")
+
+
+def agg():
+    """Gom tat ca c2b_baseline*.json + c2b_cross*.json -> ty le."""
+    import glob
+    for kind in ("baseline", "cross"):
+        hits = tot = 0
+        lats = []
+        for f in sorted(glob.glob(f"/content/logs/c2b_{kind}*.json")):
+            d = json.load(open(f))
+            runs = d["runs"] if isinstance(d, dict) else d
+            for r in runs:
+                tot += 1
+                hits += r["hit"]
+                lats.append(r["lat"])
+        if tot:
+            lats.sort()
+            print(f"AGG {kind}: {hits}/{tot} = {hits/tot:.1%} | "
+                  f"lat p50 {lats[len(lats)//2]:.2f}s")
+    print("AGG_DONE")
+
+
 def build_prompts_aligned():
     """C2b-4: prompt co T ≡ ~5 (mod 1056) — phan du re-prefill cua 9B chi
     con vai token (dung lieu WARM_P transformers da chung minh vo hai).
@@ -130,11 +202,19 @@ def ttft_stream(mid, prompt):
     return -1.0
 
 
-def run_pass(tag):
-    mid = model_id()
+def _sliced(sl):
     prompts = json.load(open(PROMPTS_F))
+    if sl:
+        a, b = (int(x) for x in sl.split(":"))
+        return list(enumerate(prompts))[a:b], f"_{a}_{b}"
+    return list(enumerate(prompts)), ""
+
+
+def run_pass(tag, sl=""):
+    mid = model_id()
+    pairs, suffix = _sliced(sl)
     out = []
-    for i, p in enumerate(prompts):
+    for i, p in pairs:
         t0 = time.time()
         r = http("/completions", {"model": mid, "prompt": p["prompt"],
                                   "max_tokens": 24, "temperature": 0,
@@ -149,20 +229,17 @@ def run_pass(tag):
                     "text": txt[:80], "tokens": toks, "logprobs": lps})
         print(f"{tag} {i} ctx{p['ctx']} hit={hit} lat={dt:.2f}s "
               f"text={txt[:40]!r}")
-    # TTFT rieng: prompt 30K dau tien (da prefill o vong tren -> voi
-    # prefix-cache bat thi lat nay la warm; do them mot prompt 30K MOI
-    # o che do cold-cho-9B (chua tung qua 9B nhung DA qua 4B o --produce)
-    res = {"runs": out, "ttft_30k_repeat": ttft_stream(mid, prompts[-1]["prompt"])}
-    path = f"/content/logs/c2b_{tag}.json"
+    res = {"runs": out, "ttft_30k_repeat": ttft_stream(mid, pairs[-1][1]["prompt"])}
+    path = f"/content/logs/c2b_{tag}{suffix}.json"
     with open(path, "w") as fh:
         json.dump(res, fh, indent=1)
     print(f"{tag} saved -> {path}")
 
 
-def produce():
+def produce(sl=""):
     mid = model_id()
-    prompts = json.load(open(PROMPTS_F))
-    for i, p in enumerate(prompts):
+    pairs, _ = _sliced(sl)
+    for i, p in pairs:
         t0 = time.time()
         http("/completions", {"model": mid, "prompt": p["prompt"],
                               "max_tokens": 1, "temperature": 0})
@@ -205,16 +282,23 @@ def compare():
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["gen", "gen-aligned", "produce",
-                                     "baseline", "cross", "compare"])
+    ap.add_argument("mode", choices=["gen", "gen-aligned", "gen-n", "produce",
+                                     "baseline", "cross", "compare", "agg"])
+    ap.add_argument("--n", type=int, default=240)
+    ap.add_argument("--ctx", type=int, default=8000)
+    ap.add_argument("--slice", default="")
     args = ap.parse_args()
     if args.mode == "gen":
         build_prompts()
     elif args.mode == "gen-aligned":
         build_prompts_aligned()
+    elif args.mode == "gen-n":
+        build_prompts_n(args.n, args.ctx)
     elif args.mode == "produce":
-        produce()
+        produce(args.slice)
     elif args.mode == "compare":
         compare()
+    elif args.mode == "agg":
+        agg()
     else:
-        run_pass(args.mode)
+        run_pass(args.mode, args.slice)
