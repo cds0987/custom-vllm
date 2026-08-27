@@ -49,28 +49,43 @@ def mem():
     return torch.cuda.max_memory_allocated() / 2**30
 
 
+def _fresh_grad_past(pristine):
+    """v2 fix (hoc phi lan 2): moi lan goi train THAT deu xay dung
+    past_key_values MOI tu mapper -- tai su dung 1 object qua nhieu
+    backward() lam autograd "backward qua graph lan 2" (graph da giai
+    phong sau backward dau tien). Clone cau truc + tao LA MOI tu gia tri
+    pristine (khong grad) moi lan de mo phong dung cai thuc te."""
+    import copy
+    past = copy.copy(pristine)
+    past.layers = []
+    for l in pristine.layers:
+        c = copy.copy(l)
+        if hasattr(c, "keys") and c.keys is not None:
+            c.keys = c.keys.detach().clone().requires_grad_(True)
+            c.values = c.values.detach().clone().requires_grad_(True)
+        if hasattr(c, "recurrent_states") and c.recurrent_states is not None:
+            rs = c.recurrent_states
+            if isinstance(rs, dict):
+                c.recurrent_states = {k: v.detach().clone().requires_grad_(True)
+                                      for k, v in rs.items()}
+            else:
+                c.recurrent_states = rs.detach().clone().requires_grad_(True)
+        past.layers.append(c)
+    return past
+
+
 def probe(m, tok, T, tag, n_repeat=3):
     import torch
     torch.cuda.reset_peak_memory_stats()
     ids = torch.randint(1000, 50000, (1, T), device="cuda")
     try:
         with torch.no_grad():
-            past = m(input_ids=ids[:, :-8], use_cache=True,
-                     logits_to_keep=1).past_key_values
-        for l in past.layers:
-            if hasattr(l, "keys") and l.keys is not None:
-                l.keys = l.keys.clone().requires_grad_(True)
-                l.values = l.values.clone().requires_grad_(True)
-            if hasattr(l, "recurrent_states") and l.recurrent_states is not None:
-                rs = l.recurrent_states
-                if isinstance(rs, dict):
-                    l.recurrent_states = {k: v.clone().requires_grad_(True)
-                                          for k, v in rs.items()}
-                else:
-                    l.recurrent_states = rs.clone().requires_grad_(True)
+            pristine = m(input_ids=ids[:, :-8], use_cache=True,
+                        logits_to_keep=1).past_key_values
         warm = ids[:, -8:]
         times = []
         for i in range(n_repeat):
+            past = _fresh_grad_past(pristine)
             t0 = time.time()
             out = m(input_ids=warm, past_key_values=past, use_cache=True)
             loss = out.logits.float().pow(2).mean()
@@ -78,11 +93,9 @@ def probe(m, tok, T, tag, n_repeat=3):
             torch.cuda.synchronize()
             times.append(time.time() - t0)
             print(f"  {tag} T={T} call{i} t={times[-1]:.2f}s")
-            for p in [x for x in m.parameters() if x.grad is not None]:
-                p.grad = None
+            del past, out, loss
         print(f"{tag} T={T} OK peak={mem():.2f}GiB t_first={times[0]:.2f}s "
-              f"t_steady={sum(times[1:]) / max(len(times) - 1, 1):.2f}s "
-              f"cache_respected={out.past_key_values is not None}")
+              f"t_steady={sum(times[1:]) / max(len(times) - 1, 1):.2f}s")
         return True
     except Exception as e:
         import traceback
