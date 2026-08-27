@@ -53,8 +53,14 @@ def _musr_items():
     for split in ("murder_mysteries", "object_placements", "team_allocation"):
         ds = load_dataset("TAUR-Lab/MuSR", split=split)
         for i, ex in enumerate(ds):
-            choices = json.loads(ex["choices"]) if ex["choices"].strip().startswith("[") \
-                else eval(ex["choices"], {"__builtins__": {}})
+            # "choices" la python-repr (nhay don), khong phai JSON chuan
+            # (bug thuc te: json.loads FAIL "Expecting value: line 1 column
+            # 2" tren du lieu that) -> ast.literal_eval an toan hon eval.
+            import ast
+            try:
+                choices = json.loads(ex["choices"])
+            except json.JSONDecodeError:
+                choices = ast.literal_eval(ex["choices"])
             letters = [chr(65 + j) for j in range(len(choices))]
             opts = "\n".join(f"{l}) {c}" for l, c in zip(letters, choices))
             prompt = (f"{ex['narrative']}\n\n{ex['question']}\n{opts}\n\n"
