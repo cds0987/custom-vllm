@@ -85,13 +85,27 @@ def _aime_items():
 
 
 def _compute_items(n):
-    from datasets import load_dataset
-    ds = load_dataset("nvidia/compute-eval", "default", split="eval")
+    # datasets.load_dataset() FAIL that: schema compute-eval dung feature
+    # type "Json" (cot timing_mode) ma ban `datasets` tren runtime khong
+    # nhan dien ("Feature type 'Json' not found"). Ne bang cach doc THANG
+    # file parquet qua pandas/huggingface_hub, bo qua lop validate Features
+    # cua thu vien datasets hoan toan.
+    import pandas as pd
+    from huggingface_hub import hf_hub_download
+    path = hf_hub_download("nvidia/compute-eval", "default/eval/0000.parquet",
+                           repo_type="dataset", revision="refs/convert/parquet")
+    df = pd.read_parquet(path)
     items = []
-    for i, ex in enumerate(ds):
+    for i, row in df.iterrows():
         if i >= n:
             break
-        ctx = "\n\n".join(f"// {f['path']}\n{f['content']}" for f in ex["context_files"])
+        ex = row.to_dict()
+        # pyarrow struct-list co the ve dang numpy array cua dict-like
+        # (khong luon la dict thuan) -> ep ve list[dict] tuong minh de
+        # score_compute() sau nay doc bang f["path"]/f["content"] on dinh.
+        cfiles = [dict(f) for f in ex["context_files"]]
+        tfiles = [dict(f) for f in ex["test_files"]]
+        ctx = "\n\n".join(f"// {f['path']}\n{f['content']}" for f in cfiles)
         prompt = (f"{ex['prompt']}\n\nContext files (do not repeat these, "
                   f"they are already provided):\n{ctx}\n\n"
                   f"Write the complete contents of solution.cu implementing "
@@ -99,11 +113,11 @@ def _compute_items(n):
                   f"wrapped in a single ```cuda code block.\n\n```cuda\n")
         items.append({"bench": "compute", "sub": ex["group"], "id": ex["task_id"],
                       "prompt": prompt,
-                      "context_files": ex["context_files"],
-                      "test_files": ex["test_files"],
+                      "context_files": cfiles,
+                      "test_files": tfiles,
                       "build_command": ex["build_command"],
                       "test_command": ex["test_command"],
-                      "timeout": ex["timeout_seconds"] or 60})
+                      "timeout": float(ex["timeout_seconds"]) if ex["timeout_seconds"] else 60})
     return items
 
 
