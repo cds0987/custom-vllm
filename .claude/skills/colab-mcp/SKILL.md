@@ -106,3 +106,13 @@ Fix: `.mcp.json` đặt `FASTMCP_CHECK_FOR_UPDATES=off` cho cả 3 server (đã
 làm). Chẩn đoán nhanh: `ls -t %TEMP% | grep colab-mcp-logs` → cat log mới
 nhất; đo tay: pipe JSON `initialize` vào `uvx --from D:\...\colab-mcp
 colab-mcp` — bình thường trả lời sau ~3s.
+
+## Log "im lặng" không có nghĩa là treo (2026-08-27)
+
+Popen chạy `python script.py` (KHÔNG có `-u`) khi stdout redirect ra file
+sẽ block-buffered — print() nhỏ (mốc hoàn thành 1 pha) có thể nằm chờ
+trong buffer rất lâu trước khi flush, trong khi process vẫn tính toán
+thật. Luôn thêm `python -u` (hoặc `PYTHONUNBUFFERED=1`) cho MỌI script
+dài chạy nền. Khi log đứng im bất thường: đối chiếu `ps -o etimes,stat`
++ `nvidia-smi utilization.gpu` trước khi kết luận treo — state R/D +
+util > 0% là đang chạy thật, chỉ chưa flush.
