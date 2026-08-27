@@ -267,7 +267,18 @@ Cập nhật: 2026-08-24.
   4,72GiB (12,94 vs 17,66GiB, tái lập 2 lần) nhưng vướng lỗi tích hợp
   "meta tensor" giữa accelerate dispatch hook và cách mapper tự sửa
   cache — cần viết lại đường nạp thủ công (không qua cờ có sẵn) để
-  test tiếp, ước 1-2h kỹ thuật. CHƯA làm — chờ user chọn ưu tiên.
+  test tiếp, ước 1-2h kỹ thuật. Đã viết `load_4bit_cpu_offload_io`
+  (né accelerate dispatch, tự tay hook 2 module) + probe latency
+  riêng — CHƯA chạy được (GPU bận train 4→9), chờ khe hở GPU.
+- **MAPPER 4B→9B TRAIN THẬT XONG (2026-08-27, max-ctx=16384)**: dừng
+  sớm đúng CE_FLOOR ở bước 984/2600 — **BEST: BFCL 23/25 (92%) |
+  needle 29/29 (100%) | score 54**. Nhỉnh hơn mapper 4→27B (BFCL
+  18/20, needle 15/15) mà đạt trực tiếp ở ctx 16384 (27B chỉ tới
+  4096 trên L4) — xác nhận đúng E7 (cặp 4→9 dễ hơn 4→27). ifstruct/
+  pbtable vẫn ~0 (nợ của ĐỀ, không phải mapper — khớp phán quyết
+  v3.5 cũ). Checkpoint + data trên HF `v49/`. Bước kế chờ chọn: (a)
+  tích hợp vLLM serving Phase C3, (b) đo trên `suite_gen.py`
+  (rag/mid/math/swe), (c) đóng gói kiểu cascade_427 cho 4→9.
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 

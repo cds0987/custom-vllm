@@ -1351,6 +1351,44 @@ Hạ tầng: gen-n 240 prompt aligned (rem 2-4), self-baseline 1 lượt +
 - kv_role kv_producer/kv_consumer chạy sạch (lần đầu dùng, 10 wave 0 lỗi
   role); toàn chuỗi 2h tự động không ngã.
 
+## MAPPER 4B→9B — TRAIN THẬT XONG (2026-08-27, max-ctx=16384)
+
+User duyệt "phóng train thật cho 4→9, theo cách làm 4-27". Chạy nguyên
+`e6v3_ce.py` (0 code mới ngoài `--hf-prefix` đã tách), max-ctx=16384 —
+độ dài mà 27B từng OOM cứng, 9B đi thẳng không cần ladder-hạ. Runtime
+recycle 1 lần ngay trước lúc phóng (đã bootstrap lại); phát hiện thêm
+bài học hạ tầng: launch thiếu `python -u` khiến log "im lặng" ~1h dù
+job chạy thật (block-buffered stdout) — đã ghi vào skill colab-mcp.
+
+    step249 (val 1) : BFCL 20/25 | needle 28/29 | score 49
+    step499 (val 2) : BFCL 17/25 | needle 28/29 | score 45 (giảm nhẹ, binh thuong)
+    step749 (val 3) : BFCL 21/25 | needle 29/29 | score 50 -> best-by-val
+    step984 (CE_FLOOR): BFCL 23/25 | needle 29/29 | score 54 -> BEST, DUNG SOM
+
+Dừng sớm ở bước 984/2600 do CE trung bình 50 bước < CE_FLOOR=0,2 (đúng
+kỷ luật Unsloth chống overfit, giống hệt cơ chế đã dùng cho 4→27).
+Tổng thời gian job (kể cả Phase A/B0/B1 + bootstrap lại runtime): ~1h53.
+
+**So với mapper 4→27B (v3.4, đã đóng)**: BFCL 23/25 (92%) so với 18/20
+(90%) — nhỉnh hơn; needle 29/29 (100%) so với 15/15 (100%) — ngang
+nhau nhưng đạt trực tiếp ở max-ctx cao hơn nhiều (16384 vs 4096, không
+cần ladder hạ độ dài vì VRAM dư). ifstruct 2/15, pbtable 0/10 — vẫn
+gần 0, khớp phán quyết v3.5 cũ (nợ của ĐỀ, ngay cả model tự đọc cũng
+điểm thấp trên 2 suite này — không phải mapper yếu).
+
+**Kết luận**: giả thuyết E7 (CCA-GDN 4→9 ≥0,9 dễ hơn 4→27's 0,785)
+được xác nhận bằng số đo thật — mapper 4→9 hội tụ nhanh hơn (dừng ở
+984 bước so với ~1750-2016 bước của các bản 4→27), điểm cao hơn, ở
+độ dài context lớn hơn. Checkpoint tốt nhất `mapper_v49.pt` +
+`.last` + toàn bộ data/pseudo_gold đã trên HF
+`gunnybd01/qwen35-kv-mapper-4b-27b/v49/`.
+
+**Bước kế chưa làm (cần user chọn)**: (a) tích hợp mapper vào vLLM
+serving (Phase C3 — thay đường copy-nguyên đã đo 55-57% bằng mapper
+này, kỳ vọng vượt xa); (b) đo mapper trên bộ `suite_gen.py`
+(rag/mid/math/swe) để so trực tiếp với target "80-90% như normal
+decode" user đề ra; (c) đóng gói `cascade_427.py`-style cho 4→9.
+
 ## MAPPER 4B→27B — thử giải pháp mở rộng context (2026-08-27, user: "ko được kết luận sớm phải làm kỹ")
 
 User chất vấn kết luận cũ (27B kẹt ở 4096 trên L4) — đúng quy tắc 4, đã
