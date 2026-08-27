@@ -290,6 +290,13 @@ def main():
     ap.add_argument("--gdn-bf16", action="store_true",
                     help="thu nghiem: ep GDN state bf16 sau prefill "
                          "(-~300MB/cache) — chi bat sau khi sanity 20 buoc")
+    ap.add_argument("--tgt-cpu-offload", action="store_true",
+                    help="(user 2026-08-27) nap tgt-model qua "
+                         "e5.load_4bit_cpu_offload_io thay load_4bit — "
+                         "tu tay day embed_tokens+lm_head xuong CPU, tiet "
+                         "kiem ~4.85GiB, da do mo khoa max-ctx=8192 cho 27B "
+                         "tren L4 (baseline OOM cung o do). 2 lan goi doc "
+                         "lap lien tiep da kiem tra OK (an toan cho train).")
     ap.add_argument("--sanity", type=int, default=0,
                     help="chay N buoc train roi dung + in VRAM (luot do 1)")
     ap.add_argument("--max-ctx", type=int, default=4096,
@@ -444,7 +451,8 @@ def main():
         items = json.loads((ldir / "items.json").read_text())
         theta_s = e5.e1.get_rope_theta(
             AutoConfig.from_pretrained(args.src_model).get_text_config())
-        tok_t, model_t = e5.load_4bit(args.tgt_model)
+        load_fn = e5.load_4bit_cpu_offload_io if args.tgt_cpu_offload else e5.load_4bit
+        tok_t, model_t = load_fn(args.tgt_model)
         theta_t = e5.e1.get_rope_theta(model_t.config.get_text_config())
         with torch.no_grad():
             probe = model_t(input_ids=torch.tensor([[1, 2, 3]], device="cuda"),
@@ -580,7 +588,12 @@ def main():
     # ---------------- PHASE B: 27B mot minh ---------------------------------
     theta_s = e5.e1.get_rope_theta(
         AutoConfig.from_pretrained(args.src_model).get_text_config())
-    tok_t, model_t = e5.load_4bit(args.tgt_model)
+    # user 2026-08-27 "training-test 4-27 ... voi ctx 8192 training": CPU-
+    # offload thu cong (load_4bit_cpu_offload_io) da do THAT mo khoa 8192
+    # cho 27B tren L4 (baseline OOM cung o day) -- xem STATUS.md muc MAPPER
+    # 4B->27B CPU offload thu cong: ket qua cuoi.
+    load_fn = e5.load_4bit_cpu_offload_io if args.tgt_cpu_offload else e5.load_4bit
+    tok_t, model_t = load_fn(args.tgt_model)
     if tok is None:
         tok = tok_t
     theta_t = e5.e1.get_rope_theta(model_t.config.get_text_config())
