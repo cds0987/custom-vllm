@@ -21,6 +21,28 @@ spec = importlib.util.spec_from_file_location(
 e5 = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(e5)
 
+# hoc phi 2026-08-27 (probe_27b_context_levers.py, cung bug): transformers
+# 5.15 update_recurrent_state lam .copy_() IN-PLACE len tensor state ("static
+# address for cudagraphs") -- pha vo autograd khi initial_state la tensor
+# mang grad. Rebind khi co grad; giu copy_ cho moi ca khac. PHAI vao truoc
+# khi goi load_4bit_cpu_offload_io (patch class-level, ap dung toan cuc).
+try:
+    from transformers.cache_utils import LinearAttentionLayer
+    _orig_urs = LinearAttentionLayer.update_recurrent_state
+
+    def _urs(self, recurrent_states, state_idx=0, **kw):
+        cur = (self.recurrent_states.get(state_idx)
+               if isinstance(self.recurrent_states, dict) else None)
+        if cur is not None and (cur.requires_grad or recurrent_states.requires_grad):
+            self.recurrent_states[state_idx] = recurrent_states
+            return recurrent_states
+        return _orig_urs(self, recurrent_states, state_idx, **kw)
+
+    LinearAttentionLayer.update_recurrent_state = _urs
+    print("patched update_recurrent_state (rebind khi co grad)")
+except ImportError as e:
+    print("PATCH_IMPORT_FAIL", e)
+
 
 def mem():
     import torch
@@ -76,7 +98,16 @@ def main():
     import gc
     import torch
     tok, m = e5.load_4bit_cpu_offload_io("Qwen/Qwen3.5-27B")
-    print(f"LOAD manual-offload peak={mem():.2f}GiB "
+    # peak-during-load (bao gom moc full-GPU thoang qua TRUOC khi 2 module
+    # bi day xuong CPU) khac voi bo nho ON DINH sau do -- do rieng ca hai,
+    # keo tranh nham lan da xay ra o ban truoc (bao "peak" = load peak,
+    # khong phai steady-state that su tiet kiem duoc).
+    peak_during_load = mem()
+    gc.collect()
+    torch.cuda.empty_cache()
+    steady_after_offload = torch.cuda.memory_allocated() / 2**30
+    print(f"LOAD manual-offload peak_during_load={peak_during_load:.2f}GiB "
+          f"steady_after_offload={steady_after_offload:.2f}GiB "
           f"embed_dev={m.model.embed_tokens.weight.device} "
           f"lmhead_dev={m.lm_head.weight.device}")
     for T in (4096, 8192, 16384):
