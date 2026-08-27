@@ -51,12 +51,18 @@ PROMPTS_F = "/content/ext_bench_items.json"
 
 # --------------------------------------------------------------- loaders ---
 
-def _musr_items():
+def _musr_items(n=None):
+    """n = tong so mau muon lay -- chia DEU 3 the loai (giu da dang). Cac id
+    sinh ra on dinh theo thu tu goc nen ket qua self cu (756 mau) van dung
+    lai duoc cho tap con."""
     from datasets import load_dataset
     items = []
+    per = None if n is None else max(1, n // 3)
     for split in ("murder_mysteries", "object_placements", "team_allocation"):
         ds = load_dataset("TAUR-Lab/MuSR", split=split)
         for i, ex in enumerate(ds):
+            if per is not None and i >= per:
+                break
             # "choices" la python-repr (nhay don), khong phai JSON chuan
             # (bug thuc te: json.loads FAIL "Expecting value: line 1 column
             # 2" tren du lieu that) -> ast.literal_eval an toan hon eval.
@@ -206,7 +212,7 @@ def _compute_items(n):
 def gen(bench_list, n_compute, n_each=500):
     items = []
     if "musr" in bench_list:
-        items += _musr_items()
+        items += _musr_items(n_each)
     if "aime" in bench_list:
         items += _aime_items()
     if "bbh" in bench_list:
