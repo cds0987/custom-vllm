@@ -1351,6 +1351,61 @@ Hạ tầng: gen-n 240 prompt aligned (rem 2-4), self-baseline 1 lượt +
 - kv_role kv_producer/kv_consumer chạy sạch (lần đầu dùng, 10 wave 0 lỗi
   role); toàn chuỗi 2h tự động không ngã.
 
+## BENCHMARK NGOÀI — baseline 27B THUẦN (2026-08-27, user chốt bộ đề)
+
+User: "test 4-27 trên 1 bộ dài vài nghìn samples với đủ thể loại câu hỏi...
+thử thuần 27B, sau đó apply training và re-test, để thấy tổng quát khả năng
+của mapper", sau đó chốt tiếp: bỏ CUDA (compute-eval), chỉ math+reasoning,
+200 mẫu/bộ, và "ko chỉ xem kết quả, phải xem cách model suy luận, có tạo dữ
+liệu rác ko, có hallu ko".
+
+Bộ đề chốt (1138 mẫu chạy thật; code `ext_bench.py`, kết quả HF `extbench_self/`):
+
+    bench     n     đúng    rác   lặp>0,6  cắt-hại  ko-đáp-án  hallu  sai-tính  ký-tự-TB
+    bbh     182    53,8%   0,0%     0,0%     0,0%       0,0%   0,00      0,00        88
+    gsm8k   200    80,0%   2,5%     0,0%     4,5%      21,5%   0,00      0,12       652
+    musr    198    58,1%   0,0%     0,0%     8,6%       8,6%   0,04      0,00        85
+    (musr toàn bộ 756 mẫu: 405 = 53,6% — bản 198 là tập con của bộ đề mới)
+
+**Chất lượng sinh của 27B thuần (mốc đối chứng cho mapper)**:
+- **KHÔNG degenerate**: lặp trigram >0,6 = 0,0% ở CẢ 3 bộ. Đây là mốc quan
+  trọng nhất — chiến dịch Phase C đã cho thấy chữ ký hỏng của cache ngoại
+  là "ra đúng vài ký tự đầu rồi lặp/trôi". Baseline sạch 0% nghĩa là khi
+  chạy cross, MỌI tỷ lệ rác > 0 đều quy được cho mapper.
+- **Không bịa tên** (hallu ~0,00-0,04/mẫu; soi 8 ca musr còn lại vẫn là
+  báo động giả: 'Explicitly', 'Poor' — từ viết hoa đầu dòng).
+- Sai chủ yếu là **"sai nhưng sạch"** (204 ca): suy luận đúng dạng, đúng
+  trọng tâm, chọn nhầm đáp án — khác hẳn sinh bậy.
+- gsm8k: 21,5% "không đáp án" là do model kết luận bằng câu chữ thay vì
+  'Final Answer:'/\boxed (chấm vẫn bắt được qua số cuối); 0,12 phép tính
+  sai/mẫu — có trượt số học lẻ tẻ nhưng phần lớn vẫn ra đúng kết quả.
+
+**AIME và MATH-500 bị loại (có lý do đo được, không phải bỏ tùy tiện)**:
+AIME 431s/bài dùng TRỌN 2560 token mà vẫn cắt giữa phần suy nghĩ → 0/2,
+sẽ về ~0; một bộ đạt 0% KHÔNG đo được suy giảm của mapper (không có gì
+để suy giảm). MATH-500 dừng theo lệnh user ("đã đủ để đánh giá") — tiết
+kiệm ~6h GPU cho self và ~7h cho cross.
+
+**Hạ tầng đo: 3 lần suýt báo cáo số liệu SAI trong cùng phiên** (ghi lại
+vì đây là rủi ro hệ thống, không phải xui rủi):
+1. MuSR 198/198 hit=0 — Qwen3.5 là model *thinking*, `max_new=8` khiến nó
+   chưa thoát khỏi `<think>`. Vá: đóng sẵn `<think>\n\n</think>` trong prompt.
+2. AIME 0/5 — ngân sách 1024 token không đủ cho suy luận; và chấm điểm
+   `_strip_think` XOÁ mất `\boxed{}` nằm trong khối think.
+3. `bench_analyze` báo "rác 7,1%, cắt 88,4%, hallu 0,15/mẫu" — cả 3 đều là
+   BÁO ĐỘNG GIẢ (câu trả lời ngắn đúng ' B' bị cờ empty<3; musr chỉ 24
+   token nên cắt sau khi đã trả lời = vô hại; tiêu đề markdown
+   '**Initial State:**' bị tính là tên bịa).
+→ Từ đó mỗi lớp đo có test chạy KHÔNG cần GPU: `test_ext_bench_scoring.py`
+(14/14) và `test_bench_analyze.py` (9/9). Quy tắc rút ra: **hit=0 hàng
+loạt phải nghi harness TRƯỚC khi kết luận năng lực model.**
+
+**Bước kế**: train mapper 4→27B @ctx8192 (`--tgt-cpu-offload` đã tích hợp)
+rồi `ext_bench.py cross --mapper <ckpt>` trên ĐÚNG 1138 mẫu này.
+`bench_analyze --glob-b` trả lời câu hỏi then chốt mà tỷ lệ đúng/sai không
+bao giờ cho thấy: trong các ca *self đúng → cross sai*, bao nhiêu % do
+**sinh rác** (cache hỏng) và bao nhiêu % do **suy luận kém** (mất thông tin).
+
 ## MAPPER 4B→9B — TRAIN THẬT XONG (2026-08-27, max-ctx=16384)
 
 User duyệt "phóng train thật cho 4→9, theo cách làm 4-27". Chạy nguyên

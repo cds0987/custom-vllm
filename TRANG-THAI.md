@@ -279,6 +279,19 @@ Cập nhật: 2026-08-27.
   v3.5 cũ). Checkpoint + data trên HF `v49/`. Bước kế chờ chọn: (a)
   tích hợp vLLM serving Phase C3, (b) đo trên `suite_gen.py`
   (rag/mid/math/swe), (c) đóng gói kiểu cascade_427 cho 4→9.
+- **BENCHMARK NGOÀI — baseline 27B THUẦN XONG (2026-08-27)**: bộ đề user
+  chốt (bỏ CUDA/AIME/MATH-500, giữ math+reasoning): **BBH 98/182=53,8% |
+  GSM8K 160/200=80% | MuSR 115/198=58,1%** (toàn bộ 756: 53,6%).
+  **Chất lượng sinh: rác 0,0% cả 3 bộ, hallu ~0** — mốc đối chứng then
+  chốt: khi chạy cross, mọi tỷ lệ rác > 0 đều quy được cho mapper. Sai
+  chủ yếu là "sai nhưng sạch" (suy luận đúng dạng, chọn nhầm đáp án).
+  Kết quả + phân tích trên HF `extbench_self/`. Code: `ext_bench.py`,
+  `bench_analyze.py` (soi rác/hallu/cắt/sai-tính) + 2 bộ test không cần
+  GPU (14/14, 9/9) — dựng sau khi 3 LẦN suýt báo cáo số liệu sai vì lỗi
+  harness (thinking-model, ngân sách token, báo động giả). Bước kế:
+  train mapper 4→27B @ctx8192 (--tgt-cpu-offload) → `ext_bench.py cross`
+  trên ĐÚNG 1138 mẫu này → `bench_analyze --glob-b` để biết ca self-đúng→
+  cross-sai là do SINH RÁC hay SUY LUẬN KÉM. CHỜ USER DUYỆT train.
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
