@@ -410,8 +410,11 @@ def run_cross(bench_list, src_model, tgt_model, mapper_path, max_len, sl):
         probe_s = model_s(input_ids=torch.tensor([[1, 2, 3]], device="cuda"),
                           use_cache=True, logits_to_keep=1).past_key_values
     a_s, g_s = e5.split_layers(probe_s)
-    Hs = next(iter(g_s.values())).recurrent_states.shape[1]
-    k0 = next(iter(a_s.values())).keys
+    # transformers 5.15 boc recurrent_states/keys trong dict {0: tensor}
+    # -> phai qua e5._get() (bug that: "'dict' object has no attribute
+    # 'shape'"; cascade_427.py da dung dung, file nay sot).
+    Hs = e5._get(next(iter(g_s.values())).recurrent_states).shape[1]
+    k0 = e5._get(next(iter(a_s.values())).keys)
     attn_dim = k0.shape[1] * k0.shape[3]
     mapper = e5.Mapper(len(a_t), len(g_t), Hs, Ht, attn_dim, theta_s, theta_t)
     mapper.load(mapper_path)
