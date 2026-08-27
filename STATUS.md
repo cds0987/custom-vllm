@@ -1389,6 +1389,53 @@ này, kỳ vọng vượt xa); (b) đo mapper trên bộ `suite_gen.py`
 (rag/mid/math/swe) để so trực tiếp với target "80-90% như normal
 decode" user đề ra; (c) đóng gói `cascade_427.py`-style cho 4→9.
 
+## MAPPER 4B→27B — CPU offload thủ công: kết quả cuối (2026-08-27)
+
+Sau khi đường `accelerate` (device_map dict + `llm_int8_enable_fp32_cpu_
+offload`) vướng lỗi "meta tensor" (mục trên), viết `load_4bit_cpu_
+offload_io()` né hoàn toàn accelerate dispatch: nạp bình thường trên
+GPU rồi tự tay `.to('cpu')` + hook cho `embed_tokens`/`lm_head`. Mất
+4 lần relaunch để loại 2 bug TRONG PROBE (không phải trong đường
+offload): quên monkeypatch GDN autograd (bug cũ tái phát), và tái sử
+dụng 1 `past_key_values` qua nhiều `.backward()` gây "backward qua
+graph lần 2" — sau khi mỗi lần gọi tự dựng cache riêng (đúng thực tế
+train), kết quả sạch:
+
+    steady_after_offload : 12,81 GiB (so baseline 17,66GiB — tiết
+                            kiệm thật 4,85GiB, khớp đường accelerate
+                            cũ 12,94GiB — xác nhận 2 lần)
+    T=4096  : OK  peak 15,81GiB  t=2,38s
+    T=8192  : OK  peak 18,11GiB  t=1,40s   <- baseline OOM CỨNG ở đây
+    T=16384 : FAIL OOM (21,94GiB gần đầy — 4,85GiB tiết kiệm không đủ)
+
+    Kiểm tra sống còn — 2 lần gọi ĐỘC LẬP liên tiếp @8192 (mô phỏng
+    2 bước train kế tiếp, mỗi lần tự dựng cache từ đầu):
+    E-repeat1: OK peak 18,11GiB t=1,39s
+    E-repeat2: OK peak 18,11GiB t=1,42s
+
+**KẾT LUẬN DỨT KHOÁT: CPU-offload thủ công THẮNG THẬT ở T=8192.**
+Đây là độ dài baseline GPU-full OOM cứng (đo 2 lần, nhất quán). Tốc
+độ 1,4s/lần gọi — với vài trăm-nghìn bước train, tổng thời gian vẫn
+trong tầm vài giờ (ước ~1000 bước × 1,4s ≈ 23 phút phần forward+
+backward thuần, chưa tính overhead khác — hoàn toàn thực tế). Gọi
+lặp lại nhiều lần liên tiếp KHÔNG có vấn đề gì (2/2 thành công, thời
+gian ổn định) — nghi ngờ trước đó về cache dequant bitsandbytes giữa
+các lần gọi là SAI, lỗi nằm ở cách viết probe (chia sẻ 1 cache tái sử
+dụng), không phải giới hạn thật của kỹ thuật offload.
+
+T=16384 vẫn đóng — 4,85GiB tiết kiệm không đủ bù phần tăng bộ nhớ
+attention (repeat_kv) ở độ dài đó; cần đòn bẩy khác (chưa thử) nếu
+muốn đi xa hơn 8192.
+
+**Khuyến nghị cuối cho nhánh 4→27B**: max-ctx hiện có 2 lựa chọn đã
+đo — 4096 (an toàn tuyệt đối, không cần offload) hoặc **8192 (gần
+gấp đôi, cần tích hợp `load_4bit_cpu_offload_io` vào `e5_train.py`'s
+model loading path chính thức — hiện chỉ có trong probe, CHƯA nối
+vào `e6v3_ce.py`)**. Việc tích hợp là thay 1 dòng gọi hàm load, không
+phức tạp. Quyết định train 27B ở 8192 hay giữ 4096 — và có tích hợp
+offload vào pipeline train chính hay không — cần user duyệt (GPU dài
+hơi, khác phạm vi điều tra này).
+
 ## MAPPER 4B→27B — thử giải pháp mở rộng context (2026-08-27, user: "ko được kết luận sớm phải làm kỹ")
 
 User chất vấn kết luận cũ (27B kẹt ở 4096 trên L4) — đúng quy tắc 4, đã

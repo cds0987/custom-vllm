@@ -4,7 +4,7 @@ File này được CLAUDE.md nạp tự động đầu mỗi phiên. Claude TỰ
 trạng thái thay đổi — KHÔNG cần hỏi user. Giới hạn cứng ≤300 dòng; chi tiết dồn
 sang `STATUS.md`.
 
-Cập nhật: 2026-08-24.
+Cập nhật: 2026-08-27.
 
 ## Trạng thái hiện tại
 
@@ -42,10 +42,8 @@ Cập nhật: 2026-08-24.
   "hiểu" giảm đơn điệu 74%@2K → 53%@30K; **decode parity 11,8=11,8 tok/s**
   (mọi số decode 9B thuần giữ nguyên cho cross); 4B prefill vLLM 4771-5514
   tok/s → cascade TTFT 30K ×1,66. Chi tiết STATUS mục E1/E2/E3.
-- **E3B: đồng trú 2 vLLM server trên 1 L4 naive = BẤT KHẢ THI** (0.27.1 tính
-  non-torch bằng NVML, cộng VRAM process khác vào mình — 4 ràng buộc ghi
-  STATUS). Lối thoát chưa thử: `--kv-cache-memory-bytes`. EngineArgs có
-  `kv_transfer_config` = khung KVConnector cho Phase C.
+- **E3B: đồng trú 2 vLLM server 1-L4 naive = BẤT KHẢ THI** (0.27.1 cộng VRAM
+  process khác vào mình) — giải xong ở E3C bên dưới.
 - **E4 XONG (2026-08-15)**: 27B chạy được transformers/bnb-4bit trên L4 (mới).
   Số chốt: 4B↔9B CCA attention 0,98 (copy giữ ngôi, thiếu hụt @30K khoanh vùng
   GDN sâu); **x→27B attention CCA 0,93-0,97 = GO**, GDN giữa CCA 0,27 = tường
@@ -107,15 +105,9 @@ Cập nhật: 2026-08-24.
   **Cascade 4B→27B vượt thanh kinh tế — có giá trị sản phẩm thật.**
   ĐÃ UPLOAD HF (quy tắc 6d): `gunnybd01/qwen35-kv-mapper-4b-27b` (private) —
   mapper v31 best+last, 3 json kết quả, pseudo_gold, data.
-- **E6 v3.2 XONG (2026-08-25, scale-up user duyệt)**: data ×2,5 + 2000 bước
-  → **BFCL niêm phong MAPPED 17/20** (self 20, 4B-self 11); val needle
-  15/15 kể cả cỡ 1500; train-check 11/11+12/12 (học thật). **needle@2K
-  niêm phong: 1/10 — VÁCH ĐÁ độ dài giữa 1500-2000** (retention-length law:
-  train ≤950, GDN state ngoài phân phối ở 2K). ifstruct/pbtable vẫn 0 (nợ
-  mổ output). Hạ tầng chống chịu hoàn chỉnh (skip-OOM tự học + gstep bền +
-  val ngưỡng). Scope: fn-calling + retrieval ≤1500 tok = dùng được. NỢ
-  UPLOAD v32 lên HF — Colab Secrets HF_TOKEN CHƯA SET (user cần thêm).
-  Chi tiết STATUS mục E6 v3.2.
+- **E6 v3.2 XONG (2026-08-25)**: BFCL 17/20 nhưng needle@2K vách đá 1/10
+  (retention-length law) — vách đá này ĐÃ SỤP ở v3.3 bên dưới. Chi tiết
+  STATUS mục E6 v3.2.
 - **E6 v3.3 CODE SẴN SÀNG (2026-08-24, user duyệt hướng: tốc độ + ctx dài +
   chính xác)**: (tốc độ) bỏ 2 deepcopy ~600MB/bước (`clone_cache_struct`),
   Phase B1 tiền tính teacher 1 lần/item (top-64 logp + dense caps 4 layer
@@ -270,6 +262,14 @@ Cập nhật: 2026-08-24.
   test tiếp, ước 1-2h kỹ thuật. Đã viết `load_4bit_cpu_offload_io`
   (né accelerate dispatch, tự tay hook 2 module) + probe latency
   riêng — CHƯA chạy được (GPU bận train 4→9), chờ khe hở GPU.
+- **CPU-offload thủ công 27B — KẾT LUẬN CUỐI (2026-08-27): THẮNG THẬT
+  ở T=8192** (mốc baseline OOM cứng) — steady 12,81GiB (tiết kiệm
+  4,85GiB), T=8192 OK peak 18,11GiB t=1,4s, **2 lần gọi độc lập liên
+  tiếp đều OK** (đúng mô phỏng 2 bước train kế tiếp — an toàn cho
+  train nhiều bước). T=16384 vẫn OOM (tiết kiệm không đủ). Khuyến
+  nghị: có thể train 27B ở max-ctx=8192 nếu tích hợp
+  `load_4bit_cpu_offload_io` vào `e6v3_ce.py` (hiện chỉ có trong
+  probe, chưa nối vào pipeline train chính) — CHỜ USER DUYỆT.
 - **MAPPER 4B→9B TRAIN THẬT XONG (2026-08-27, max-ctx=16384)**: dừng
   sớm đúng CE_FLOOR ở bước 984/2600 — **BEST: BFCL 23/25 (92%) |
   needle 29/29 (100%) | score 54**. Nhỉnh hơn mapper 4→27B (BFCL
@@ -284,9 +284,7 @@ Cập nhật: 2026-08-24.
 
 1. ✅ Spec decoding — đóng bằng số đo.
 1b. ✅ Util sweep (lệnh user) — mặc định mới 0.97, đỉnh 12 phiên.
-2. **TIẾP: lấp vùng trắng 4B rồi 2B** — profile `serve 4b`/`serve 2b` + bộ bench
-   chuẩn (sanity → ppl gate → decode/prefill → agent-loop) → tier "throughput
-   giá rẻ" của ma trận. RedHatAI có frame w4a16 cho 4B.
+2. (Hoãn, KV-transfer chiếm ưu tiên từ 2026-08-14) profile `serve 4b`/`2b`.
 3. Soak test 3-4 giờ chạy nền (rò bộ nhớ? TTFT trôi?) — đặt cuối ngày.
 4. Đóng gói `serve 9b-prefill` (fp8 specialist, số đã đo) + cập nhật HTML report.
 5. (Hoãn) P5 ablation nguồn graft; P6 converter toàn-model; sửa harness 3 thang token.
