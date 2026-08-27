@@ -43,7 +43,8 @@ spec.loader.exec_module(e5)
 WARM_P = 5
 # ngan sach token sinh: musr/compute da chan thinking san trong
 # prompt nen khong can nhieu; aime CAN suy luan that (30 item).
-N_NEW = {"musr": 24, "aime": 2560, "compute": 900}
+N_NEW = {"musr": 24, "aime": 2560, "compute": 900,
+         "bbh": 48, "gsm8k": 320, "math500": 640}
 LOG_DIR = Path("/content/logs")
 PROMPTS_F = "/content/ext_bench_items.json"
 
@@ -92,6 +93,78 @@ def _aime_items():
     return items
 
 
+def _parquet(repo, path, rev="refs/convert/parquet"):
+    """Doc thang parquet -- ne loi validate Features cua `datasets` (da dinh
+    voi compute-eval: feature type 'Json' khong nhan dien duoc)."""
+    import pandas as pd
+    from huggingface_hub import hf_hub_download
+    return pd.read_parquet(hf_hub_download(repo, path, repo_type="dataset",
+                                           revision=rev))
+
+
+BBH_TASKS = [
+    "boolean_expressions", "causal_judgement", "date_understanding",
+    "disambiguation_qa", "formal_fallacies", "geometric_shapes", "hyperbaton",
+    "logical_deduction_five_objects", "logical_deduction_seven_objects",
+    "logical_deduction_three_objects", "movie_recommendation",
+    "multistep_arithmetic_two", "navigate", "object_counting",
+    "penguins_in_a_table", "reasoning_about_colored_objects", "ruin_names",
+    "salient_translation_error_detection", "snarks", "sports_understanding",
+    "temporal_sequences", "tracking_shuffled_objects_five_objects",
+    "tracking_shuffled_objects_seven_objects",
+    "tracking_shuffled_objects_three_objects", "web_of_lies", "word_sorting",
+]
+
+
+def _bbh_items(n):
+    """BIG-Bench Hard: lay DEU tren 26 tac vu de do dien rong suy luan."""
+    per = max(1, n // len(BBH_TASKS))
+    items = []
+    for task in BBH_TASKS:
+        try:
+            df = _parquet("lukaemon/bbh", f"{task}/test/0000.parquet")
+        except Exception as e:
+            print(f"bbh skip {task}: {type(e).__name__}")
+            continue
+        for i, row in df.head(per).iterrows():
+            items.append({
+                "bench": "bbh", "sub": task, "id": f"{task}/{i}",
+                "prompt": (f"{row['input']}\n\nAnswer concisely.\n"
+                           f"<think>\n\n</think>\n\nAnswer: "),
+                "expect": str(row["target"]).strip()})
+        if len(items) >= n:
+            break
+    return items[:n]
+
+
+def _gsm8k_items(n):
+    df = _parquet("openai/gsm8k", "main/test/0000.parquet")
+    items = []
+    for i, row in df.head(n).iterrows():
+        gold = str(row["answer"]).split("####")[-1].strip().replace(",", "")
+        items.append({
+            "bench": "gsm8k", "sub": "main", "id": f"gsm8k/{i}",
+            "prompt": (f"Solve step by step, then give the final numeric "
+                       f"answer after 'Final Answer: '.\n\n"
+                       f"Problem: {row['question']}\n\n"
+                       f"<think>\n\n</think>\n\nSolution: "),
+            "expect": gold})
+    return items
+
+
+def _math500_items(n):
+    df = _parquet("HuggingFaceH4/MATH-500", "default/test/0000.parquet")
+    items = []
+    for i, row in df.head(n).iterrows():
+        items.append({
+            "bench": "math500", "sub": str(row["subject"]), "id": f"math500/{i}",
+            "prompt": (f"Solve this problem. Put your final answer in "
+                       f"\\boxed{{}}.\n\nProblem: {row['problem']}\n\n"
+                       f"Solution: "),
+            "expect": str(row["answer"]).strip()})
+    return items
+
+
 def _compute_items(n):
     # datasets.load_dataset() FAIL that: schema compute-eval dung feature
     # type "Json" (cot timing_mode) ma ban `datasets` tren runtime khong
@@ -130,12 +203,18 @@ def _compute_items(n):
     return items
 
 
-def gen(bench_list, n_compute):
+def gen(bench_list, n_compute, n_each=500):
     items = []
     if "musr" in bench_list:
         items += _musr_items()
     if "aime" in bench_list:
         items += _aime_items()
+    if "bbh" in bench_list:
+        items += _bbh_items(n_each)
+    if "gsm8k" in bench_list:
+        items += _gsm8k_items(n_each)
+    if "math500" in bench_list:
+        items += _math500_items(n_each)
     if "compute" in bench_list:
         items += _compute_items(n_compute)
     with open(PROMPTS_F, "w") as fh:
@@ -158,8 +237,55 @@ def _strip_think(text):
     return re.sub(r"<think>.*?</think>", " ", text, flags=re.S)
 
 
+def _all_boxed(text):
+    r"""Trich MOI \boxed{...} voi ngoac CAN BANG. Regex [^}]* that bai voi
+    LaTeX long nhau: \boxed{\frac{1}{2}} bi cat thanh '\frac{1' (bug that,
+    bat duoc bang self-test truoc khi chay GPU)."""
+    out = []
+    for m in re.finditer(r"\\boxed\{", text):
+        i = m.end()
+        depth, start = 1, i
+        while i < len(text) and depth:
+            if text[i] == "{":
+                depth += 1
+            elif text[i] == "}":
+                depth -= 1
+            i += 1
+        if depth == 0:
+            out.append(text[start:i - 1])
+    return out
+
+
+def _norm_math(x):
+    """Chuan hoa dap an toan: bo dau phay, $, khoang trang, .0 thua."""
+    x = str(x).strip().replace(",", "").replace("$", "").replace(" ", "")
+    x = x.rstrip(".")
+    if re.fullmatch(r"-?\d+\.0+", x):
+        x = x.split(".")[0]
+    return x
+
+
 def score_text(it, text):
     t = _strip_think(text)
+    if it["bench"] == "bbh":
+        # dap an BBH thuong la (A)/(B), Yes/No, hoac chuoi ngan -> so khop
+        # sau khi chuan hoa hoa/thuong + bo ngoac.
+        exp = it["expect"].strip()
+        low_t, low_e = t.lower(), exp.lower()
+        if re.fullmatch(r"\([A-Z]\)", exp):
+            m = re.search(r"\(([A-Za-z])\)", t)
+            return int(bool(m) and f"({m.group(1).upper()})" == exp)
+        return int(low_e in low_t)
+    if it["bench"] in ("gsm8k", "math500"):
+        exp = _norm_math(it["expect"])
+        boxed = _all_boxed(text)
+        if boxed and _norm_math(boxed[-1]) == exp:
+            return 1
+        fin = re.findall(r"Final Answer:\s*\$?([^\n$]+)", text)
+        if fin and _norm_math(fin[-1]) == exp:
+            return 1
+        nums = re.findall(r"-?\d+(?:\.\d+)?", t)
+        return int(bool(nums) and _norm_math(nums[-1]) == exp)
     if it["bench"] == "musr":
         m = re.search(r"\b([A-F])\b", t)
         return int(bool(m) and m.group(1) == it["expect"])
@@ -167,14 +293,21 @@ def score_text(it, text):
         # \boxed{} CUOI CUNG tren van ban DAY DU (ke ca trong <think>):
         # do la ket luan cua model theo chuan eval AIME. Khong dung
         # text da _strip_think vi dap an thuong nam trong do.
+        # AIME ghi dap an 3 chu so co so 0 dan (\boxed{033} = 33) -- so khop
+        # chuoi tho se cham HUT diem model. So sanh theo GIA TRI SO.
+        def _eq(x):
+            try:
+                return int(x) == int(it["expect"])
+            except ValueError:
+                return False
         boxed = re.findall(r"\\boxed\{\s*(-?\d+)", text)
         if boxed:
-            return int(boxed[-1] == it["expect"])
+            return int(_eq(boxed[-1]))
         fin = re.findall(r"Final Answer:\s*\$?\\?b?o?x?e?d?\{?\s*(-?\d+)", text)
         if fin:
-            return int(fin[-1] == it["expect"])
+            return int(_eq(fin[-1]))
         nums = re.findall(r"-?\d+", t)
-        return int(bool(nums) and nums[-1] == it["expect"])
+        return int(bool(nums) and _eq(nums[-1]))
     raise ValueError(it["bench"])
 
 
@@ -347,8 +480,10 @@ def agg():
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("mode", choices=["gen", "self", "cross", "agg", "check-nvcc"])
-    ap.add_argument("--bench", default="musr,aime,compute")
+    ap.add_argument("--bench", default="musr,bbh,gsm8k,math500,aime")
     ap.add_argument("--n-compute", type=int, default=60)
+    ap.add_argument("--n-each", type=int, default=500,
+                    help="so mau moi bo bbh/gsm8k/math500")
     ap.add_argument("--src-model", default="Qwen/Qwen3.5-4B")
     ap.add_argument("--tgt-model", default="Qwen/Qwen3.5-27B")
     ap.add_argument("--mapper", default="/content/mapper_v427_8k.pt")
@@ -357,7 +492,7 @@ if __name__ == "__main__":
     args = ap.parse_args()
     bl = args.bench.split(",")
     if args.mode == "gen":
-        gen(bl, args.n_compute)
+        gen(bl, args.n_compute, args.n_each)
     elif args.mode == "check-nvcc":
         ok, out = check_nvcc()
         print("NVCC_OK" if ok else "NVCC_MISSING", out[:200])
