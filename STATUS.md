@@ -1351,6 +1351,83 @@ Hạ tầng: gen-n 240 prompt aligned (rem 2-4), self-baseline 1 lượt +
 - kv_role kv_producer/kv_consumer chạy sạch (lần đầu dùng, 10 wave 0 lỗi
   role); toàn chuỗi 2h tự động không ngã.
 
+## MAPPER 4B→27B — CROSS trên benchmark ngoài: KẾT QUẢ CUỐI (2026-08-28)
+
+Chuỗi đầy đủ user yêu cầu ("thử thuần 27B, sau đó apply training và re-test,
+để thấy tổng quát khả năng của mapper"). Mapper train xong @ctx4096
+(warm-start v34, dừng sớm CE_FLOOR @1075, val curve 27→29→34→38→39).
+
+**Test NIÊM PHONG (miền ĐÃ train) — tái lập kỷ lục:**
+
+    bfcl:     self 20/20 | mapped 18/20 (90%) | no_ctx 0/20
+    needle2K: self 15/15 | mapped 15/15 (100%) | no_ctx 0/15
+
+**Benchmark NGOÀI (miền HOÀN TOÀN MỚI) — sụp đổ, kèm đối chứng 4B:**
+
+    bo       n    27B-self   cross-mapper   giữ được   4B-self
+    bbh    182      53,8%          6,0%        11%      34,6%
+    gsm8k   50*     80,0%          0,0%         0%      81,5%
+    musr   198      58,1%          1,5%       2,6%       4,5%
+    (* gsm8k cross cắt ở 50 mẫu sau 0/46 — CI trên ~7,7%, không đáng
+       tốn thêm 2,4h GPU cho kết quả đã biết)
+
+**ĐỐI CHỨNG 4B-self là chìa khóa giải thích** (phép đo quyết định, rẻ ~1h):
+- gsm8k: 4B-self **81,5%** — CAO HƠN cả 27B (80,0%)! Thông tin để giải
+  toán NẰM SẴN trong cache 4B, model 4B tự đọc cache của mình làm được
+  163/200. Nhưng cache đó đi qua mapper sang 27B thì còn **0/50**.
+  → Lỗi HOÀN TOÀN ở khâu DỊCH của mapper, không phải giới hạn model nguồn.
+- bbh: 4B-self 34,6% vs cross 6,0% — cùng kết luận.
+- musr: 4B-self chỉ 4,5% (4B không làm được bài suy luận truyện dài) →
+  riêng bộ này cache nguồn vốn nghèo, cross 1,5% không nói lên nhiều.
+
+**Chất lượng sinh (self rác 0,2% → mọi rác đều do mapper):**
+
+    chỉ số            self     cross    chênh
+    đúng             58,8%      3,3%   -55,6%
+    sinh rác          0,2%     15,6%   +15,3%
+    bị cắt            4,9%     19,8%   +14,9%
+    không ra đáp án   6,5%     55,1%   +48,6%
+    lặp trigram TB    0,015     0,186   +0,172
+
+**Phân loại 243 ca self-đúng→cross-sai** (bench_analyze chỉ bắt được
+nhánh 1; nhánh 2 phải ĐỌC TAY vì văn bản hoàn toàn sạch):
+1. **SINH RÁC / degenerate: 53 ca (22%)** — lặp vô hạn
+   ("The probability of the event is 1/2." ×4), chuỗi số dài
+   ("1000000...", rep=35), gsm8k rác tới 98%.
+2. **LẠC ĐỀ nhưng MẠCH LẠC: phần lớn 78% còn lại** — nguy hiểm hơn vì
+   trông như câu trả lời thật:
+   - hỏi biểu thức boolean → "xác suất tung xúc xắc bằng 7 là..."
+   - hỏi bảng chim cánh cụt → "chiều cao trung bình của người là 170cm"
+   - hỏi án mạng (MuSR) → "bài hát The Troubadour của The Beatles"
+   - hallu tên riêng 0,63/mẫu ở musr (self: 0,04) — bịa Beatles, Prada,
+     United States… hoàn toàn không có trong đề.
+3. musr thêm dấu hiệu: 94,4% "không ra đáp án", 39,9% bị cắt trước khi
+   trả lời — cache không dẫn model tới định dạng câu trả lời.
+
+**KẾT LUẬN KHOA HỌC**: mapper 35M **KHÔNG học "cách dịch cache" tổng
+quát — chỉ học được ánh xạ CHO MIỀN CỤ THỂ đã train**. Bằng chứng:
+90% BFCL / 100% needle trong miền, nhưng 0-6% ngoài miền, trong khi
+đối chứng chứng minh thông tin CÓ sẵn trong cache nguồn (gsm8k 81,5%).
+Đây là phán quyết lần 4 về giới hạn LỚP HÀM của mapper (xem E6 v3, v3.1),
+lần này có thêm đối chứng 4B-self nên loại trừ được giả thuyết "model
+nguồn yếu".
+
+**Hàm ý sản phẩm**: cascade 4→27B dùng được TRONG miền đã train
+(function-calling, retrieval needle ≤4K) — đó vẫn là sản phẩm thật với
+số đo vững. Nhưng KHÔNG bán được như "tăng tốc đa dụng". Muốn tổng quát:
+phải đa dạng hóa mạnh miền train (thêm reasoning/math/QA vào data), hoặc
+đổi lớp hàm mapper (hiện chỉ là ánh xạ tuyến tính per-layer).
+
+Kết quả thô + phân tích: HF `extbench_cross/` (cross 3 bộ, self4b 3 bộ,
+bench_quality.json). Code: `ext_bench.py`, `bench_analyze.py`.
+
+**2 bug hạ tầng vá trong lượt này**: (1) dict-wrap transformers 5.15
+(`recurrent_states`/`keys` bọc `{0: tensor}` → phải qua `e5._get()`);
+(2) OOM do nạp CẢ 4B (3,5GB) LẪN 27B (18GB) cùng lúc trên card 22GB →
+đổi `run_cross` sang KIẾN TRÚC HAI PHA (4B spill cache ra đĩa → xả →
+27B đọc lại), đúng như docstring `e5_train` đã cảnh báo từ đầu và
+`cascade_427.py` đã làm.
+
 ## BENCHMARK NGOÀI — baseline 27B THUẦN (2026-08-27, user chốt bộ đề)
 
 User: "test 4-27 trên 1 bộ dài vài nghìn samples với đủ thể loại câu hỏi...

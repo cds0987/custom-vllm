@@ -4,7 +4,7 @@ File này được CLAUDE.md nạp tự động đầu mỗi phiên. Claude TỰ
 trạng thái thay đổi — KHÔNG cần hỏi user. Giới hạn cứng ≤300 dòng; chi tiết dồn
 sang `STATUS.md`.
 
-Cập nhật: 2026-08-27.
+Cập nhật: 2026-08-28.
 
 ## Trạng thái hiện tại
 
@@ -82,40 +82,19 @@ Cập nhật: 2026-08-27.
   trả processor đa phương thức); tinh túy giữ được = bf16 student (docs
   "KHÔNG QLoRA trên Qwen3.5" trùng E6c) + kernel Triton. Chi tiết STATUS E8.
 
-- **E6 v3 ĐÓNG (2026-08-24, CE-gold mapper 4B→27B trên miền thật — user chốt
-  "KL chưa đủ")**: loss CE(gold)+0,3KL+dense, data BFCL/ifstruct(pseudo-gold
-  +validator)/ParseBench-table/needle (585 train/50 val/30 test niêm phong),
-  3 chốt chặn (best-by-val, stale-3, CE_FLOOR 0,2). **CE train 8,7→0,008
-  (thuộc lòng) nhưng VAL 0 TOÀN TUYẾN 4 mốc; test niêm phong BFCL: self
-  20/20 | mapped 0/20** (needle2k vô hiệu — bug TRAIN_MAX cắt câu hỏi).
-  PHÁN QUYẾT lần 3 qua 3 hàm loss: mapper 35M không tổng quát hóa được
-  cross-shape — vấn đề ở LỚP HÀM. Trận runtime mới: 7 bug (zombie PID,
-  datasets parser, cache dict 5.15, copy_ in-place phá autograd, seed-skip
-  treo, hook OOM, cell kill nhầm) — hạ tầng .last+resume+retry sống sót
-  thật. → PHÁN QUYẾT NÀY BỊ LẬT bởi v3.1 (dưới).
-- **E6 v3.1 ĐỘT PHÁ (2026-08-24): mapper 4B→27B SỐNG — BFCL niêm phong
-  MAPPED 16/20** (self 20/20, 4B-self 11/20, v3.0 4/20, init 0/20). Nguyên
-  nhân v3.0 chết: CONV_WARM bỏ 4 token đầu GOLD khỏi loss — token quyết
-  định không bao giờ được dạy (user truy ra bằng train-check 1/30 + nghi
-  "loss CE chưa đúng"). Fix: cache cắt T-5 + warm conv bằng 5 token cuối
-  prompt + CE trọn gold, token đầu ×3. Val needle 8/10 @449 (truyền NỘI
-  DUNG qua tường GDN, cache chưa gặp); train-check bfcl 7/15 needle 8/9.
-  **Cascade 4B→27B vượt thanh kinh tế — có giá trị sản phẩm thật.**
-  ĐÃ UPLOAD HF (quy tắc 6d): `gunnybd01/qwen35-kv-mapper-4b-27b` (private) —
-  mapper v31 best+last, 3 json kết quả, pseudo_gold, data.
+- **E6 v3 ĐÓNG (2026-08-24)**: CE-gold loss, val 0 toàn tuyến, test niêm
+  phong mapped 0/20 → nghi lớp hàm. BỊ LẬT bởi v3.1. Chi tiết STATUS.
+- **E6 v3.1 ĐỘT PHÁ (2026-08-24): mapper 4B→27B SỐNG — BFCL 16/20**.
+  Nguyên nhân v3.0 chết: CONV_WARM bỏ token GOLD đầu khỏi loss. Fix: cache
+  cắt T-5 + warm conv 5 token cuối + CE trọn gold. Chi tiết STATUS.
 - **E6 v3.2 XONG (2026-08-25)**: BFCL 17/20 nhưng needle@2K vách đá 1/10
   (retention-length law) — vách đá này ĐÃ SỤP ở v3.3 bên dưới. Chi tiết
   STATUS mục E6 v3.2.
 - **E6 v3.3 CODE (2026-08-24)**: bỏ deepcopy, B1 tiền tính teacher,
   checkpoint map_attn, needle curriculum → chi tiết STATUS. `--gdn-bf16` loại.
-- **E6 v3.3 XONG (2026-08-25): KỶ LỤC KÉP NIÊM PHONG — BFCL MAPPED 18/20
-  (self 20; v3.2: 17) + needle@2K MAPPED 10/10 TUYỆT ĐỐI (v3.2: 1/10) —
-  VÁCH ĐÁ ĐỘ DÀI SỤP.** Nguyên nhân thắng: needle curriculum train tới
-  2000 (vách đá là artifact phân phối train, không phải giới hạn GDN);
-  tốc độ ~2,2 s/bước (nhanh 2× v3.2 nhờ bỏ deepcopy + teacher tiền tính
-  B1); 0 retry/0 OOM toàn run — lần đầu E-series đi hết không ngã. Val
-  curve 12→40, CE_FLOOR dừng sớm @1750 đúng kỷ luật. ifstruct 1/15 lần
-  đầu có điểm; mổ dumps: ifstruct/pbtable chết chung bệnh repetition
+- **E6 v3.3 XONG (2026-08-25): BFCL 18/20 + needle@2K 10/10 — VÁCH ĐÁ ĐỘ
+  DÀI SỤP** (needle curriculum tới 2000: vách đá là artifact phân phối
+  train). ~2,2 s/bước, 0 retry. ifstruct/pbtable: repetition
   collapse sinh dài (>~30 tok) + nghi trần teacher pseudo-gold — thuốc
   v3.4 ở decode-time. Scope cascade 4B→27B: fn-calling 90% trần +
   retrieval ≤2000 tuyệt đối. Chi tiết STATUS mục E6 v3.3.
@@ -125,17 +104,10 @@ Cập nhật: 2026-08-27.
   thức còn nguyên trong git; tái tạo = ~10h GPU (xác định). TỪ GIỜ:
   KHÔNG phóng train dài khi chưa có đường upload sống (điều kiện cứng
   trước v3.4 full).**
-- **E6 v3.4-long XONG (2026-08-25): TÁI LẬP 18/20 BFCL + needle NIÊM
-  PHONG 15/15 TUYỆT ĐỐI (10@2K + 5@4K chưa từng gặp).** Ladder phán: L4
-  trần ở 4096 (8K/16K OOM phần cứng — 16K cần A100); tpl-check 8/8 đúng
-  từng bit → template-XƯƠNG thay hẳn teacher prefill: ~1,4 s/bước (nhanh
-  40% hơn v3.3 dù data dài ×2). Val needle 23/23 mọi bucket từ mốc 1249;
-  CE_FLOOR dừng @2016. Tái lập 18/20 sau khi MẤT SẠCH checkpoint = công
-  thức thật. **AUTO-UPLOAD HF mỗi mốc val chạy thật** — mapper_v34 (best,
-  .last), results, pseudo_gold, data đều đã ở `gunnybd01/qwen35-kv-mapper-
-  4b-27b/v34/` ngay trong phiên. Token flow mới: .env root repo (user
-  chốt), cell launch tự dựng lại sau recycle. ifstruct/pbtable vẫn 0
-  (bệnh sinh-dài decode-time — v3.5). Chi tiết STATUS mục E6 v3.4.
+- **E6 v3.4-long XONG (2026-08-25): 18/20 BFCL + needle NIÊM PHONG 15/15**
+  (10@2K + 5@4K). Ladder: L4 trần 4096; template-XƯƠNG thay teacher
+  prefill (~1,4 s/bước). Auto-upload HF `v34/` mỗi mốc val. Token flow:
+  .env root repo. Chi tiết STATUS mục E6 v3.4.
   Ngã rẽ kế: Phase C (KVConnector vLLM — template-xương tái dùng được)
   vs v3.5 (decode-time cho sinh dài) vs A100 cho 8K/16K.
 - **E6 v3.5 XONG (2026-08-25, user chốt "C, v3.5")**: mổ sinh-dài bằng 4
@@ -278,10 +250,28 @@ Cập nhật: 2026-08-27.
   Kết quả + phân tích trên HF `extbench_self/`. Code: `ext_bench.py`,
   `bench_analyze.py` (soi rác/hallu/cắt/sai-tính) + 2 bộ test không cần
   GPU (14/14, 9/9) — dựng sau khi 3 LẦN suýt báo cáo số liệu sai vì lỗi
-  harness (thinking-model, ngân sách token, báo động giả). Bước kế:
-  train mapper 4→27B @ctx8192 (--tgt-cpu-offload) → `ext_bench.py cross`
-  trên ĐÚNG 1138 mẫu này → `bench_analyze --glob-b` để biết ca self-đúng→
-  cross-sai là do SINH RÁC hay SUY LUẬN KÉM. CHỜ USER DUYỆT train.
+  harness (thinking-model, ngân sách token, báo động giả).
+- **MAPPER 4→27B TRAIN @ctx4096 + CROSS: PHÁN QUYẾT (2026-08-28)** —
+  chi tiết STATUS mục "CROSS trên benchmark ngoài: KẾT QUẢ CUỐI".
+  Train: warm-start v34, dừng sớm CE_FLOOR @1075, val 27→29→34→38→39.
+  **Test NIÊM PHONG (miền ĐÃ train) tái lập kỷ lục: bfcl 18/20, needle@2K
+  15/15, no_ctx 0/20.** Nhưng **benchmark NGOÀI sụp đổ**: BBH 6,0% (self
+  53,8%) | GSM8K 0% (self 80%) | MuSR 1,5% (self 58,1%).
+  **ĐỐI CHỨNG 4B-self là chìa khóa**: gsm8k 4B-self **81,5%** — CAO HƠN
+  27B! Thông tin CÓ SẴN trong cache 4B nhưng qua mapper còn 0% → lỗi ở
+  khâu DỊCH, không phải giới hạn model nguồn. Chất lượng sinh: rác
+  0,2%→15,6%, không-ra-đáp-án 6,5%→55,1%. Phân loại 243 ca self-đúng→
+  cross-sai: 22% SINH RÁC, 78% LẠC ĐỀ NHƯNG MẠCH LẠC (nguy hiểm hơn —
+  hỏi boolean trả lời xác suất, hỏi án mạng trả lời về Beatles; hallu
+  tên riêng musr 0,63/mẫu vs self 0,04).
+  **KẾT LUẬN: mapper 35M chỉ học ánh xạ CHO MIỀN CỤ THỂ, KHÔNG học
+  "cách dịch cache" tổng quát** (phán quyết lần 4 về lớp hàm, lần này
+  có đối chứng nên loại trừ được giả thuyết "model nguồn yếu").
+  Hàm ý: cascade 4→27B bán được TRONG miền đã train (fn-calling,
+  retrieval ≤4K) nhưng KHÔNG phải "tăng tốc đa dụng". Muốn tổng quát:
+  đa dạng hóa mạnh miền train, hoặc đổi lớp hàm mapper. HF
+  `extbench_cross/` + `v427_4k/`. Vá 2 bug: dict-wrap 5.15 (e5._get),
+  OOM do nạp 2 model cùng lúc → run_cross HAI PHA.
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
