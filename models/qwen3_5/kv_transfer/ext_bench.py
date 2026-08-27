@@ -41,6 +41,9 @@ e5 = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(e5)
 
 WARM_P = 5
+# ngan sach token sinh: musr/compute da chan thinking san trong
+# prompt nen khong can nhieu; aime CAN suy luan that (30 item).
+N_NEW = {"musr": 24, "aime": 1024, "compute": 900}
 LOG_DIR = Path("/content/logs")
 PROMPTS_F = "/content/ext_bench_items.json"
 
@@ -63,8 +66,13 @@ def _musr_items():
                 choices = ast.literal_eval(ex["choices"])
             letters = [chr(65 + j) for j in range(len(choices))]
             opts = "\n".join(f"{l}) {c}" for l, c in zip(letters, choices))
+            # Qwen3.5 la model "thinking" -- mac dinh mo <think> roi suy luan
+            # dai. BUG THAT da gap: max_new=8 -> 198/198 hit=0 vi model chua
+            # kip thoat khoi think. Dong san khoi think de tra loi NGAY
+            # (thu thuat nay thay trong chinh output that: "<think>\n\n</think>").
             prompt = (f"{ex['narrative']}\n\n{ex['question']}\n{opts}\n\n"
-                      f"Answer with the letter of the correct choice.\nAnswer: ")
+                      f"Answer with the letter of the correct choice.\n"
+                      f"<think>\n\n</think>\n\nAnswer: ")
             items.append({"bench": "musr", "sub": split, "id": f"{split}{i}",
                           "prompt": prompt, "expect": letters[ex["answer_index"]]})
     return items
@@ -110,7 +118,8 @@ def _compute_items(n):
                   f"they are already provided):\n{ctx}\n\n"
                   f"Write the complete contents of solution.cu implementing "
                   f"the function. Output ONLY the code, no explanation, "
-                  f"wrapped in a single ```cuda code block.\n\n```cuda\n")
+                  f"wrapped in a single ```cuda code block.\n"
+                  f"<think>\n\n</think>\n\n```cuda\n")
         items.append({"bench": "compute", "sub": ex["group"], "id": ex["task_id"],
                       "prompt": prompt,
                       "context_files": cfiles,
@@ -144,12 +153,24 @@ def _extract_code(text):
     return (m.group(1) if m else text).strip()
 
 
+def _strip_think(text):
+    """Bo khoi <think>...</think> neu model van tu mo (du prompt da dong)."""
+    return re.sub(r"<think>.*?</think>", " ", text, flags=re.S)
+
+
 def score_text(it, text):
+    t = _strip_think(text)
     if it["bench"] == "musr":
-        m = re.search(r"\b([A-F])\b", text)
+        m = re.search(r"\b([A-F])\b", t)
         return int(bool(m) and m.group(1) == it["expect"])
     if it["bench"] == "aime":
-        nums = re.findall(r"-?\d+", text)
+        for pat in (r"Final Answer:\s*\$?\\?boxed\{?\s*(-?\d+)",
+                    r"Final Answer:\s*(-?\d+)",
+                    r"\\boxed\{\s*(-?\d+)"):
+            m = re.search(pat, t)
+            if m:
+                return int(m.group(1) == it["expect"])
+        nums = re.findall(r"-?\d+", t)
         return int(bool(nums) and nums[-1] == it["expect"])
     raise ValueError(it["bench"])
 
@@ -202,7 +223,7 @@ def run_self(bench_list, tgt_model, max_len, sl):
     for i, it in enumerate(items):
         enc = tok(it["prompt"], return_tensors="pt", truncation=True,
                   max_length=max_len).to("cuda")
-        n_new = 800 if it["bench"] == "compute" else (600 if it["bench"] == "aime" else 8)
+        n_new = N_NEW[it["bench"]]
         t0 = time.time()
         with torch.no_grad():
             gen_ids = m.generate(**enc, max_new_tokens=n_new, do_sample=False,
@@ -267,7 +288,7 @@ def run_cross(bench_list, src_model, tgt_model, mapper_path, max_len, sl):
             src_past = e5.prefill_chunked(model_s, cut)
             tpl = e5.prefill_chunked(model_t, cut)
             student_past = e5.build_student_past(tpl, src_past, mapper)
-            n_new = 800 if it["bench"] == "compute" else (600 if it["bench"] == "aime" else 8)
+            n_new = N_NEW[it["bench"]]
             t0 = time.time()
             cur, gen_ids, inp = student_past, [], warm
             o = model_t(input_ids=inp, past_key_values=cur, use_cache=True)
