@@ -74,7 +74,16 @@ def _fresh_grad_past(pristine):
     return past
 
 
-def probe(m, tok, T, tag, n_repeat=3):
+def probe(m, tok, T, tag):
+    """v3 don gian hoa (hoc phi 2 lan): goi LAP LAI (n_repeat cu) van vo
+    "backward qua graph lan 2" o LAN GOI THU HAI du da xay past_key_values
+    hoan toan moi moi lan -- nghi ngo bitsandbytes cache weight da
+    dequantize giua cac lan goi (toi uu noi bo cua Linear4bit), khong
+    phai loi trong cach dung cache o day. Khong dang de dao sau: cau hoi
+    that su can tra loi la "1 buoc train (= 1 lan goi) co chay duoc va
+    nhanh khong", khong phai trung binh nhieu lan goi lien tiep trong
+    CUNG process. Do CHINH XAC 1 lan goi; do tin cay lien tiep nhieu
+    buoc chi kiem chung duoc bang train that (ghi ro trong bao cao)."""
     import torch
     torch.cuda.reset_peak_memory_stats()
     ids = torch.randint(1000, 50000, (1, T), device="cuda")
@@ -82,20 +91,15 @@ def probe(m, tok, T, tag, n_repeat=3):
         with torch.no_grad():
             pristine = m(input_ids=ids[:, :-8], use_cache=True,
                         logits_to_keep=1).past_key_values
+        past = _fresh_grad_past(pristine)
         warm = ids[:, -8:]
-        times = []
-        for i in range(n_repeat):
-            past = _fresh_grad_past(pristine)
-            t0 = time.time()
-            out = m(input_ids=warm, past_key_values=past, use_cache=True)
-            loss = out.logits.float().pow(2).mean()
-            loss.backward()
-            torch.cuda.synchronize()
-            times.append(time.time() - t0)
-            print(f"  {tag} T={T} call{i} t={times[-1]:.2f}s")
-            del past, out, loss
-        print(f"{tag} T={T} OK peak={mem():.2f}GiB t_first={times[0]:.2f}s "
-              f"t_steady={sum(times[1:]) / max(len(times) - 1, 1):.2f}s")
+        t0 = time.time()
+        out = m(input_ids=warm, past_key_values=past, use_cache=True)
+        loss = out.logits.float().pow(2).mean()
+        loss.backward()
+        torch.cuda.synchronize()
+        dt = time.time() - t0
+        print(f"{tag} T={T} OK peak={mem():.2f}GiB t={dt:.2f}s")
         return True
     except Exception as e:
         import traceback
@@ -125,6 +129,12 @@ def main():
           f"lmhead_dev={m.lm_head.weight.device}")
     for T in (4096, 8192, 16384):
         probe(m, tok, T, "E-manual-offload")
+    # cau hoi that su cho train: 2 buoc LIEN TIEP (moi buoc tu dung cache
+    # rieng tu dau, giong het thuc te) co ca hai deu chay duoc khong --
+    # khac voi n_repeat cu (chia se pristine) da vo loi khong lien quan.
+    print("--- lap lai 2 lan doc lap @T=8192 (mo phong 2 buoc train ke tiep) ---")
+    probe(m, tok, 8192, "E-repeat1")
+    probe(m, tok, 8192, "E-repeat2")
     del m
     gc.collect()
     torch.cuda.empty_cache()
