@@ -12,10 +12,10 @@ E=models/qwen3_5/kv_transfer/ext_bench.py
 N_COMPUTE="${1:-60}"
 
 pip install -q datasets 2>&1 | tail -2
-python "$E" check-nvcc || true
+python -u "$E" check-nvcc || true
 
 if [ ! -f /content/ext_bench_items.json ]; then
-  python "$E" gen --bench musr,aime,compute --n-compute "$N_COMPUTE" || exit 4
+  python -u "$E" gen --bench musr,aime,compute --n-compute "$N_COMPUTE" || exit 4
 fi
 
 hfup() {
@@ -35,7 +35,7 @@ EOF
 
 # musr (756) + aime (30) nhanh (gen ngan, khong build) -> 1 lan
 if [ ! -f /content/logs/extbench_self_qa.json ]; then
-  python "$E" self --bench musr,aime --tgt-model Qwen/Qwen3.5-27B --max-len 8192 \
+  python -u "$E" self --bench musr,aime --tgt-model Qwen/Qwen3.5-27B --max-len 8192 \
     2>&1 | tee /content/logs/extbench_self_qa_run.log
   mv /content/logs/extbench_self.json /content/logs/extbench_self_qa.json 2>/dev/null
   hfup extbench
@@ -48,11 +48,11 @@ for a in $(seq 0 10 $((NC - 1))); do
   b=$((a + 10)); [ $b -gt $NC ] && b=$NC
   [ -f "/content/logs/extbench_self_${a}_${b}.json" ] && { echo "WAVE_${a}_SKIP"; continue; }
   echo "WAVE_$a"
-  python "$E" self --bench compute --tgt-model Qwen/Qwen3.5-27B --max-len 8192 --slice "$a:$b" \
+  python -u "$E" self --bench compute --tgt-model Qwen/Qwen3.5-27B --max-len 8192 --slice "$a:$b" \
     2>&1 | tee -a /content/logs/extbench_self_compute_run.log
   hfup extbench
 done
 
-python "$E" agg
+python -u "$E" agg
 hfup extbench
 echo EXTBENCH_SELF_EXIT
