@@ -75,7 +75,13 @@ STOP = {"The", "This", "That", "There", "Answer", "Reasoning", "Analysis",
 def hallu_entity(text, prompt):
     """Ten rieng xuat hien trong cau tra loi nhung KHONG co trong de bai.
     Xap xi tho cho 'bia ten' -- chi dung cho musr (de bai co nhan vat)."""
-    names = {m for m in CAP_RE.findall(text) if m not in STOP}
+    # BAO DONG GIA da gap (756 mau MuSR): tieu de markdown
+    # '**Initial State:**' lam 'State' bi tinh la ten bia. Loai truoc:
+    # (a) tu trong '**..**', (b) tu ngay truoc ':', (c) tu dau cau.
+    clean = re.sub(r"\*\*[^*]{0,40}\*\*", " ", text)
+    clean = re.sub(r"\b[A-Z][a-z]+\s*:", " ", clean)
+    clean = re.sub(r"(?:^|[.!?\n])\s*[A-Z][a-z]+", " ", clean)
+    names = {m for m in CAP_RE.findall(clean) if m not in STOP}
     if not names:
         return []
     return sorted(n for n in names if n not in prompt)
@@ -109,16 +115,34 @@ N_NEW = {"musr": 24, "aime": 2560, "compute": 900,
          "bbh": 48, "gsm8k": 320, "math500": 640}
 
 
+def _has_answer(bench, text):
+    """Da dua ra dap an dung dinh dang chua?"""
+    if bench == "musr":
+        return bool(re.search(r"\b[A-F]\b",
+                              re.sub(r"<think>.*?</think>", " ", text,
+                                     flags=re.S)))
+    if bench in ("gsm8k", "math500", "aime"):
+        return bool(re.search(r"\\boxed\{", text)
+                    or re.search(r"Final Answer:", text))
+    return len(text.strip()) >= 1
+
+
 def analyse_row(r, item=None):
     text = r.get("text", "") or ""
     bench = r.get("bench", "?")
+    # ho tra loi NGAN (dap an 1 chu cai / 1 tu): NGAN KHONG PHAI RAC
+    short_ok = bench in ("musr", "bbh")
+    has_ans = _has_answer(bench, text)
     a = {
         "id": r.get("id"), "bench": bench, "hit": r.get("hit", 0),
         "n_chars": len(text.strip()),
         "degen_rep": degen_rep(text),
         "max_repeat": max_repeat(text),
-        "truncated": looks_truncated(text, N_NEW.get(bench, 512), bench),
-        "empty": len(text.strip()) < 3,
+        # cat giua chung CHI CO HAI khi chua kip dua ra dap an
+        "truncated": bool(looks_truncated(text, N_NEW.get(bench, 512), bench)
+                          and not has_ans),
+        "truncated_any": looks_truncated(text, N_NEW.get(bench, 512), bench),
+        "empty": len(text.strip()) < (1 if short_ok else 3),
     }
     a["garbage"] = bool(a["degen_rep"] > 0.6 or a["max_repeat"] >= 8
                         or a["empty"])
@@ -148,7 +172,7 @@ def summarise(rows, label):
         by.setdefault(a["bench"], []).append(a)
     print(f"\n===== {label} =====")
     hdr = (f"{'bench':<9}{'n':>5}{'hit%':>7}{'rac%':>7}{'lap>0.6':>9}"
-           f"{'cut%':>7}{'ko-dap-an%':>12}{'hallu':>7}{'sai-tinh':>10}"
+           f"{'cut-hai%':>10}{'ko-dap-an%':>12}{'hallu':>7}{'sai-tinh':>10}"
            f"{'ky-tu-TB':>10}")
     print(hdr)
     for bench, rs in sorted(by.items()):
@@ -157,7 +181,7 @@ def summarise(rows, label):
         print(f"{bench:<9}{n:>5}{sum(a['hit'] for a in rs) / n:>7.1%}"
               f"{f('garbage'):>7.1%}"
               f"{sum(1 for a in rs if a['degen_rep'] > 0.6) / n:>9.1%}"
-              f"{f('truncated'):>7.1%}{f('no_answer'):>12.1%}"
+              f"{f('truncated'):>10.1%}{f('no_answer'):>12.1%}"
               f"{sum(a.get('n_hallu', 0) for a in rs) / n:>7.2f}"
               f"{sum(a.get('n_arith_slip', 0) for a in rs) / n:>10.2f}"
               f"{sum(a['n_chars'] for a in rs) / n:>10.0f}")
