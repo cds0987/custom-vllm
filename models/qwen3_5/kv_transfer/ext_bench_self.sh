@@ -41,8 +41,15 @@ if [ ! -f /content/logs/extbench_self_qa.json ]; then
   hfup extbench
 fi
 
-# compute-eval: build+test THAT tren MOI item -> cham, chia wave 10/lan
+# compute-eval: build+test THAT tren MOI item -> cham, chia wave 10/lan.
+# COMPUTE_LIMIT (arg 2, mac dinh = het): do THAT 2026-08-27 cho ~2,4 phut/
+# mau (sinh 900 token @~6 tok/s tren 27B-4bit L4 + nvcc build + chay test)
+# -> 500 mau = ~20h/luot, x2 cho self+cross. User chot: chay 50 mau truoc
+# roi xem ty le 27B thuan moi quyet co mo rong khong (neu ~0% thi khong
+# do duoc suy giam cua mapper tu con so 0).
 NC=$(python -c "import json; print(sum(1 for it in json.load(open('/content/ext_bench_items.json')) if it['bench']=='compute'))")
+LIMIT="${2:-$NC}"
+[ "$LIMIT" -lt "$NC" ] && NC="$LIMIT"
 echo "COMPUTE_TOTAL=$NC"
 for a in $(seq 0 10 $((NC - 1))); do
   b=$((a + 10)); [ $b -gt $NC ] && b=$NC
