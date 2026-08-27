@@ -30,6 +30,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -392,49 +393,78 @@ def run_self(bench_list, tgt_model, max_len, sl):
 # ------------------------------------------------------------ cross run ---
 
 def run_cross(bench_list, src_model, tgt_model, mapper_path, max_len, sl):
+    """HAI PHA (bat buoc tren L4): 4B va 27B KHONG BAO GIO cung tren GPU.
+
+    Bug that da gap: nap ca hai cung luc = 3,5GB + 18GB = 21,5GB tren card
+    22GB -> OOM tu item thu 9. Docstring e5_train canh bao tu dau. Cach
+    giai giong cascade_427.py: pha 1 spill cache 4B ra dia, pha 2 doc lai.
+    """
+    import gc
     import torch
     from transformers import AutoConfig
+
+    items = json.load(open(PROMPTS_F))
+    items = [it for it in items if it["bench"] in bench_list]
+    a, b = (int(x) for x in sl.split(":")) if sl else (0, len(items))
+    items = items[a:b]
+    spill = Path("/content/cross_spill")
+    spill.mkdir(parents=True, exist_ok=True)
+
+    # ---------------- PHA 1: 4B mot minh -> spill cache ra dia -------------
     tok_s, model_s = e5.load_4bit(src_model)
-    tok_t, model_t = e5.load_4bit(tgt_model)
-    assert tok_s.vocab_size == tok_t.vocab_size or len(tok_s) == len(tok_t), \
-        "tokenizer 4B/27B lech vocab"
     theta_s = e5.e1.get_rope_theta(
         AutoConfig.from_pretrained(src_model).get_text_config())
+    with torch.no_grad():
+        probe_s = model_s(input_ids=torch.tensor([[1, 2, 3]], device="cuda"),
+                          use_cache=True, logits_to_keep=1).past_key_values
+    a_s, g_s = e5.split_layers(probe_s)
+    # transformers 5.15 boc recurrent_states/keys trong dict {0: tensor}
+    Hs = e5._get(next(iter(g_s.values())).recurrent_states).shape[1]
+    k0 = e5._get(next(iter(a_s.values())).keys)
+    attn_dim = k0.shape[1] * k0.shape[3]
+    del probe_s
+    for i, it in enumerate(items):
+        pth = spill / f"x{i}.pt"
+        if pth.exists():
+            continue
+        ids = tok_s(it["prompt"], return_tensors="pt", truncation=True,
+                    max_length=max_len)["input_ids"].to("cuda")
+        with torch.no_grad():
+            past = e5.prefill_chunked(model_s, ids[:, :-WARM_P])
+        e5.spill_cache(past, pth)
+        del past
+        torch.cuda.empty_cache()
+        if i % 50 == 0:
+            print(f"cross-A {it['bench']} {i}/{len(items)}", flush=True)
+    del model_s
+    gc.collect()
+    torch.cuda.empty_cache()
+    print("CROSS_PHASE_A_DONE", flush=True)
+
+    # ---------------- PHA 2: 27B mot minh -> map + decode ------------------
+    tok_t, model_t = e5.load_4bit(tgt_model)
     theta_t = e5.e1.get_rope_theta(model_t.config.get_text_config())
     with torch.no_grad():
         probe = model_t(input_ids=torch.tensor([[1, 2, 3]], device="cuda"),
                         use_cache=True, logits_to_keep=1).past_key_values
     a_t, g_t = e5.split_layers(probe)
     Ht = e5._get(next(iter(g_t.values())).recurrent_states).shape[1]
-    with torch.no_grad():
-        probe_s = model_s(input_ids=torch.tensor([[1, 2, 3]], device="cuda"),
-                          use_cache=True, logits_to_keep=1).past_key_values
-    a_s, g_s = e5.split_layers(probe_s)
-    # transformers 5.15 boc recurrent_states/keys trong dict {0: tensor}
-    # -> phai qua e5._get() (bug that: "'dict' object has no attribute
-    # 'shape'"; cascade_427.py da dung dung, file nay sot).
-    Hs = e5._get(next(iter(g_s.values())).recurrent_states).shape[1]
-    k0 = e5._get(next(iter(a_s.values())).keys)
-    attn_dim = k0.shape[1] * k0.shape[3]
     mapper = e5.Mapper(len(a_t), len(g_t), Hs, Ht, attn_dim, theta_s, theta_t)
     mapper.load(mapper_path)
-    print(f"mapper nap: {mapper_path}")
+    print(f"mapper nap: {mapper_path}", flush=True)
 
-    items = json.load(open(PROMPTS_F))
-    items = [it for it in items if it["bench"] in bench_list]
-    a, b = (int(x) for x in sl.split(":")) if sl else (0, len(items))
-    items = items[a:b]
     out = []
     for i, it in enumerate(items):
         ids = tok_t(it["prompt"], return_tensors="pt", truncation=True,
                     max_length=max_len)["input_ids"].to("cuda")
         cut, warm = ids[:, :-WARM_P], ids[:, -WARM_P:]
+        src_past = e5.load_cache(spill / f"x{i}.pt")
+        n_new = N_NEW[it["bench"]]
+        t0 = time.time()
         with torch.no_grad():
-            src_past = e5.prefill_chunked(model_s, cut)
             tpl = e5.prefill_chunked(model_t, cut)
             student_past = e5.build_student_past(tpl, src_past, mapper)
-            n_new = N_NEW[it["bench"]]
-            t0 = time.time()
+            del tpl
             cur, gen_ids, inp = student_past, [], warm
             o = model_t(input_ids=inp, past_key_values=cur, use_cache=True)
             cur = o.past_key_values
@@ -449,23 +479,20 @@ def run_cross(bench_list, src_model, tgt_model, mapper_path, max_len, sl):
                     break
         txt = tok_t.decode(gen_ids)
         row = {"id": it["id"], "bench": it["bench"], "text": txt,
-              "lat": round(time.time() - t0, 2)}
-        if it["bench"] == "compute":
-            with tempfile.TemporaryDirectory() as td:
-                hit, log = score_compute(it, txt, td)
-            row["hit"], row["log"] = hit, log
-        else:
-            row["hit"] = score_text(it, txt)
+               "lat": round(time.time() - t0, 2)}
+        row["hit"] = score_text(it, txt)
         out.append(row)
-        print(f"cross {it['bench']} {it['id']} hit={row['hit']} lat={row['lat']}s "
-              f"{txt[:50]!r}")
-        del src_past, tpl, student_past
+        print(f"cross {it['bench']} {it['id']} hit={row['hit']} "
+              f"lat={row['lat']}s {txt[:50]!r}", flush=True)
+        del src_past, student_past, cur, o
         torch.cuda.empty_cache()
     LOG_DIR.mkdir(exist_ok=True)
     suffix = f"_{sl.replace(':', '_')}" if sl else ""
     path = LOG_DIR / f"extbench_cross{suffix}.json"
     json.dump(out, open(path, "w"), indent=1)
     print(f"cross saved -> {path}")
+    # don cache spill de khong day dia cho bo tiep theo
+    shutil.rmtree(spill, ignore_errors=True)
 
 
 # ------------------------------------------------------------------ agg ---
