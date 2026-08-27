@@ -43,7 +43,7 @@ spec.loader.exec_module(e5)
 WARM_P = 5
 # ngan sach token sinh: musr/compute da chan thinking san trong
 # prompt nen khong can nhieu; aime CAN suy luan that (30 item).
-N_NEW = {"musr": 24, "aime": 1024, "compute": 900}
+N_NEW = {"musr": 24, "aime": 2560, "compute": 900}
 LOG_DIR = Path("/content/logs")
 PROMPTS_F = "/content/ext_bench_items.json"
 
@@ -164,12 +164,15 @@ def score_text(it, text):
         m = re.search(r"\b([A-F])\b", t)
         return int(bool(m) and m.group(1) == it["expect"])
     if it["bench"] == "aime":
-        for pat in (r"Final Answer:\s*\$?\\?boxed\{?\s*(-?\d+)",
-                    r"Final Answer:\s*(-?\d+)",
-                    r"\\boxed\{\s*(-?\d+)"):
-            m = re.search(pat, t)
-            if m:
-                return int(m.group(1) == it["expect"])
+        # \boxed{} CUOI CUNG tren van ban DAY DU (ke ca trong <think>):
+        # do la ket luan cua model theo chuan eval AIME. Khong dung
+        # text da _strip_think vi dap an thuong nam trong do.
+        boxed = re.findall(r"\\boxed\{\s*(-?\d+)", text)
+        if boxed:
+            return int(boxed[-1] == it["expect"])
+        fin = re.findall(r"Final Answer:\s*\$?\\?b?o?x?e?d?\{?\s*(-?\d+)", text)
+        if fin:
+            return int(fin[-1] == it["expect"])
         nums = re.findall(r"-?\d+", t)
         return int(bool(nums) and nums[-1] == it["expect"])
     raise ValueError(it["bench"])
