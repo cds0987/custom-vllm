@@ -67,10 +67,8 @@ Cập nhật: 2026-08-27.
   miền (KL 0,63) nhưng 0/20 ngoài miền — v3 cần miền train đa dạng. (3) Ma
   trận 8 cặp: **pairability = CCA-GDN ≥ 0,9**; attention thẳng hàng toàn họ;
   {0.8B,2B} GDN lạc hệ; 4B→27B là cặp học sáng nhất (0,785).
-- Deep-innovation đề xuất (từ deep-research doc + số của ta): weight-derived
-  conjugation GDN (#1), activation-splicing (#2), pairability score (#3 — đã
-  có data), importance-weighted loss (#4), compatibility-finetuning 0.8/2B
-  (#5), retention-length law (#6). **User chọn #5 (2026-08-15): E8 ĐANG CHẠY**.
+- Deep-innovation 6 đề xuất (chi tiết STATUS); user chọn #5
+  compatibility-finetuning → E8 dưới đây.
 - **E8 ĐÓNG TRỌN 3 PHIÊN BẢN (2026-08-15, compatibility LoRA 2B→9B — #5,
   phương án (c) kích hoạt)**: gate trần thông tin SÁNG (2B self needle
   5/5@800 + 5/5@2000 — cache 2B CÓ đủ thông tin) nhưng cả 3 đòn thua sạch:
@@ -108,16 +106,8 @@ Cập nhật: 2026-08-27.
 - **E6 v3.2 XONG (2026-08-25)**: BFCL 17/20 nhưng needle@2K vách đá 1/10
   (retention-length law) — vách đá này ĐÃ SỤP ở v3.3 bên dưới. Chi tiết
   STATUS mục E6 v3.2.
-- **E6 v3.3 CODE SẴN SÀNG (2026-08-24, user duyệt hướng: tốc độ + ctx dài +
-  chính xác)**: (tốc độ) bỏ 2 deepcopy ~600MB/bước (`clone_cache_struct`),
-  Phase B1 tiền tính teacher 1 lần/item (top-64 logp + dense caps 4 layer
-  fp16 ra đĩa) → vòng train hết teacher feed-forward, aux chỉ tính khi
-  λ>0; (ctx dài) checkpoint `map_attn` (mặc định BẬT), cờ `--gdn-bf16`
-  thử nghiệm, needle curriculum train 700→2000 + val bucket @2000;
-  (chính xác) BFCL +parallel/multiple (655 bfcl train), trọng số token-
-  xương ×2 cho ifstruct/pbtable, val DUMP text sinh ra (mổ được 0 điểm).
-  Dry-data pass local: 1330 train / 70 val / test niêm phong giữ nguyên.
-  Sanity ctx-2000: 4,05 s/bước, peak 20,32 GiB → GO; `--gdn-bf16` loại.
+- **E6 v3.3 CODE (2026-08-24)**: bỏ deepcopy, B1 tiền tính teacher,
+  checkpoint map_attn, needle curriculum → chi tiết STATUS. `--gdn-bf16` loại.
 - **E6 v3.3 XONG (2026-08-25): KỶ LỤC KÉP NIÊM PHONG — BFCL MAPPED 18/20
   (self 20; v3.2: 17) + needle@2K MAPPED 10/10 TUYỆT ĐỐI (v3.2: 1/10) —
   VÁCH ĐÁ ĐỘ DÀI SỤP.** Nguyên nhân thắng: needle curriculum train tới
