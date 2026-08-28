@@ -105,14 +105,28 @@ def gib():
 #    1024        48           21,24
 #    1536        16           20,97
 #    2048        16           21,30
+# Bao do PHU THUOC CAP MODEL (27B chiem 12,7GiB nen chat; 9B nhe hon nhieu)
+# -> khong duoc ghim cung. Doi qua --gold-envelope.
 GOLD_ENVELOPE = [(1024, 48), (2048, 16)]
 
 
-def gold_cap_for(t, hard_cap):
-    for t_max, g in GOLD_ENVELOPE:
+def parse_envelope(spec):
+    """'1024:48,2048:16' -> [(1024,48),(2048,16)] (sap theo T tang dan)."""
+    if not spec:
+        return GOLD_ENVELOPE
+    out = []
+    for part in spec.split(","):
+        t, g = part.split(":")
+        out.append((int(t), int(g)))
+    return sorted(out)
+
+
+def gold_cap_for(t, hard_cap, envelope=None):
+    env = envelope or GOLD_ENVELOPE
+    for t_max, g in env:
         if t <= t_max:
             return min(g, hard_cap)
-    return min(GOLD_ENVELOPE[-1][1], hard_cap)
+    return min(env[-1][1], hard_cap)
 
 
 # ---------------------------------------------------------------- template --
@@ -225,10 +239,16 @@ def main():
     ap.add_argument("--hf-repo", default="gunnybd01/qwen35-kv-mapper-4b-27b")
     ap.add_argument("--hf-prefix", default="joint_v1")
     ap.add_argument("--verify-meta", default="256,512,1024")
+    ap.add_argument("--gold-envelope", default="",
+                    help="bao do 'T:gold,...' do bang probe_joint_lora cho "
+                         "CAP MODEL dang dung (27B khac 9B). Rong = dung bao "
+                         "do cua 4->27B.")
     ap.add_argument("--sanity", type=int, default=0,
                     help="chay N buoc roi dung + in VRAM/toc do")
     args = ap.parse_args()
 
+    envelope = parse_envelope(args.gold_envelope)
+    print(f"bao do gold: {envelope} (hard cap {args.gold_cap})", flush=True)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
 
@@ -320,7 +340,7 @@ def main():
         # tran gold theo BAO DO THAT, phu thuoc do dai prompt (xem
         # GOLD_ENVELOPE): gold dai an bo nho hon ca ctx dai
         gm = min(GMAX.get(it["kind"], GOLD_MAX),
-                 gold_cap_for(cut.shape[1], args.gold_cap))
+                 gold_cap_for(cut.shape[1], args.gold_cap, envelope))
         gold_ids = tok_t(it["gold"], add_special_tokens=False,
                          return_tensors="pt")["input_ids"][:, :gm].to("cuda")
         feed = torch.cat([warm, gold_ids[:, :-1]], 1)
