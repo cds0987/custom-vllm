@@ -404,41 +404,64 @@ def main():
             if f.is_file():
                 hf_up(f, f"lora_{tag}/{f.name}")
 
+    def _grade(it, txt):
+        if it["kind"] in NEW_KINDS:
+            return gd.score_item(it, txt)
+        if it["kind"] == "bfcl":
+            return int(it["fn"] in txt)
+        if it["kind"] == "needle":
+            return int(it["code"] in re.sub(r"\D", "", txt))
+        return int(re.sub(r"\s+", " ", it["gold"])[:30]
+                   in re.sub(r"\s+", " ", txt))
+
+    @torch.no_grad()
+    def _greedy(past, warm, n_new):
+        o = model_t(input_ids=warm, past_key_values=past, use_cache=True)
+        cur = o.past_key_values
+        inp = o.logits[:, -1, :].argmax(-1, keepdim=True)
+        gen = [int(inp)]
+        for _ in range(n_new - 1):
+            o = model_t(input_ids=inp, past_key_values=cur, use_cache=True)
+            cur = o.past_key_values
+            inp = o.logits[:, -1, :].argmax(-1, keepdim=True)
+            gen.append(int(inp))
+            if inp.item() == tok_t.eos_token_id:
+                break
+        del cur, o
+        return tok_t.decode(gen)
+
     @torch.no_grad()
     def run_val(limit):
+        """(user 2026-08-28) Do CA HAI dieu kien tren CUNG item:
+          self   = 9B tu doc prompt  -> TRAN THAT cua bai do
+          mapped = 9B doc cache 4B qua mapper
+
+        Khong co so self thi "gsm8k 0/13" KHONG DIEN GIAI DUOC: khong phan
+        biet duoc mapper sinh rac hay chinh 9B cung khong lam duoc bai do.
+        Dung phep doi chung da cuu ket luan lan truoc (4B-self gsm8k 81,5%
+        chung minh loi nam o khau DICH, khong phai model nguon yeu).
+
+        Bo qua no_ctx: o bo de nay "context" CHINH LA cau hoi nen no_ctx vo
+        nghia (khac han needle/bfcl cu, noi context la filler quanh dap an)."""
         from collections import defaultdict
-        sc = defaultdict(list)
+        sc = defaultdict(lambda: {"self": [], "mapped": []})
         for it in data["val"][:limit]:
             cut, warm, gold_ids, _ = enc(it)
             if gold_ids.shape[1] < 1:
                 continue
+            n_new = GEN_LEN.get(it["kind"], 24)
             st = student_past(cut)
-            o = model_t(input_ids=warm, past_key_values=st, use_cache=True)
-            cur = o.past_key_values
-            inp = o.logits[:, -1, :].argmax(-1, keepdim=True)
-            gen = [int(inp)]
-            for _ in range(GEN_LEN.get(it["kind"], 24) - 1):
-                o = model_t(input_ids=inp, past_key_values=cur, use_cache=True)
-                cur = o.past_key_values
-                inp = o.logits[:, -1, :].argmax(-1, keepdim=True)
-                gen.append(int(inp))
-                if inp.item() == tok_t.eos_token_id:
-                    break
-            txt = tok_t.decode(gen)
-            if it["kind"] in NEW_KINDS:
-                hit = gd.score_item(it, txt)
-            elif it["kind"] == "bfcl":
-                hit = int(it["fn"] in txt)
-            elif it["kind"] == "needle":
-                hit = int(it["code"] in re.sub(r"\D", "", txt))
-            else:
-                hit = int(re.sub(r"\s+", " ", it["gold"])[:30]
-                          in re.sub(r"\s+", " ", txt))
-            sc[it["kind"]].append(hit)
-            del st, cur, o
+            sc[it["kind"]]["mapped"].append(_grade(it, _greedy(st, warm, n_new)))
+            del st
             torch.cuda.empty_cache()
-        return {k: f"{sum(v)}/{len(v)}" for k, v in sc.items()}, \
-               sum(sum(v) for v in sc.values())
+            slf = e5.prefill_chunked(model_t, cut)
+            sc[it["kind"]]["self"].append(_grade(it, _greedy(slf, warm, n_new)))
+            del slf
+            torch.cuda.empty_cache()
+        return {k: (f"{sum(v['mapped'])}/{len(v['mapped'])}"
+                    f" [self {sum(v['self'])}/{len(v['self'])}]")
+                for k, v in sc.items()}, \
+               sum(sum(v["mapped"]) for v in sc.values())
 
     best = -1
     t_start = time.time()
