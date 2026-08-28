@@ -212,26 +212,11 @@ Cập nhật: 2026-08-28.
   (27B từng kẹt ở 4096) — peak 9,1/10,0/11,9 GiB, còn dư ~11GiB dưới
   trần L4 tại 16384. Khuyến nghị max-ctx=16384 cho train thật (khớp
   mục tiêu gốc "Unsloth 16K"). Đang chờ user duyệt phóng train.
-- **Probe mở-context cho 27B XONG (2026-08-27, user "ko được kết luận
-  sớm phải làm kỹ")**: đo thật gradient-checkpoint + CPU-offload
-  embed/lm_head trên forward+backward thật. **Gradient checkpointing
-  ĐÓNG hẳn** (peak VRAM giống hệt baseline 20,18=20,19GiB — cơ chế
-  lệch nhau: OOM do 1 lớp attention `repeat_kv`, không phải tích lũy
-  qua nhiều lớp). **CPU offload THẮNG MỘT NỬA**: tiết kiệm thật
-  4,72GiB (12,94 vs 17,66GiB, tái lập 2 lần) nhưng vướng lỗi tích hợp
-  "meta tensor" giữa accelerate dispatch hook và cách mapper tự sửa
-  cache — cần viết lại đường nạp thủ công (không qua cờ có sẵn) để
-  test tiếp, ước 1-2h kỹ thuật. Đã viết `load_4bit_cpu_offload_io`
-  (né accelerate dispatch, tự tay hook 2 module) + probe latency
-  riêng — CHƯA chạy được (GPU bận train 4→9), chờ khe hở GPU.
-- **CPU-offload thủ công 27B — KẾT LUẬN CUỐI (2026-08-27): THẮNG THẬT
-  ở T=8192** (mốc baseline OOM cứng) — steady 12,81GiB (tiết kiệm
-  4,85GiB), T=8192 OK peak 18,11GiB t=1,4s, **2 lần gọi độc lập liên
-  tiếp đều OK** (đúng mô phỏng 2 bước train kế tiếp — an toàn cho
-  train nhiều bước). T=16384 vẫn OOM (tiết kiệm không đủ). Khuyến
-  nghị: có thể train 27B ở max-ctx=8192 nếu tích hợp
-  `load_4bit_cpu_offload_io` vào `e6v3_ce.py` (hiện chỉ có trong
-  probe, chưa nối vào pipeline train chính) — CHỜ USER DUYỆT.
+- **Mở context 27B (2026-08-27)**: gradient checkpointing ĐÓNG hẳn (peak
+  y hệt baseline — OOM do 1 lớp `repeat_kv`, không phải tích lũy).
+  **CPU-offload thủ công THẮNG**: steady 12,81GiB (−4,85GiB), T=8192 OK
+  peak 18,11GiB t=1,4s, 2 lần gọi liên tiếp OK; T=16384 vẫn OOM.
+  `load_4bit_cpu_offload_io` (né accelerate dispatch). Chi tiết STATUS.
 - **MAPPER 4B→9B TRAIN THẬT XONG (2026-08-27, max-ctx=16384)**: dừng
   sớm đúng CE_FLOOR ở bước 984/2600 — **BEST: BFCL 23/25 (92%) |
   needle 29/29 (100%) | score 54**. Nhỉnh hơn mapper 4→27B (BFCL
@@ -272,6 +257,27 @@ Cập nhật: 2026-08-28.
   đa dạng hóa mạnh miền train, hoặc đổi lớp hàm mapper. HF
   `extbench_cross/` + `v427_4k/`. Vá 2 bug: dict-wrap 5.15 (e5._get),
   OOM do nạp 2 model cùng lúc → run_cross HAI PHA.
+- **KIẾN TRÚC 2 LỚP (user chốt 2026-08-28: LoRA gắn vào 4B ép nó "đọc hộ"
+  27B → merge vào 4B → mapper dịch): CỔNG VRAM MỞ, khe hẹp.** 7 lượt probe
+  (`probe_joint_lora.py`, 42 cấu hình). Hai model cùng GPU = 16,16GiB, trống
+  5,54. Thủ phạm: prefill 4B CÓ GRAD (+3,34GiB @T=256). **GC bị loại VỀ
+  NGUYÊN TẮC** (transformers ép `use_cache=False`, mà forward 4B tồn tại
+  chính để sinh cache — cơ chế khác hẳn lần đóng GC cho 27B). **TBPTT mở
+  được cổng**. Bao đo chốt: **gold ≤48 khi ctx ≤1024, gold ≤16 khi ctx
+  1536-2048, w=64**; tường cứng gold=64 với MỌI T (gold = số vị trí feed vào
+  27B, mỗi vị trí giữ state GDN cho backward → đắt hơn ctx nhiều). Giá:
+  TBPTT là xấp xỉ (LoRA chỉ học từ w vị trí cuối), gold gsm8k 150-250 token
+  bị cắt còn 48. Trả lời user "sao hôm trước 8192 mà giờ 2048 OOM": 8192 là
+  trần 1-model-thường-trú (27B một mình 12,81GiB); giờ 4B phải ở lại kèm
+  autograd → 18,11+3,5 = 21,6GiB đã chạm trần trước mọi activation.
+- **TRAIN JOINT ĐANG CHẠY (2026-08-28)**: `e9_joint.py` + `gen_data.py`
+  (7768 train/330 val: gsm8k 2882 + bbh 2500 + musr 474 + suite 767 + bfcl
+  655 + needle 380 + pbtable 110), ctx 2048, tbptt 64, warm-start v427_4k,
+  2500 bước ~4h, auto-upload HF `joint_v1/` mỗi mốc val. **Rò rỉ 0/6898** vs
+  580 mẫu niêm phong (đối chiếu chuỗi). Sanity: ce 1,497 | 5,76s/bước |
+  peak 20,91GiB | 0 OOM. Vá 2 bug: `ifstruct` không có `gold` (do B0 sinh,
+  joint không có B0), và **cắt TRÁI khi tokenize** (mọi prompt bộ này đặt
+  câu hỏi Ở CUỐI — cắt phải mặc định ăn mất câu hỏi mà KHÔNG báo lỗi).
 - **USER LẬT KẾT LUẬN (2026-08-28): "có train mapper cho math/reasoning
   không? nếu chỉ train BFCL thì fail task khác là đúng rồi"** — ĐÚNG, đã
   kiểm code `build_data()`: train ~1330 item = bfcl ~655 + needle 430 +
