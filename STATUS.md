@@ -1494,6 +1494,58 @@ autograd thông suốt: gradient tới đủ 60 tensor LoRA và 208/208 tham s�
 Trên A100 40GB cả 3 cái giá này biến mất; đây là giới hạn của L4, không phải
 của ý tưởng.
 
+**BAO DO DAY DU 42 CAU HINH (user: "tang tran 1024-2048")** — quet
+ctx x gold x tbptt. Phat hien LON: **gold moi la rang buoc chinh, khong phai
+ctx**. gold = SO VI TRI feed vao 27B; moi vi tri giu them state GDN cho
+backward (48 lop GDN) nen no dat hon ctx nhieu lan.
+
+    T=2048: gold 16 OK (w=64) | gold 64,128,256 OOM voi MOI w
+    T=1536: gold 16 OK (w=64) | gold 64+ OOM voi MOI w
+    T=1024: gold 24/32/48 OK  | gold 64+ OOM   (peak 20,80/20,95/21,24)
+    T= 512: gold 24/32/48 OK  | gold 64+ OOM   (peak 20,48/20,62/20,92)
+    T= 256: gold 24/32/48 OK  | gold 64+ OOM   (peak 20,32/20,46/20,75)
+    tbptt : w=128 OOM tu T>=1536; w=64 chay tron toi 2048
+
+Tuong CUNG o gold=64 voi MOI T (khong tuyen tinh — la nguong cap phat).
+BAO DO CHOT: gold <= 48 khi ctx <= 1024, gold <= 16 khi ctx 1536-2048, w=64.
+
+**Hau qua that cho data**: gold gsm8k la LOI GIAI DAY DU ~150-250 token ->
+KHONG day duoc tron trong che do joint tren L4; bi cat con 48. Bien minh duy
+nhat (va no that): luat bien mong noi cross-cache hong ngay o vai token DAU
+— giam sat 48 token dau nham DUNG cho vo. Nhung day la MAT MAT, phai ghi
+nhan, khong phai lua chon toi uu.
+
+**GIAI THICH cau hoi user "sao hom truoc dat 8192 ma gio 2048 OOM":** hai
+cau hinh KHAC NHAU, khong mau thuan. Do 27/08 la 27B MOT MINH (hai pha, 4B
+da spill cache ra dia roi xa) -> nen tinh 12,81 GiB, con trong ~9,5. Bay gio
+4B phai O LAI kem do thi autograd -> nen tinh 16,16 GiB, con trong 5,54.
+Phep cong noi het: 18,11 (dinh 27B mot minh @8192) + 3,5 (trong so 4B) =
+21,6 GiB — cham tran 22,3 TRUOC KHI tinh mot byte activation nao cua 4B.
+8192 la tran cua kien truc 1 model thuong tru; 2048 la tran cua kien truc
+2 model + gradient xuyen qua ca hai. Quay lai mapper-don thi 8192 co ngay.
+
+**HAI BUG THAT bat duoc khi dung `e9_joint.py`:**
+1. `ifstruct` KHONG co truong `gold` — trong e6v3_ce gold cua no do 27B TU
+   SINH o buoc B0 (pseudo-gold); che do joint khong co B0 -> `tok(None)` nem
+   "You need to specify either `text` or `text_target`". Loai 135 train +
+   15 val, CO GHI SO LUONG (v3.5 da bo ifstruct khoi thang chinh nen khong
+   tiec).
+2. **CAT TRAI khi tokenize** — bug nay KHONG BAO LOI neu bo qua: moi prompt
+   bo nay dat CAU HOI O CUOI (musr: narrative 1000-1500 token roi moi hoi).
+   `truncation=True` mac dinh cat PHAI = an mat cau hoi, item thanh vo nghia
+   ma van chay tron. Bat buoc `truncation_side='left'`.
+Mot bay nua da chan truoc: template 27B suy tu meta goc PHAI tu kiem bang
+meta THAT (`--verify-meta`) — da chay, KHOP o T=256/512/1024/2048.
+
+**TRAIN THAT DA PHONG (2026-08-28)**: `e9_joint.py`, warm-start mapper
+v427_4k, data 7768 train / 330 val (bfcl 655 + needle 380 + pbtable 110 +
+gsm8k 2882 + bbh 2500 + musr 474 + suite 767), ctx 2048, tbptt 64, 2500
+buoc x ~5,8 s/buoc ~ 4h, val moi 250 buoc, auto-upload HF `joint_v1/`.
+Kiem ro ri: **0/6898 item trung 580 mau niem phong** (doi chieu chuoi
+prompt, chay tren chinh runtime train). Sanity 30 buoc: ce 1,497 |
+5,76 s/buoc | peak 20,91 GiB | 0 buoc OOM.
+
+
 **HIỆU CHỈNH NGAY SAU ĐÓ (user, 2026-08-28) — kết luận trên VƯỢT DỮ LIỆU.**
 User hỏi: "có train mapper cho math/reasoning không? nếu chỉ train BFCL thì
 fail task khác là đúng rồi". Kiểm `build_data()` trong `e6v3_ce.py`:
