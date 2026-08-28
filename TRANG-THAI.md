@@ -201,17 +201,10 @@ Cập nhật: 2026-08-28.
   Kế hoạch 2 giai đoạn: A) sanity mapper 4→9 với data cũ (0 code mới,
   ~1-2h) → tín hiệu đi/không; B) nếu khả quan, tích hợp data 4 họ mới
   vào train loop rồi đo trên `c2suite.sh`.
-- **Giai đoạn A XONG (2026-08-27): sanity 4→9 chạy trọn KHÔNG SỬA
-  CODE, 0 lỗi ngay lần đầu** — 20 bước, ~1,7-1,8 s/bước ổn định, peak
-  VRAM chỉ **8,76 GiB** (27B bnb-4bit sát trần 22GB — 4→9 rẻ hơn
-  nhiều, còn dư địa tăng ctx/tốc độ). Vá 1 bug trước khi chạy:
-  `hf_up()` ghim cứng `"v34/"` → thêm `--hf-prefix` (né đè lên mapper
-  4→27B). Sanity chỉ đo tốc độ/VRAM, CHƯA đo hội tụ — chờ user duyệt
-  train thật (vài trăm-nghìn bước, val curve) trước khi phóng.
-- **Ladder 4→9 XONG (2026-08-27): 4096/8192/16384 đều KHÔNG OOM**
-  (27B từng kẹt ở 4096) — peak 9,1/10,0/11,9 GiB, còn dư ~11GiB dưới
-  trần L4 tại 16384. Khuyến nghị max-ctx=16384 cho train thật (khớp
-  mục tiêu gốc "Unsloth 16K"). Đang chờ user duyệt phóng train.
+- **Giai đoạn A + ladder 4→9 XONG (2026-08-27)**: sanity chạy trọn không
+  sửa code, ~1,7-1,8 s/bước, peak 8,76GiB; ladder 4096/8192/16384 đều
+  KHÔNG OOM (9,1/10,0/11,9GiB) → chốt max-ctx 16384. Vá `hf_up()` ghim
+  cứng `"v34/"` → thêm `--hf-prefix` (né đè mapper 4→27B).
 - **Mở context 27B (2026-08-27)**: gradient checkpointing ĐÓNG hẳn (peak
   y hệt baseline — OOM do 1 lớp `repeat_kv`, không phải tích lũy).
   **CPU-offload thủ công THẮNG**: steady 12,81GiB (−4,85GiB), T=8192 OK
