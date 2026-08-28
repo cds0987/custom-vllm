@@ -8,6 +8,13 @@ Cập nhật: 2026-08-28.
 
 ## Trạng thái hiện tại
 
+- **Báo cáo toàn cục "Prefill bằng model nhỏ" (quy tắc 6c)**:
+  https://claude.ai/code/artifact/8e4cccf6-b447-4439-97c2-14e7ca9ffee1
+  (file `prefill-model-nho.html` trong scratchpad). Bao gồm 4 số then chốt,
+  trạng thái 6 nhánh, 3 định luật, ràng buộc VRAM 4→9 vs 4→27, và 2 giả
+  thuyết H1/H2 chưa phân giải. Báo cáo cũ về serving 9B/L4 vẫn là
+  `bao-cao-l4.html` (chủ đề khác, không đè lên).
+
 - **Repo đã refactor xong** (khuôn transformers, user chốt): `models/qwen3_5/`
   (engine/vllm + 19 patches, load/{gguf,quantize,pytorch_tensor}, hardware/l4,
   utils) + `sdk/ loading/ logging/ utils/ bench/ tests/`. **Registry đệ quy**

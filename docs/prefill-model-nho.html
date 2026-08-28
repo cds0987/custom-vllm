@@ -1,0 +1,367 @@
+<title>Prefill bằng model nhỏ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&family=Be+Vietnam+Pro:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap&subset=vietnamese,latin,latin-ext" rel="stylesheet">
+
+<style>
+:root{
+  --ink:#14181f;        /* mực chính */
+  --ink-2:#4a5361;      /* mực phụ, hơi ngả xanh */
+  --ink-3:#7b8494;
+  --bg:#f7f6f3;         /* nền giấy ấm nhạt */
+  --bg-2:#ffffff;
+  --line:#dedbd4;
+  --line-2:#eae7e0;
+  --accent:#a75c20;     /* đồng — dùng cho số đo */
+  --ok:#2f6b5c;         /* xanh rêu — đã chứng minh */
+  --ok-bg:#e6efec;
+  --warn:#8a6a1f;       /* hổ phách — một phần */
+  --warn-bg:#f3ecda;
+  --bad:#8f3b34;        /* gạch — đã đóng */
+  --bad-bg:#f2e4e2;
+  --run:#3a5a86;        /* chàm — đang chạy */
+  --run-bg:#e4eaf3;
+  --shadow:0 1px 2px rgba(20,24,31,.05),0 8px 24px -16px rgba(20,24,31,.22);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ink:#e8e6e1; --ink-2:#a8afbb; --ink-3:#79808d;
+    --bg:#14171c; --bg-2:#1b1f26; --line:#2c323b; --line-2:#232830;
+    --accent:#d99a5c;
+    --ok:#7fc0ac; --ok-bg:#1c2d29;
+    --warn:#d8b463; --warn-bg:#2e2a1c;
+    --bad:#e0847a; --bad-bg:#2f2220;
+    --run:#8fb0dd; --run-bg:#1e2733;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px -16px rgba(0,0,0,.7);
+  }
+}
+:root[data-theme="dark"]{
+  --ink:#e8e6e1; --ink-2:#a8afbb; --ink-3:#79808d;
+  --bg:#14171c; --bg-2:#1b1f26; --line:#2c323b; --line-2:#232830;
+  --accent:#d99a5c;
+  --ok:#7fc0ac; --ok-bg:#1c2d29;
+  --warn:#d8b463; --warn-bg:#2e2a1c;
+  --bad:#e0847a; --bad-bg:#2f2220;
+  --run:#8fb0dd; --run-bg:#1e2733;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px -16px rgba(0,0,0,.7);
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--bg); color:var(--ink);
+  font-family:"Be Vietnam Pro",system-ui,-apple-system,"Segoe UI",sans-serif;
+  font-size:16.5px; line-height:1.68;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:920px; margin:0 auto; padding:56px 24px 96px}
+@media(max-width:640px){ .wrap{padding:32px 18px 64px} }
+
+h1,h2,h3{font-family:Newsreader,Georgia,serif; font-weight:600; text-wrap:balance; margin:0}
+h1{font-size:clamp(2.1rem,5.4vw,3.1rem); line-height:1.12; letter-spacing:-.015em}
+h2{font-size:clamp(1.4rem,3vw,1.75rem); line-height:1.25; margin:0 0 12px}
+h3{font-size:1.06rem; font-weight:600; margin:0 0 6px}
+p{margin:0 0 14px; max-width:66ch}
+a{color:var(--accent)}
+
+.eyebrow{
+  font-size:.74rem; letter-spacing:.13em; text-transform:uppercase;
+  color:var(--ink-3); font-weight:600; margin:0 0 14px;
+}
+.lede{font-size:1.14rem; color:var(--ink-2); max-width:60ch; margin-top:18px}
+header{border-bottom:1px solid var(--line); padding-bottom:34px; margin-bottom:44px}
+.meta{
+  display:flex; flex-wrap:wrap; gap:8px 22px; margin-top:26px;
+  font-size:.84rem; color:var(--ink-3);
+  font-family:"IBM Plex Mono",ui-monospace,monospace;
+}
+
+section{margin:0 0 52px}
+section > h2{
+  padding-bottom:10px; border-bottom:1px solid var(--line-2);
+  margin-bottom:20px;
+}
+
+/* ---- sơ đồ luồng ---- */
+.flow{
+  display:grid; gap:12px; margin:24px 0 8px;
+  grid-template-columns:1fr auto 1fr auto 1fr;
+  align-items:stretch;
+}
+@media(max-width:720px){ .flow{grid-template-columns:1fr; } .flow .arrow{transform:rotate(90deg); padding:2px 0} }
+.node{
+  background:var(--bg-2); border:1px solid var(--line); border-radius:10px;
+  padding:14px 16px; box-shadow:var(--shadow);
+}
+.node .k{font-family:"IBM Plex Mono",monospace; font-size:.78rem; color:var(--ink-3); display:block; margin-bottom:3px}
+.node .v{font-weight:600; font-size:1rem; display:block}
+.node .s{font-size:.84rem; color:var(--ink-2); display:block; margin-top:4px}
+.node.hot{border-color:var(--accent)}
+.arrow{display:flex; align-items:center; justify-content:center; color:var(--ink-3); font-size:1.3rem}
+
+/* ---- thẻ trạng thái ---- */
+.chip{
+  display:inline-block; font-size:.73rem; font-weight:600; letter-spacing:.03em;
+  padding:2px 9px; border-radius:99px; white-space:nowrap; vertical-align:2px;
+}
+.chip.ok{background:var(--ok-bg); color:var(--ok)}
+.chip.warn{background:var(--warn-bg); color:var(--warn)}
+.chip.bad{background:var(--bad-bg); color:var(--bad)}
+.chip.run{background:var(--run-bg); color:var(--run)}
+
+.ledger{display:grid; gap:14px}
+.row{
+  background:var(--bg-2); border:1px solid var(--line); border-radius:12px;
+  padding:18px 20px; box-shadow:var(--shadow);
+  border-left:3px solid var(--line);
+}
+.row.ok{border-left-color:var(--ok)}
+.row.warn{border-left-color:var(--warn)}
+.row.bad{border-left-color:var(--bad)}
+.row.run{border-left-color:var(--run)}
+.row .top{display:flex; gap:10px; align-items:baseline; flex-wrap:wrap; margin-bottom:8px}
+.row p{margin:0; font-size:.95rem; color:var(--ink-2)}
+.row p + p{margin-top:8px}
+
+/* ---- bảng ---- */
+.tw{overflow-x:auto; margin:18px 0; border:1px solid var(--line); border-radius:10px; background:var(--bg-2)}
+table{border-collapse:collapse; width:100%; font-size:.92rem; min-width:460px}
+th,td{padding:10px 14px; text-align:left; border-bottom:1px solid var(--line-2)}
+thead th{
+  font-size:.74rem; letter-spacing:.07em; text-transform:uppercase;
+  color:var(--ink-3); font-weight:600; background:var(--bg);
+}
+tbody tr:last-child td{border-bottom:0}
+td.num,th.num{text-align:right; font-family:"IBM Plex Mono",monospace; font-variant-numeric:tabular-nums}
+tr.total td{font-weight:600; background:var(--bg)}
+.big{color:var(--accent); font-weight:600}
+
+/* ---- số nổi bật ---- */
+.stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:14px; margin:22px 0}
+.stat{background:var(--bg-2); border:1px solid var(--line); border-radius:12px; padding:16px 18px; box-shadow:var(--shadow)}
+.stat .n{font-family:Newsreader,serif; font-size:2rem; line-height:1; color:var(--accent); font-variant-numeric:tabular-nums}
+.stat .l{font-size:.85rem; color:var(--ink-2); margin-top:7px}
+
+/* ---- định luật ---- */
+.law{
+  border:1px solid var(--line); border-radius:12px; background:var(--bg-2);
+  padding:18px 20px; margin:0 0 14px; box-shadow:var(--shadow);
+}
+.law h3{font-family:"Be Vietnam Pro",sans-serif; font-size:.98rem}
+.law p{font-size:.94rem; color:var(--ink-2); margin:0}
+.law .n{
+  font-family:"IBM Plex Mono",monospace; font-size:.74rem; color:var(--ink-3);
+  display:block; margin-bottom:5px; letter-spacing:.04em;
+}
+
+blockquote{
+  margin:20px 0; padding:2px 0 2px 20px; border-left:3px solid var(--accent);
+  color:var(--ink-2); font-family:Newsreader,serif; font-size:1.06rem; font-style:italic;
+}
+ul{margin:0 0 14px; padding-left:22px; max-width:66ch}
+li{margin-bottom:7px; color:var(--ink-2)}
+li strong{color:var(--ink)}
+code{
+  font-family:"IBM Plex Mono",monospace; font-size:.87em;
+  background:var(--line-2); padding:1px 5px; border-radius:4px;
+}
+footer{border-top:1px solid var(--line); padding-top:22px; margin-top:12px; font-size:.86rem; color:var(--ink-3)}
+</style>
+
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">custom-vllm · trục thứ 5</p>
+  <h1>Prefill bằng model nhỏ</h1>
+  <p class="lede">Dùng model 4B đọc ngữ cảnh thay cho model lớn, rồi chuyển nguyên bộ nhớ đã đọc sang model lớn để nó trả lời. Báo cáo toàn cục sau 14 ngày đo đạc.</p>
+  <div class="meta">
+    <span>28-08-2026</span><span>họ Qwen3.5</span><span>1×NVIDIA L4 22GB</span><span>vLLM 0.27.1</span>
+  </div>
+</header>
+
+<section>
+  <h2>Ý tưởng, nói cho người mới</h2>
+  <p>Khi một model trả lời câu hỏi có ngữ cảnh dài, nó làm hai việc. <strong>Prefill</strong>: đọc hết ngữ cảnh và ghi lại "đã hiểu gì" vào một vùng nhớ gọi là KV cache. <strong>Decode</strong>: sinh câu trả lời từng chữ, dựa vào vùng nhớ đó.</p>
+  <p>Với ngữ cảnh 30 nghìn token, prefill của model 27B chiếm gần như toàn bộ thời gian chờ của người dùng — họ ngồi nhìn màn hình 11 đến 24 giây trước khi thấy chữ đầu tiên. Nhưng decode thì rẻ.</p>
+  <p>Ý tưởng: <em>để model 4B làm phần đọc</em> — nó nhanh hơn nhiều lần — rồi <em>đưa vùng nhớ đó cho model lớn</em> để model lớn chỉ việc trả lời. Người dùng được tốc độ của 4B ở phần chờ, và chất lượng của model lớn ở phần trả lời.</p>
+
+  <div class="flow">
+    <div class="node hot">
+      <span class="k">bước 1 · rẻ</span>
+      <span class="v">4B đọc ngữ cảnh</span>
+      <span class="s">4.771–5.514 token/giây</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="node">
+      <span class="k">bước 2 · chuyển</span>
+      <span class="v">KV cache</span>
+      <span class="s">copy nguyên, hoặc qua mapper</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="node hot">
+      <span class="k">bước 3 · chất lượng</span>
+      <span class="v">9B / 27B trả lời</span>
+      <span class="s">tốc độ decode không đổi</span>
+    </div>
+  </div>
+  <p style="font-size:.88rem;color:var(--ink-3);margin-top:10px">Cái khó nằm ở bước 2: bộ nhớ của model này không đương nhiên có nghĩa với model kia.</p>
+</section>
+
+<section>
+  <h2>Bốn con số đáng nhớ nhất</h2>
+  <div class="stats">
+    <div class="stat"><div class="n">×12–16</div><div class="l">TTFT nhanh lên khi chạy thật trên vLLM ở 30K token: từ 11–24 giây xuống còn ~1 giây</div></div>
+    <div class="stat"><div class="n">57%</div><div class="l">Tỷ lệ câu trả lời đúng khi dùng cache ngoại, trên 240 mẫu — trong khi tự đọc đạt 100%</div></div>
+    <div class="stat"><div class="n">92%</div><div class="l">Mapper 4B→9B trên function-calling, ngữ cảnh 16K — cặp model dễ nhất</div></div>
+    <div class="stat"><div class="n">0%</div><div class="l">Mapper 4B→27B trên toán ngoài miền đã train, dù 4B tự đọc đạt 81,5%</div></div>
+  </div>
+</section>
+
+<section>
+  <h2>Trạng thái từng nhánh</h2>
+  <div class="ledger">
+
+    <div class="row ok">
+      <div class="top"><h3>4B → 9B, bê nguyên cache</h3><span class="chip ok">chạy được</span></div>
+      <p>Không cần mapper, không cần huấn luyện gì. Cache của 4B đưa thẳng vào 9B vẫn giữ <strong>100% khả năng tìm thông tin</strong> tới 30K token (12/12), tốc độ decode không suy giảm (11,8 = 11,8 token/giây), thao tác ghép mất 0,08 giây.</p>
+      <p>Giới hạn: hụt ở biên mỏng. Function-calling chỉ 9/20 so với 19/20 khi 9B tự đọc.</p>
+    </div>
+
+    <div class="row ok">
+      <div class="top"><h3>4B → 9B, có mapper huấn luyện</h3><span class="chip ok">tốt nhất hiện có</span></div>
+      <p>Mapper 35 triệu tham số, huấn luyện bằng loss chức năng. <strong>Function-calling 23/25 (92%)</strong>, <strong>tìm thông tin 29/29 (100%)</strong>, ở ngữ cảnh <strong>16.384</strong> token — cao hơn hẳn bản 4B→27B cả về điểm lẫn độ dài.</p>
+      <p>Chưa đo trên benchmark ngoài miền train. Đó là bài đang chạy.</p>
+    </div>
+
+    <div class="row warn">
+      <div class="top"><h3>4B → 27B, có mapper</h3><span class="chip warn">chỉ trong miền đã train</span></div>
+      <p>Trong miền đã huấn luyện thì rất tốt: function-calling 18/20, tìm thông tin niêm phong 15/15. Nhưng ra ngoài miền thì sụp: BBH 6%, GSM8K 0%, MuSR 1,5%.</p>
+      <p>Phép đối chứng quyết định: <strong>4B tự đọc đạt 81,5% trên GSM8K — cao hơn cả 27B (80%)</strong>. Thông tin nằm sẵn trong cache 4B; đi qua mapper thì mất. Lỗi ở khâu dịch, không phải model nguồn yếu.</p>
+    </div>
+
+    <div class="row bad">
+      <div class="top"><h3>0.8B / 2B → 9B</h3><span class="chip bad">đã đóng bằng số đo</span></div>
+      <p>Ba phương án LoRA tương thích đều thua sạch (0/5 ở mọi mốc), dù đã chứng minh cache của 2B <em>có đủ thông tin</em> (2B tự đọc 5/5). Phương ngữ bộ nhớ của nhóm model nhỏ không sửa được bằng adapter nhẹ.</p>
+    </div>
+
+    <div class="row ok">
+      <div class="top"><h3>Vận chuyển trong vLLM thật</h3><span class="chip ok">cơ chế hoàn chỉnh</span></div>
+      <p>Hai server vLLM + LMCache, vá đúng một dòng khoá không gian tên. Cache hit ở mọi độ dài, <strong>TTFT 30K từ 11–24 giây xuống ~1 giây</strong>. Điều kiện cần đã chốt bằng đo: KV phải bf16 (fp8 làm hỏng), phải căn khối, phải cùng phiên bản torch.</p>
+    </div>
+
+    <div class="row run">
+      <div class="top"><h3>Kiến trúc 2 lớp</h3><span class="chip run">đang chạy hôm nay</span></div>
+      <p>Gắn thêm LoRA vào chính 4B để ép nó "đọc hộ" cho model lớn, rồi mới qua mapper. Gradient chảy ngược suốt cả hai model. Đang huấn luyện cho cặp 4B→9B.</p>
+    </div>
+
+  </div>
+</section>
+
+<section>
+  <h2>Chất lượng thật khi chạy trên serving</h2>
+  <p>Đây là phần quan trọng nhất và cũng là phần dễ bị tô hồng nhất. Ba chiến dịch đo trên vLLM thật, mỗi lần đều có cột "tự đọc" làm đối chứng:</p>
+
+  <div class="tw">
+  <table>
+    <thead>
+      <tr><th>Chiến dịch</th><th class="num">n</th><th class="num">Tự đọc</th><th class="num">Cache ngoại</th><th class="num">Tăng tốc</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Trích nguyên văn, 8K token</td><td class="num">240</td><td class="num">100%</td><td class="num big">57,1%</td><td class="num">×2,7</td></tr>
+      <tr><td>Hỏi đáp ngữ nghĩa, văn bản thật</td><td class="num">60</td><td class="num">90%</td><td class="num big">55%</td><td class="num">—</td></tr>
+      <tr><td>Trọng số bf16 thay vì lượng tử</td><td class="num">2</td><td class="num">100%</td><td class="num">50%</td><td class="num">—</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>Hai dòng đầu gần như trùng nhau (57% và 55%) trên hai loại bài hoàn toàn khác nhau. Đó không phải trùng hợp — nó là dấu vân tay của một hiện tượng chung, không phải lỗi của một bài cụ thể.</p>
+
+  <blockquote>Không còn "một con bug" nào để sửa. Chúng tôi đã bác lần lượt: trang bộ nhớ bị rơi, lượng tử hoá trọng số, ghép lại phần đuôi, cách dựng checkpoint. Mỗi lần đều bằng thí nghiệm đối chứng, không bằng suy luận.</blockquote>
+</section>
+
+<section>
+  <h2>Ba định luật rút ra được</h2>
+
+  <div class="law">
+    <span class="n">01 · định luật ghép đôi</span>
+    <h3>Số phận của một cặp model nằm 100% ở bộ nhớ hồi quy, không ở attention</h3>
+    <p>Phần attention thẳng hàng trong toàn họ Qwen3.5 — mọi cặp đều tương thích. Phần quyết định là GDN. Đo tương quan CCA của GDN thì: ≥0,9 là bê nguyên được; khoảng 0,8 là phải học mới được (4B→27B); khoảng 0,23 là tường, không qua nổi (0.8B, 2B).</p>
+  </div>
+
+  <div class="law">
+    <span class="n">02 · định luật biên mỏng</span>
+    <h3>Decode trên cache ngoại đứng sát mép vực số học</h3>
+    <p>Chữ đầu tiên sinh ra từ cache lạ luôn ở trạng thái cận biên. Bất kỳ nhiễu nhỏ nào — kernel khác nhau, một vòng ghi đọc qua bộ nhớ, lượng tử hoá — cũng đủ lật một ca đang đúng thành sai. Đây là lý do tỷ lệ dừng ở ~57% chứ không phải 0% hay 95%.</p>
+  </div>
+
+  <div class="law">
+    <span class="n">03 · định luật đặt sai chỗ</span>
+    <h3>Sai số nhỏ không có nghĩa là chạy được</h3>
+    <p>Đã kiểm 4 lần: các thước đo thống kê (R², NLL, nMSE) <em>không</em> dự đoán được chức năng. Có trường hợp cache chép sang cho NLL <strong>tốt hơn</strong> khi tự đọc (2,43 so với 2,64) mà vẫn trả lời sai. Chỉ tin thí nghiệm chức năng.</p>
+  </div>
+</section>
+
+<section>
+  <h2>Cái bán được hôm nay, và cái chưa</h2>
+
+  <h3 style="margin-bottom:8px">Bán được</h3>
+  <ul>
+    <li><strong>Cascade 4B→27B trong miền đã huấn luyện</strong> — function-calling và tra cứu ngữ cảnh ≤4K. Số đo vững, TTFT nhanh thật.</li>
+    <li><strong>Hybrid "thử cache ngoại trước, trượt thì đọc lại"</strong> — với 57% trúng và TTFT rẻ hơn 12–16 lần, phép tính kỳ vọng đã có lời ngay cả khi 43% phải làm lại từ đầu.</li>
+    <li><strong>Bộ công cụ đo</strong> — mọi kết luận đều kèm cột đối chứng và bộ test không cần GPU. Đây là thứ ngăn báo cáo sai.</li>
+  </ul>
+
+  <h3 style="margin-bottom:8px;margin-top:22px">Chưa bán được</h3>
+  <ul>
+    <li><strong>Không phải "tăng tốc đa dụng"</strong>. Mapper 35 triệu tham số chỉ học được ánh xạ cho miền cụ thể đã huấn luyện, chưa học được "cách dịch bộ nhớ" nói chung.</li>
+    <li><strong>Trích xuất chính xác thuần tuý</strong> cần một lớp gia cố biên để kéo 57% lên 95%+.</li>
+    <li>Chưa đo qua mạng thật; mọi số hiện có đều qua localhost.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>Hai giả thuyết chưa phân giải</h2>
+  <p>Kết luận "mapper không học được cách dịch tổng quát" ban đầu bị nêu quá sớm. Kiểm lại dữ liệu huấn luyện cho thấy nó gồm <strong>655 mẫu function-calling, 430 mẫu tìm thông tin, 245 mẫu định dạng — và 0 mẫu toán, 0 mẫu suy luận nhiều bước</strong>. Mọi đích huấn luyện đều ngắn 16–24 token, trong khi bài toán đòi sinh 320 token.</p>
+  <p>Nên thất bại ngoài miền có hai cách giải thích mà thí nghiệm đã chạy <em>không</em> tách được:</p>
+  <div class="tw">
+  <table>
+    <thead><tr><th>Giả thuyết</th><th>Nội dung</th><th>Cách phân giải</th></tr></thead>
+    <tbody>
+      <tr><td><strong>H1</strong></td><td>Lớp hàm mapper (tuyến tính từng lớp) quá yếu</td><td rowspan="2">Huấn luyện lại với dữ liệu đa dạng, giữ nguyên mọi thứ khác. Tăng rõ → H2. Vẫn ~0 → H1.</td></tr>
+      <tr><td><strong>H2</strong></td><td>Miền huấn luyện và chế độ sinh quá hẹp</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>Đó chính là thí nghiệm đang chạy: 7.768 mẫu gồm toán, suy luận, hỏi đáp — không mẫu nào trùng 580 mẫu niêm phong (đã đối chiếu từng chuỗi).</p>
+</section>
+
+<section>
+  <h2>Ràng buộc phần cứng, đo thật</h2>
+  <p>Kiến trúc 2 lớp bắt buộc cả hai model cùng nằm trên GPU kèm đồ thị đạo hàm. Trên một card L4 22GB, chọn model lớn nào quyết định tất cả:</p>
+  <div class="tw">
+  <table>
+    <thead><tr><th>Cặp</th><th class="num">Nền 2 model</th><th class="num">Còn trống</th><th>Ngữ cảnh tối đa</th><th>Đích huấn luyện</th></tr></thead>
+    <tbody>
+      <tr><td>4B → 27B</td><td class="num">16,16 GiB</td><td class="num">5,54 GiB</td><td>2.048</td><td>≤48 token</td></tr>
+      <tr class="total"><td>4B → 9B</td><td class="num">6,86 GiB</td><td class="num">14,88 GiB</td><td class="big">16.384</td><td class="big">256 token trọn vẹn</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>Ở nhánh 27B phải hy sinh cả hai: ngữ cảnh cụt và lời giải bị cắt còn 48 token. Ở nhánh 9B thì không phải hy sinh gì. Đây là lý do kỹ thuật khiến việc làm chắc ở cặp 4B→9B trước là đúng.</p>
+</section>
+
+<section>
+  <h2>Ngã rẽ tiếp theo</h2>
+  <ul>
+    <li><strong>Đang chạy</strong> — huấn luyện kiến trúc 2 lớp cho 4B→9B, sau đó đo trên 580 mẫu niêm phong với đầy đủ cột đối chứng "tự đọc".</li>
+    <li><strong>Nếu H2 đúng</strong> — mở rộng dữ liệu là đường đi, và làm lại tương tự cho 4B→27B.</li>
+    <li><strong>Nếu H1 đúng</strong> — phải đổi lớp hàm mapper, không phải thêm dữ liệu.</li>
+    <li><strong>Song song</strong> — lớp gia cố biên cho bài trích xuất chính xác, nhắm kéo 57% lên ngưỡng bán được.</li>
+  </ul>
+</section>
+
+<footer>
+  Mọi con số trong trang này đến từ thí nghiệm chạy thật trên NVIDIA L4, không có số nội suy.
+  Kết quả thô lưu trên HuggingFace; mã nguồn và nhật ký đo trong kho <code>custom-vllm</code>.
+</footer>
+
+</div>
