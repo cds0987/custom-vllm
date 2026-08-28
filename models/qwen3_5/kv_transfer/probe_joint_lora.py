@@ -158,6 +158,13 @@ def main():
     ap.add_argument("--ctxs", default="1024,2048,4096")
     ap.add_argument("--src-dtypes", default="4bit,bf16")
     ap.add_argument("--gold", type=int, default=16)
+    ap.add_argument("--golds", default="",
+                    help="quet nhieu do dai gold, vd '16,64,128,256'. gold la "
+                         "SO VI TRI feed vao 27B nen no an bo nho THAT SU: "
+                         "gsm8k gold la loi giai day du ~256 token, gap 16 lan "
+                         "probe dau (16) -- phai do, khong duoc suy dien.")
+    ap.add_argument("--tbptts", default="",
+                    help="quet nhieu cua so TBPTT, vd '128,64,32'")
     ap.add_argument("--tbptt", type=int, default=0,
                     help="cat lan truyen nguoc: chi w vi tri CUOI co grad "
                          "(0 = tat). Duong thay the cho GC vi GC ep "
@@ -167,6 +174,12 @@ def main():
                          "duong joint la activation 4B khi prefill co grad)")
     args = ap.parse_args()
     ctxs = [int(x) for x in args.ctxs.split(",")]
+    golds = ([int(x) for x in args.golds.split(",")] if args.golds
+             else [args.gold])
+    tbptts = ([int(x) for x in args.tbptts.split(",")] if args.tbptts
+              else [args.tbptt])
+    combos = [(T, g, w) for T in ctxs for g in golds for w in tbptts]
+    print(f"quet {len(combos)} cau hinh (ctx x gold x tbptt)", flush=True)
 
     from transformers import AutoConfig
 
@@ -237,7 +250,7 @@ def main():
             traceback.print_exc()
             continue
 
-        for T in ctxs:
+        for (T, GOLD, W) in combos:
             gc.collect()
             torch.cuda.empty_cache()
             torch.cuda.reset_peak_memory_stats()
@@ -247,10 +260,9 @@ def main():
             try:
                 ids = torch.randint(1000, 5000, (1, T), device="cuda")
                 cut, warm = ids[:, :-WARM_P], ids[:, -WARM_P:]
-                gold = torch.randint(1000, 5000, (1, args.gold), device="cuda")
+                gold = torch.randint(1000, 5000, (1, GOLD), device="cuda")
                 stage("nen")
-                src_past = (prefill_tbptt(model_s, cut, args.tbptt)
-                            if args.tbptt else
+                src_past = (prefill_tbptt(model_s, cut, W) if W else
                             prefill_grad(model_s, cut))       # (1) 4B CO GRAD
                 stage("sau prefill 4B")
                 tpl = e5.build_template_from_meta(probe_t, metas[T])
@@ -261,7 +273,7 @@ def main():
                 out = model_t(input_ids=feed, past_key_values=student,
                               use_cache=True)                  # (3) 27B
                 stage("sau forward 27B")
-                lg = out.logits[:, -args.gold + 1:, :].float()
+                lg = out.logits[:, -GOLD + 1:, :].float()
                 loss = torch.nn.functional.cross_entropy(
                     lg.reshape(-1, lg.shape[-1]), gold[:, 1:].reshape(-1))
                 loss.backward()
@@ -270,20 +282,22 @@ def main():
                            if p.requires_grad)
                 gmap = sum(int(p.grad is not None) for p in mapper.params)
                 dt = time.time() - t0
-                rows.append((sd, T, "OK", round(gib(), 2), round(dt, 1),
-                             gsum, gmap))
-                print(f"[{sd} T={T}] OK peak={gib():.2f}GiB (nen {base:.2f}) "
+                rows.append((f"{sd} g{GOLD} w{W}", T, "OK", round(gib(), 2),
+                             round(dt, 1), gsum, gmap))
+                print(f"[{sd} T={T} gold={GOLD} tbptt={W}] OK "
+                      f"peak={gib():.2f}GiB (nen {base:.2f}) "
                       f"t={dt:.1f}s loss={loss.item():.3f} "
                       f"grad_lora={gsum} grad_mapper={gmap}/{len(mapper.params)}",
                       flush=True)
             except torch.cuda.OutOfMemoryError:
-                rows.append((sd, T, "OOM", round(gib(), 2),
+                rows.append((f"{sd} g{GOLD} w{W}", T, "OOM", round(gib(), 2),
                              round(time.time() - t0, 1), 0, 0))
-                print(f"[{sd} T={T}] OOM peak={gib():.2f}GiB", flush=True)
+                print(f"[{sd} T={T} gold={GOLD} tbptt={W}] OOM "
+                      f"peak={gib():.2f}GiB", flush=True)
             except Exception as e:
-                rows.append((sd, T, type(e).__name__, round(gib(), 2),
-                             round(time.time() - t0, 1), 0, 0))
-                print(f"[{sd} T={T}] LOI {type(e).__name__}: {e}", flush=True)
+                rows.append((f"{sd} g{GOLD} w{W}", T, type(e).__name__,
+                             round(gib(), 2), round(time.time() - t0, 1), 0, 0))
+                print(f"[{sd} T={T} gold={GOLD} tbptt={W}] LOI {type(e).__name__}: {e}", flush=True)
                 traceback.print_exc()
             finally:
                 del src_past, tpl, student, out
@@ -298,10 +312,10 @@ def main():
         torch.cuda.empty_cache()
 
     print("\n=== KET QUA JOINT PROBE ===", flush=True)
-    print(f"{'dtype':6} {'ctx':>6} {'trang thai':>12} {'peak GiB':>9} "
+    print(f"{'cau hinh':16} {'ctx':>6} {'trang thai':>12} {'peak GiB':>9} "
           f"{'t/buoc':>7} {'gLoRA':>6} {'gMap':>5}")
     for r in rows:
-        print(f"{r[0]:6} {r[1]:6d} {r[2]:>12} {r[3]:9.2f} {r[4]:7.1f}s "
+        print(f"{r[0]:16} {r[1]:6d} {r[2]:>12} {r[3]:9.2f} {r[4]:7.1f}s "
               f"{r[5]:6d} {r[6]:5d}")
     ok = [r for r in rows if r[2] == "OK" and r[5] > 0 and r[6] > 0]
     if ok:
