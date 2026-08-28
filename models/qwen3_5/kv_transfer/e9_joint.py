@@ -94,6 +94,27 @@ def gib():
     return torch.cuda.max_memory_allocated() / 2**30
 
 
+# BAO DO THAT (probe_joint_lora, 42 cau hinh, 2026-08-28). gold = SO VI TRI
+# feed vao 27B; moi vi tri giu them state GDN cho backward nen no dat hon
+# ctx nhieu. Tuong CUNG o gold=64 voi MOI T (256..2048) — khong phai gioi han
+# tron, la nguong cap phat.
+#
+#     T      gold toi da    peak GiB
+#     256        48           20,75
+#     512        48           20,92
+#    1024        48           21,24
+#    1536        16           20,97
+#    2048        16           21,30
+GOLD_ENVELOPE = [(1024, 48), (2048, 16)]
+
+
+def gold_cap_for(t, hard_cap):
+    for t_max, g in GOLD_ENVELOPE:
+        if t <= t_max:
+            return min(g, hard_cap)
+    return min(GOLD_ENVELOPE[-1][1], hard_cap)
+
+
 # ---------------------------------------------------------------- template --
 
 def meta_for_len(base, t_base, t):
@@ -170,9 +191,13 @@ def main():
     ap.add_argument("--src-model", default="Qwen/Qwen3.5-4B")
     ap.add_argument("--tgt-model", default="Qwen/Qwen3.5-27B")
     ap.add_argument("--data-file", default="/content/train_items.json")
-    ap.add_argument("--max-ctx", type=int, default=1024)
-    ap.add_argument("--tbptt", type=int, default=128)
-    ap.add_argument("--gold-cap", type=int, default=64,
+    ap.add_argument("--max-ctx", type=int, default=2048,
+                    help="user 2026-08-28 'tang tran 1024-2048'; da do: 2048 "
+                         "chay tron voi tbptt=64 (gold tu dong ha ve 16 o do)")
+    ap.add_argument("--tbptt", type=int, default=64,
+                    help="do duoc: w=128 OOM o ctx>=1536; w=64 chay tron toi "
+                         "2048 (probe_joint_lora luot 6)")
+    ap.add_argument("--gold-cap", type=int, default=48,
                     help="tran token gold. gold = SO VI TRI feed vao 27B nen "
                          "an bo nho that (do trong probe: gold 256 khac han "
                          "gold 16). Cat theo cau hinh da do duoc.")
@@ -281,7 +306,10 @@ def main():
         e = tok_t(it["prompt"], return_tensors="pt", truncation=True,
                   max_length=args.max_ctx)["input_ids"].to("cuda")
         cut, warm = e[:, :-WARM_P], e[:, -WARM_P:]
-        gm = min(GMAX.get(it["kind"], GOLD_MAX), args.gold_cap)
+        # tran gold theo BAO DO THAT, phu thuoc do dai prompt (xem
+        # GOLD_ENVELOPE): gold dai an bo nho hon ca ctx dai
+        gm = min(GMAX.get(it["kind"], GOLD_MAX),
+                 gold_cap_for(cut.shape[1], args.gold_cap))
         gold_ids = tok_t(it["gold"], add_special_tokens=False,
                          return_tensors="pt")["input_ids"][:, :gm].to("cuda")
         feed = torch.cat([warm, gold_ids[:, :-1]], 1)
