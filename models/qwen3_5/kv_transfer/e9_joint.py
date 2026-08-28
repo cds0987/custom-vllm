@@ -90,6 +90,11 @@ NEW_KINDS = {"gsm8k", "bbh", "musr", "suite_rag", "suite_mid",
 SEED = 7
 
 
+class _SkipItem(Exception):
+    """Bo qua mot item ma VAN di tiep het than vong lap (de khoi val o cuoi
+    khong bi nhay qua) — thay cho `continue`."""
+
+
 def gib():
     return torch.cuda.max_memory_allocated() / 2**30
 
@@ -474,14 +479,23 @@ def main():
                 for k, v in sc.items()}, \
                sum(sum(v["mapped"]) for v in sc.values())
 
-    best = -1
+    best, n_skip = -1, 0
     t_start = time.time()
     for step in range(1, args.steps + 1):
         it = data["train"][(step - 1) % len(data["train"])]
+        cev, skipped = None, False
         try:
             cut, warm, gold_ids, feed = enc(it)
-            if gold_ids.shape[1] < 2:
-                continue
+            # BUG DA SUA (2026-08-28, dem duoc bang tokenizer): nguong cu la
+            # `< 2` -> nem BO moi item co gold DUNG 1 token. Do that tren
+            # 6623 item du lieu moi: musr 474/474 = 100% bi bo, bbh 634/2500
+            # = 25,4%, tong 1108 = 16,7%. Dap an trac nghiem ("A"/"B") va dap
+            # an ngan cua bbh ("valid"/"True"/so) DEU la 1 token. Gold 1 token
+            # HOAN TOAN hop le: feed = warm (5 token), logits[:, WARM_P-1:]
+            # cho dung 1 vi tri, CE cham dung token do.
+            if gold_ids.shape[1] < 1:
+                skipped = True
+                raise _SkipItem
             st = student_past(cut)
             o = model_t(input_ids=feed, past_key_values=st, use_cache=True)
             logp = torch.log_softmax(o.logits[:, WARM_P - 1:].float(), -1)
@@ -495,17 +509,21 @@ def main():
             opt.step()
             sched.step()
             del st, o, logp, nll, ce
+        except _SkipItem:
+            n_skip += 1
         except torch.cuda.OutOfMemoryError:
+            # BUG DA SUA: truoc day dung `continue` -> nhay LUON qua khoi val
+            # o cuoi vong. Buoc val roi trung mot item bi bo = MAT HAN moc val
+            # do, im lang (do that: moc 1500 bien mat khoi log). Gio chi danh
+            # dau skipped roi di tiep, val van chay.
             print(f"  buoc {step} OOM (kind={it['kind']}, "
                   f"len={len(it['prompt'])}) -> bo qua", flush=True)
             opt.zero_grad(set_to_none=True)
-            gc.collect()
-            torch.cuda.empty_cache()
-            continue
+            skipped, n_skip = True, n_skip + 1
         gc.collect()
         torch.cuda.empty_cache()
 
-        if step % 20 == 0:
+        if step % 20 == 0 and not skipped:
             results["train_loss"].append([step, round(cev, 4)])
             print(f"buoc {step}/{args.steps} ce={cev:.4f} "
                   f"{(time.time()-t_start)/step:.2f}s/buoc "
@@ -532,8 +550,9 @@ def main():
             # kha nang dung som oan. Dung TRUNG BINH TRUOT 20 buoc gan nhat.
             recent = [c for _, c in results["train_loss"][-20:]]
             ce_ma = sum(recent) / max(len(recent), 1)
-            print(f"    ce trung binh 20 buoc = {ce_ma:.4f} "
-                  f"(ce buoc nay {cev:.4f})", flush=True)
+            print(f"    ce trung binh 20 buoc = {ce_ma:.4f}"
+                  + (f" (ce buoc nay {cev:.4f})" if cev is not None else "")
+                  + f" | da bo qua {n_skip} buoc", flush=True)
             if ce_ma < args.ce_floor:
                 print(f"CE_FLOOR (trung binh {ce_ma:.4f} < {args.ce_floor}) "
                       "-> dung som", flush=True)
