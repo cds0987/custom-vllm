@@ -257,6 +257,100 @@ footer{border-top:1px solid var(--line); padding-top:22px; margin-top:12px; font
 </section>
 
 <section>
+  <h2>Mapper được xây thế nào</h2>
+  <p>Mapper là lớp dịch giữa hai bộ nhớ. Nó nhỏ — khoảng <strong>35 triệu tham số</strong>, file checkpoint 67 MB cho cặp 4B→9B và 134 MB cho 4B→27B — vì nó không học nội dung, chỉ học <em>cách phiên dịch</em>.</p>
+
+  <h3 style="margin-top:26px">Kiến trúc: hai nửa, hai cách xử lý khác hẳn</h3>
+  <p>Model Qwen3.5 xen kẽ hai loại lớp: khoảng 25% là attention thường, 75% là GDN (bộ nhớ hồi quy). Mapper xử lý hai nửa này hoàn toàn khác nhau, vì bản chất chúng khác nhau.</p>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>Nửa</th><th>Vật cần dịch</th><th>Cách dịch</th><th class="num">Tham số / lớp</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>Attention</strong><br><span style="color:var(--ink-3);font-size:.85rem">8 lớp ở 9B · 16 ở 27B</span></td>
+        <td>Cặp khoá–giá trị <code>K</code>, <code>V</code></td>
+        <td>Bóc bỏ mã vị trí RoPE của model nguồn → nhân ma trận 1024×1024 → đóng lại mã vị trí RoPE của model đích</td>
+        <td class="num">4 (W<sub>K</sub>, b<sub>K</sub>, W<sub>V</sub>, b<sub>V</sub>)</td>
+      </tr>
+      <tr>
+        <td><strong>GDN</strong><br><span style="color:var(--ink-3);font-size:.85rem">24 lớp ở 9B · 48 ở 27B</span></td>
+        <td>Trạng thái hồi quy <code>S</code></td>
+        <td>Chuẩn hoá RMS → trộn đầu (ma trận α) → biến đổi hai phía <code>A·S·B</code> → nhân lại thang đo cũ</td>
+        <td class="num">3 (α, A, B)</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>Ba chi tiết nhỏ nhưng quyết định:</p>
+  <ul>
+    <li><strong>Khởi tạo bằng ma trận đơn vị.</strong> Mọi ma trận bắt đầu là "không làm gì cả". Vì cặp 4B→9B vốn đã bê nguyên được, mapper chỉ cần học phần <em>lệch</em>. Khởi tạo ngẫu nhiên sẽ phá hỏng cái đang chạy được rồi mới học lại từ đầu.</li>
+    <li><strong>Chuẩn hoá RMS trước khi biến đổi GDN.</strong> Trạng thái GDN có đuôi nặng — giá trị kỳ dị lớn nhất lên tới 110. Không chuẩn hoá thì vài chiều lấn át toàn bộ, ma trận học ra chỉ chiều theo chúng.</li>
+    <li><strong>Bóc RoPE ra rồi đóng lại.</strong> Hai model có hằng số vị trí khác nhau. Nếu dịch thẳng trên khoá đã mã hoá vị trí, mapper phải học luôn cả phép quay theo vị trí — việc vô nghĩa và bất khả thi với một ma trận tĩnh.</li>
+  </ul>
+  <p>Riêng <code>conv_states</code> thì không dịch — đặt về 0 rồi dựng lại bằng 5 token thật cuối prompt. Xem kỹ thuật WARM_P bên dưới.</p>
+
+  <h3 style="margin-top:30px">Loss: chỉ tin thí nghiệm chức năng</h3>
+  <p>Đây là chỗ tốn nhiều vòng GPU nhất để tìm ra. Công thức hiện dùng:</p>
+  <blockquote>CE(đáp án đúng) &nbsp;+&nbsp; 0,3 × KL(so với model lớn tự đọc) &nbsp;+&nbsp; λ(t) × MSE trạng thái &nbsp;+&nbsp; 0,05 × giám sát dày</blockquote>
+  <ul>
+    <li><strong>CE trên đáp án đúng là thành phần quyết định.</strong> Mọi phiên bản chỉ khớp trạng thái (nMSE) đều chết — có bản học nMSE từ 10,5 xuống 1,06 rồi vẫn 0/5 khi hỏi thật.</li>
+    <li><strong>Token đầu có trọng số ×3.</strong> Theo định luật biên mỏng, chỗ vỡ nằm ở vài chữ đầu tiên. Dồn sức vào đúng đó.</li>
+    <li><strong>Token cấu trúc có trọng số ×2</strong> — dấu ngoặc, dấu nháy, dấu phẩy. Với đầu ra có cấu trúc, sai một dấu ngoặc là hỏng cả câu trả lời dù nội dung đúng.</li>
+    <li><strong>KL chỉ lấy trên 64 logit đỉnh</strong> của model lớn, phần đuôi gộp làm một. Đủ 99% khối lượng xác suất mà lưu đĩa rẻ đi hàng chục lần.</li>
+    <li><strong>Trọng số λ giảm dần theo thời gian</strong> — MSE trạng thái hữu ích lúc đầu để định hướng thô, sau đó nhường chỗ cho tín hiệu chức năng.</li>
+    <li><strong>Chọn checkpoint bằng điểm chức năng</strong>, không bằng loss. Đây là hệ quả trực tiếp của định luật đặt sai chỗ.</li>
+  </ul>
+
+  <h3 style="margin-top:30px">Sáu kỹ thuật đã cứu chiến dịch</h3>
+  <div class="law">
+    <span class="n">kỹ thuật 01</span>
+    <h3>WARM_P — cắt cache sớm 5 token</h3>
+    <p>Cache lấy tới vị trí T−5, rồi cho model lớn "chạy ấm" bằng đúng 5 token cuối của prompt (token thật, không phải đáp án). Bản trước làm ngược lại: dùng chính token đầu của đáp án để chạy ấm, tức là <strong>bỏ token quyết định nhất ra khỏi loss</strong>. Sửa đúng chỗ này đưa function-calling từ 0/20 lên 16/20 — cùng dữ liệu, cùng kiến trúc.</p>
+  </div>
+  <div class="law">
+    <span class="n">kỹ thuật 02</span>
+    <h3>Template xương — bỏ hẳn prefill của model lớn khi huấn luyện</h3>
+    <p>Mỗi bước huấn luyện vốn phải cho model lớn đọc cả prompt để lấy khung cache đúng vị trí — rất đắt. Nhận ra khung đó chỉ phụ thuộc <em>hình dạng</em>, không phụ thuộc nội dung (mọi tensor đều bị mapper thay hoặc đặt 0), nên dựng khung rỗng từ metadata. Tốc độ xuống ~1,4 giây/bước.</p>
+    <p>Kèm một điều kiện cứng: khung suy ra <strong>phải được đối chiếu với khung thật</strong> ở nhiều độ dài trước khi tin. Lệch một trường số nguyên là cache sai vị trí toàn tập mà không hề báo lỗi.</p>
+  </div>
+  <div class="law">
+    <span class="n">kỹ thuật 03</span>
+    <h3>Giáo trình độ dài — vách đá 2K là ảo</h3>
+    <p>Một bản mapper đạt 17/20 function-calling nhưng chỉ 1/10 khi tìm thông tin ở 2.000 token, trông như một giới hạn vật lý của GDN. Thêm mẫu huấn luyện trải dài 700 → 16.000 token thì <strong>vách đá biến mất, 10/10</strong>. Nó chỉ là ảo ảnh của phân phối dữ liệu huấn luyện.</p>
+  </div>
+  <div class="law">
+    <span class="n">kỹ thuật 04</span>
+    <h3>Bố cục hai pha — hai model không bao giờ cùng lúc</h3>
+    <p>27B lượng tử 4-bit chiếm ~18 GB, 4B chiếm ~3,5 GB; cộng lại vượt card 22 GB. Pha 1 chỉ nạp 4B, tính cache cho toàn bộ mẫu rồi ghi ra đĩa và xả sạch. Pha 2 nạp 27B đọc lại. Bỏ qua nguyên tắc này là OOM giữa chừng — đã vấp thật.</p>
+  </div>
+  <div class="law">
+    <span class="n">kỹ thuật 05</span>
+    <h3>Tiền tính phần của model lớn, một lần cho mỗi mẫu</h3>
+    <p>Logit đỉnh và các lớp mẫu của model lớn không đổi trong suốt quá trình huấn luyện, nên tính một lần rồi lưu (~4 MB/mẫu). Vòng huấn luyện chỉ còn phần của mapper. Cộng với việc tính lại phép biến đổi attention trong lượt ngược thay vì lưu, đây là hai thứ khiến huấn luyện vừa bộ nhớ.</p>
+  </div>
+  <div class="law">
+    <span class="n">kỹ thuật 06</span>
+    <h3>Khởi động ấm và tự lưu lên HuggingFace mỗi mốc</h3>
+    <p>Mapper mới luôn bắt đầu từ mapper cũ tốt nhất. Và mọi checkpoint tự đẩy lên HuggingFace ngay tại mỗi mốc kiểm tra — sau hai lần mất trắng mapper kỷ lục vì môi trường bị thu hồi, đây là điều kiện bắt buộc trước khi phóng bất kỳ lượt huấn luyện dài nào.</p>
+  </div>
+
+  <h3 style="margin-top:30px">Bốn cách làm đã thử và loại</h3>
+  <div class="tw">
+  <table>
+    <thead><tr><th>Cách làm</th><th>Kết quả đo</th><th>Bài học</th></tr></thead>
+    <tbody>
+      <tr><td>Hồi quy ridge (giải tích, không huấn luyện)</td><td>R² 0,73 / 0,60 nhưng <strong>0/12</strong> khi hỏi thật</td><td>Sai số nhỏ ≠ chạy được</td></tr>
+      <tr><td>Ridge nối nhiều lớp</td><td>Thua cả ridge một lớp</td><td>Thêm dung lượng không cứu được lớp hàm sai</td></tr>
+      <tr><td>Loss khớp trạng thái thuần</td><td>nMSE 10,5 → 1,06 rồi kẹt; <strong>0/5</strong></td><td>Phải dùng loss chức năng</td></tr>
+      <tr><td>Đọc lại phần đuôi để "vá" cache</td><td>Càng vá càng hỏng</td><td>Cache có tính nhất quán nội tại</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section>
   <h2>Chất lượng thật khi chạy trên serving</h2>
   <p>Đây là phần quan trọng nhất và cũng là phần dễ bị tô hồng nhất. Ba chiến dịch đo trên vLLM thật, mỗi lần đều có cột "tự đọc" làm đối chứng:</p>
 
