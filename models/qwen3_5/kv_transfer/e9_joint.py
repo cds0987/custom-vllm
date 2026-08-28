@@ -234,7 +234,11 @@ def main():
     ap.add_argument("--val-n", type=int, default=40)
     ap.add_argument("--ce-floor", type=float, default=0.2)
     ap.add_argument("--init-mapper", default="",
-                    help="warm-start tu mapper da co (v427_4k)")
+                    help="warm-start tu mapper da co (v427_4k / v49)")
+    ap.add_argument("--init-lora", default="",
+                    help="nap lai LoRA da luu (thu muc lora_last/ hoac "
+                         "lora_best/) — de tiep tuc mot run bi dung giua "
+                         "chung ma khong mat cong da train")
     ap.add_argument("--out", default="/content/joint_v1")
     ap.add_argument("--hf-repo", default="gunnybd01/qwen35-kv-mapper-4b-27b")
     ap.add_argument("--hf-prefix", default="joint_v1")
@@ -304,6 +308,15 @@ def main():
         bias="none", target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
         task_type="CAUSAL_LM"))
     model_s.train()
+    if args.init_lora:
+        from peft import set_peft_model_state_dict
+        from safetensors.torch import load_file
+        sd = load_file(str(Path(args.init_lora) / "adapter_model.safetensors"))
+        res = set_peft_model_state_dict(model_s, sd)
+        n_miss = len(getattr(res, "unexpected_keys", []) or [])
+        print(f"nap lai LoRA tu {args.init_lora} ({len(sd)} tensor, "
+              f"{n_miss} khoa la)", flush=True)
+        assert n_miss == 0, "khoa LoRA khong khop — DUNG, khong train mu"
     lora_params = [p for p in model_s.parameters() if p.requires_grad]
     print(f"LoRA r={args.lora_r}: "
           f"{sum(p.numel() for p in lora_params)/1e6:.1f}M param", flush=True)
