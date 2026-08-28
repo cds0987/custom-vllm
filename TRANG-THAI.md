@@ -272,6 +272,17 @@ Cập nhật: 2026-08-28.
   đa dạng hóa mạnh miền train, hoặc đổi lớp hàm mapper. HF
   `extbench_cross/` + `v427_4k/`. Vá 2 bug: dict-wrap 5.15 (e5._get),
   OOM do nạp 2 model cùng lúc → run_cross HAI PHA.
+- **USER LẬT KẾT LUẬN (2026-08-28): "có train mapper cho math/reasoning
+  không? nếu chỉ train BFCL thì fail task khác là đúng rồi"** — ĐÚNG, đã
+  kiểm code `build_data()`: train ~1330 item = bfcl ~655 + needle 430 +
+  ifstruct 135 + pbtable 110. **Math 0, reasoning nhiều bước 0, QA văn
+  xuôi 0.** Thêm nữa mọi target train đều NGẮN-TRÍCH (bfcl 24 tok,
+  needle 16) trong khi bbh/gsm8k/musr đòi sinh dài suy luận (320 tok).
+  → Thí nghiệm đã chạy KHÔNG tách được 2 giả thuyết: (H1) lớp hàm mapper
+  yếu, (H2) miền train quá hẹp. Câu "phán quyết lần 4 về lớp hàm" là
+  KẾT LUẬN VƯỢT DỮ LIỆU — hạ xuống "chưa xác định". Phép đo phân giải:
+  train lại với data đa dạng (suite_gen.py 4 họ ĐÃ dựng sẵn, chưa dùng
+  cho train + gsm8k/bbh train-split) rồi đo lại đúng benchmark đó.
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 

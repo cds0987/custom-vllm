@@ -1412,6 +1412,38 @@ quát — chỉ học được ánh xạ CHO MIỀN CỤ THỂ đã train**. B�
 lần này có thêm đối chứng 4B-self nên loại trừ được giả thuyết "model
 nguồn yếu".
 
+**HIỆU CHỈNH NGAY SAU ĐÓ (user, 2026-08-28) — kết luận trên VƯỢT DỮ LIỆU.**
+User hỏi: "có train mapper cho math/reasoning không? nếu chỉ train BFCL thì
+fail task khác là đúng rồi". Kiểm `build_data()` trong `e6v3_ce.py`:
+
+    train ~1330 item @max_ctx=4096:
+      bfcl exec_simple 80 + simple 385 + parallel ~95 + multiple ~95 = ~655
+      needle (curriculum 700..4000) .......................... 430
+      ifstruct ............................................... 135
+      pbtable ................................................ 110
+    math: 0 | reasoning nhiều bước: 0 | QA văn xuôi tự nhiên: 0
+
+Thêm một lệch nữa quan trọng không kém MIỀN: **chế độ sinh**. Mọi target
+train là NGẮN-TRÍCH (GEN_LEN bfcl 24, needle 16 token) — mapper chưa bao giờ
+bị ép giữ cache sống qua vài trăm token sinh. bbh/gsm8k/musr đòi đúng thế
+(N_NEW 48/320/24 + chain-of-thought). Vậy cross hỏng có thể là "cache trôi
+sau ~30 token sinh" chứ không phải "không dịch được ngữ nghĩa toán".
+
+→ Thí nghiệm như đã chạy KHÔNG PHÂN GIẢI được 2 giả thuyết:
+  H1 lớp hàm mapper (tuyến tính per-layer) quá yếu để tổng quát
+  H2 miền train + chế độ sinh quá hẹp
+Đối chứng 4B-self (gsm8k 81,5%) chỉ loại được H0 "model nguồn yếu", KHÔNG
+tách được H1/H2. Câu "phán quyết lần 4 về LỚP HÀM" phải hạ xuống
+**"chưa xác định — cần đo H2 trước"**. Ghi lại như một lần suy luận vượt
+số đo (đúng thứ quy tắc 5 cấm).
+
+Phép đo phân giải đã đề xuất (chờ user duyệt): train lại CÙNG mapper, CÙNG
+siêu tham số, chỉ đổi DATA (thêm gsm8k/bbh train-split + suite_gen.py 4 họ
+rag/mid/math/swe đã dựng sẵn từ 2026-08-26 nhưng chưa từng dùng để TRAIN) và
+nâng GEN_LEN cho item suy luận; rồi đo lại ĐÚNG bộ bbh/gsm8k/musr này.
+Cross tăng rõ → H2 (sửa được bằng data). Vẫn ~0 → khi đó H1 mới thành
+phán quyết có cơ sở.
+
 **Hàm ý sản phẩm**: cascade 4→27B dùng được TRONG miền đã train
 (function-calling, retrieval needle ≤4K) — đó vẫn là sản phẩm thật với
 số đo vững. Nhưng KHÔNG bán được như "tăng tốc đa dụng". Muốn tổng quát:
