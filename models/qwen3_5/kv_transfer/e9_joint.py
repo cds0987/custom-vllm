@@ -243,6 +243,11 @@ def main():
     ap.add_argument("--hf-repo", default="gunnybd01/qwen35-kv-mapper-4b-27b")
     ap.add_argument("--hf-prefix", default="joint_v1")
     ap.add_argument("--verify-meta", default="256,512,1024")
+    ap.add_argument("--no-offload", action="store_true",
+                    help="tat CPU-offload embed/lm_head cua model dich. BAT "
+                         "co nay cho 9B: offload chi can cho 27B, con voi 9B "
+                         "no lam moi buoc greedy phai qua lm_head tren CPU "
+                         "(val 40 mau: ~14 phut thay vi vai phut).")
     ap.add_argument("--gold-envelope", default="",
                     help="bao do 'T:gold,...' do bang probe_joint_lora cho "
                          "CAP MODEL dang dung (27B khac 9B). Rong = dung bao "
@@ -273,7 +278,13 @@ def main():
 
     # ---- nap 27B (CPU-offload embed/lm_head: tiet kiem 4,85GiB da do) ----
     t0 = time.time()
-    tok_t, model_t = e5.load_4bit_cpu_offload_io(args.tgt_model)
+    # CPU-offload embed/lm_head sinh ra DE cuu 27B (tiet kiem 4,85GiB tren
+    # card 22GB). Voi 9B thi THUA: nen 2 model chi 6,86GiB, con trong 14,88.
+    # Va no dat: moi token greedy phai chay lm_head (vocab ~152k) TREN CPU ->
+    # val 40 mau mat ~14 phut thay vi vai phut. Mac dinh TAT cho 9B.
+    load_tgt = e5.load_4bit if args.no_offload else e5.load_4bit_cpu_offload_io
+    print(f"nap 27B/9B bang {load_tgt.__name__}", flush=True)
+    tok_t, model_t = load_tgt(args.tgt_model)
     theta_t = e5.e1.get_rope_theta(model_t.config.get_text_config())
     print(f"27B nap xong {time.time()-t0:.0f}s", flush=True)
     with torch.no_grad():
