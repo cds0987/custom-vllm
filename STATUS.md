@@ -1545,6 +1545,29 @@ Kiem ro ri: **0/6898 item trung 580 mau niem phong** (doi chieu chuoi
 prompt, chay tren chinh runtime train). Sanity 30 buoc: ce 1,497 |
 5,76 s/buoc | peak 20,91 GiB | 0 buoc OOM.
 
+**CHUYEN HUONG SANG CAP 4->9 (user 2026-08-28: "khoan dung idea moi ve
+mapper tren 4-27, ma dung cap 4-9 de dam bao chat luong da").** Da dung job
+4->27 va do lai bao cho 4->9. Ly do vat ly: 9B bnb-4bit + CPU-offload chi
+~4,4 GiB (27B: 12,7) -> nen 2 model 6,86 GiB, TRONG 14,88 (27B: 16,16 va
+5,54). Bao do 4->9 (12 cau hinh, tbptt=128 — w=0 tuc lan truyen nguoc DAY DU
+van OOM o moi ctx):
+
+    ctx      gold 48            gold 256 (loi giai gsm8k tron ven)
+    4096   11,25 GiB / 6,7s     15,70 GiB / 13,1s
+    8192   12,68 GiB / 8,8s     17,04 GiB / 15,0s
+   16384   15,36 GiB / 12,8s    19,71 GiB / 19,1s
+
+**MOI cau hinh deu chay** — 4->9 lay lai duoc CA ctx dai LAN gold day du,
+dung hai thu nhanh 27B phai hy sinh (o 27B: gold >=64 OOM voi MOI T, ctx
+tran 2048). Day la ly do ky thuat vi sao huong user chot la dung.
+
+**TRAIN JOINT 4->9 DA PHONG**: `--tgt-model Qwen/Qwen3.5-9B`, ctx 8192
+(chon 8192 thay vi 16384 de con bien 4,5 GiB thay vi 1,8), tbptt 128,
+gold-cap 256, warm-start mapper v49 (92% BFCL / 100% needle), 2000 buoc,
+val moi 250, auto-upload HF `joint49/`. verify-meta KHOP o T=512 va 4096.
+Buoc 20: ce 1,4754 | **4,79 s/buoc** | peak 12,05 GiB — nhanh HON ca nhanh
+27B (5,76 s/buoc) du ctx gap 4 va gold gap 5.
+
 
 **HIỆU CHỈNH NGAY SAU ĐÓ (user, 2026-08-28) — kết luận trên VƯỢT DỮ LIỆU.**
 User hỏi: "có train mapper cho math/reasoning không? nếu chỉ train BFCL thì

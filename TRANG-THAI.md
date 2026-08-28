@@ -69,18 +69,12 @@ Cập nhật: 2026-08-28.
   {0.8B,2B} GDN lạc hệ; 4B→27B là cặp học sáng nhất (0,785).
 - Deep-innovation 6 đề xuất (chi tiết STATUS); user chọn #5
   compatibility-finetuning → E8 dưới đây.
-- **E8 ĐÓNG TRỌN 3 PHIÊN BẢN (2026-08-15, compatibility LoRA 2B→9B — #5,
-  phương án (c) kích hoạt)**: gate trần thông tin SÁNG (2B self needle
-  5/5@800 + 5/5@2000 — cache 2B CÓ đủ thông tin) nhưng cả 3 đòn thua sạch:
-  v1 (LoRA r=16 chỉ-GDN, KL-functional, 300 bước) 0/5×6 mốc; v2 (r=64 mọi
-  linear, state-alignment) 13s/bước kill; v3 (đúng bài Unsloth: student bf16
-  + kernel fla/causal-conv1d fast path BẬT) nMSE học xong thang đo 10,5→1,06
-  rồi KẸT ~0,96 (chiếm ~4% cấu trúc state) — needle 0/5 @74/@149 → dừng sớm.
+- **E8 ĐÓNG (2026-08-15, compatibility LoRA 2B→9B)**: gate trần thông tin
+  SÁNG (2B self needle 5/5) nhưng cả 3 đòn thua sạch (v1 LoRA-GDN 0/5×6 mốc;
+  v2 13s/bước kill; v3 nMSE 10,5→1,06 rồi kẹt ~0,96, needle 0/5).
   **PHÁN QUYẾT: phương ngữ GDN nhóm nhỏ không sửa được bằng adapter nhẹ;
-  4B là prefill-helper chính thức duy nhất của 9B.** Bài học Unsloth:
-  FastLanguageModel không dùng được cho cache-loss (past=None khi training,
-  trả processor đa phương thức); tinh túy giữ được = bf16 student (docs
-  "KHÔNG QLoRA trên Qwen3.5" trùng E6c) + kernel Triton. Chi tiết STATUS E8.
+  4B là prefill-helper duy nhất của 9B.** Bài học: FastLanguageModel không
+  dùng được cho cache-loss (past=None khi train). Chi tiết STATUS E8.
 
 - **E6 v3 ĐÓNG (2026-08-24)**: CE-gold loss, val 0 toàn tuyến, test niêm
   phong mapped 0/20 → nghi lớp hàm. BỊ LẬT bởi v3.1. Chi tiết STATUS.
@@ -178,11 +172,9 @@ Cập nhật: 2026-08-28.
   polisher cần kéo 57→95%+ cho exact-retrieval thuần. GPU trống, không
   job nền — chờ user định hướng (polisher / hybrid-fallback / cascade
   4→27 batch / kernel-diff bước 1).
-- **C2c sem XONG (2026-08-26, bước 1 user duyệt)**: scope ngữ nghĩa
-  (QA paraphrase trên văn bản wikitext thật, chấm keyword) trên serving
-  **self 54/60=90% | cross 33/60=55%** — KHÔNG miễn nhiễm, sát mức needle
-  số (57%). Kết luận: định luật biên mỏng áp cho mọi decode đầu trên
-  cache ngoại, không riêng bài trích nguyên văn. HF `c2c_sem/`.
+- **C2c sem XONG (2026-08-26)**: scope ngữ nghĩa (QA paraphrase wikitext)
+  trên serving **self 90% | cross 55%** — sát mức needle số (57%): định luật
+  biên mỏng áp cho MỌI decode đầu trên cache ngoại. HF `c2c_sem/`.
 - **Hạ tầng vá cùng đợt**: ghim `vllm==0.27.1` trong `setup_env.sh`
   (runtime mới từng kéo 0.28.0 không ghim = drift ngầm âm thầm — MỌI
   số Phase C trước đó đo trên 0.27.1, phải cảnh giác runtime mới);
@@ -263,14 +255,23 @@ Cập nhật: 2026-08-28.
   bị cắt còn 48. Trả lời user "sao hôm trước 8192 mà giờ 2048 OOM": 8192 là
   trần 1-model-thường-trú (27B một mình 12,81GiB); giờ 4B phải ở lại kèm
   autograd → 18,11+3,5 = 21,6GiB đã chạm trần trước mọi activation.
-- **TRAIN JOINT ĐANG CHẠY (2026-08-28)**: `e9_joint.py` + `gen_data.py`
+- **USER CHUYỂN HƯỚNG (2026-08-28): "khoan dùng idea mới trên 4-27, dùng
+  cặp 4-9 để đảm bảo chất lượng đã"** — đã dừng job 4→27 (chạy được nhưng
+  phải hy sinh: gold gsm8k 150-250 token bị cắt còn 48). **Đo lại bao cho
+  4→9: rộng hơn hẳn** — nền 2 model chỉ **6,86 GiB** (9B 4-bit ~4,4 vs 27B
+  12,7), trống 14,88 GiB. Với tbptt=128 **MỌI cấu hình chạy**:
+  ctx4096+gold256 = 15,70GiB/13,1s | ctx8192+gold256 = 17,04/15,0 |
+  **ctx16384+gold256 = 19,71/19,1**. (tbptt=0 vẫn OOM ở mọi ctx.)
+  → 4→9 lấy lại được CẢ ctx dài LẪN gold đầy đủ; nhánh 27B mất cả hai.
+- **TRAIN JOINT 4→9 ĐANG CHẠY (2026-08-28)**: `e9_joint.py` + `gen_data.py`
   (7768 train/330 val: gsm8k 2882 + bbh 2500 + musr 474 + suite 767 + bfcl
-  655 + needle 380 + pbtable 110), ctx 2048, tbptt 64, warm-start v427_4k,
-  2500 bước ~4h, auto-upload HF `joint_v1/` mỗi mốc val. **Rò rỉ 0/6898** vs
-  580 mẫu niêm phong (đối chiếu chuỗi). Sanity: ce 1,497 | 5,76s/bước |
-  peak 20,91GiB | 0 OOM. Vá 2 bug: `ifstruct` không có `gold` (do B0 sinh,
-  joint không có B0), và **cắt TRÁI khi tokenize** (mọi prompt bộ này đặt
-  câu hỏi Ở CUỐI — cắt phải mặc định ăn mất câu hỏi mà KHÔNG báo lỗi).
+  655 + needle 380 + pbtable 110), ctx 8192, tbptt 128, gold 256,
+  warm-start mapper v49 (92% BFCL/100% needle), 2000 bước, auto-upload HF
+  `joint49/` mỗi mốc val. **Rò rỉ 0/6898** vs 580 mẫu niêm phong (đối chiếu
+  chuỗi, chạy trên chính runtime train). Bước 20: ce 1,475 | **4,79s/bước**
+  | peak 12,05GiB. Vá 2 bug: `ifstruct` không có `gold` (do B0 sinh, joint
+  không có B0), và **cắt TRÁI khi tokenize** (mọi prompt bộ này đặt câu hỏi
+  Ở CUỐI — cắt phải mặc định ăn mất câu hỏi mà KHÔNG báo lỗi).
 - **USER LẬT KẾT LUẬN (2026-08-28): "có train mapper cho math/reasoning
   không? nếu chỉ train BFCL thì fail task khác là đúng rồi"** — ĐÚNG, đã
   kiểm code `build_data()`: train ~1330 item = bfcl ~655 + needle 430 +
