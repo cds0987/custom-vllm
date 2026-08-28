@@ -53,7 +53,16 @@ def load_4bit(name):
     model = AutoModelForCausalLM.from_pretrained(
         name, device_map="cuda",
         quantization_config=BitsAndBytesConfig(
-            load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16))
+            load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16,
+            # BUG THAT (2026-08-28): transformers mac dinh quant_type="fp4",
+            # KHONG phai nf4. Moi so do cua du an di qua ham nay deu chay tren
+            # FP4, trong khi vLLM va chuan QLoRA dung NF4. Do doi chieu tren
+            # CUNG 40 mau gsm8k val: vLLM(nf4) 37/40 = 92% vs duong nay 16/35
+            # = 46%. NF4 toi uu cho phan phoi chuan cua trong so; FP4 kem ro
+            # ret. Hau qua: cac tran "self" da bao deu THAP hon thuc te, va
+            # mapper dang duoc huan luyen de lam hai long mot model FP4.
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True))
     model.eval()
     for p in model.parameters():
         p.requires_grad_(False)
@@ -107,7 +116,16 @@ def load_4bit_cpu_offload_io(name):
     model = AutoModelForCausalLM.from_pretrained(
         name, device_map="cuda",
         quantization_config=BitsAndBytesConfig(
-            load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16))
+            load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16,
+            # BUG THAT (2026-08-28): transformers mac dinh quant_type="fp4",
+            # KHONG phai nf4. Moi so do cua du an di qua ham nay deu chay tren
+            # FP4, trong khi vLLM va chuan QLoRA dung NF4. Do doi chieu tren
+            # CUNG 40 mau gsm8k val: vLLM(nf4) 37/40 = 92% vs duong nay 16/35
+            # = 46%. NF4 toi uu cho phan phoi chuan cua trong so; FP4 kem ro
+            # ret. Hau qua: cac tran "self" da bao deu THAP hon thuc te, va
+            # mapper dang duoc huan luyen de lam hai long mot model FP4.
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True))
     model.eval()
     for p in model.parameters():
         p.requires_grad_(False)
