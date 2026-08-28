@@ -443,6 +443,8 @@ def main():
             if f.is_file():
                 hf_up(f, f"lora_{tag}/{f.name}")
 
+    _self_cache = {}
+
     def _grade(it, txt):
         if it["kind"] in NEW_KINDS:
             return gd.score_item(it, txt)
@@ -484,7 +486,7 @@ def main():
         nghia (khac han needle/bfcl cu, noi context la filler quanh dap an)."""
         from collections import defaultdict
         sc = defaultdict(lambda: {"self": [], "mapped": []})
-        for it in data["val"][:limit]:
+        for i, it in enumerate(data["val"][:limit]):
             cut, warm, gold_ids, _ = enc(it)
             if gold_ids.shape[1] < 1:
                 continue
@@ -493,10 +495,16 @@ def main():
             sc[it["kind"]]["mapped"].append(_grade(it, _greedy(st, warm, n_new)))
             del st
             torch.cuda.empty_cache()
-            slf = e5.prefill_chunked(model_t, cut)
-            sc[it["kind"]]["self"].append(_grade(it, _greedy(slf, warm, n_new)))
-            del slf
-            torch.cuda.empty_cache()
+            # self KHONG DOI theo buoc train (9B tu doc chang lien quan gi den
+            # mapper dang hoc) — do that: cot self y het nhau o ca 5 moc val.
+            # Tinh mot lan roi dung lai => giam MOT NUA chi phi val, doi lai
+            # duoc val-n gap doi voi cung thoi gian.
+            if i not in _self_cache:
+                slf = e5.prefill_chunked(model_t, cut)
+                _self_cache[i] = _grade(it, _greedy(slf, warm, n_new))
+                del slf
+                torch.cuda.empty_cache()
+            sc[it["kind"]]["self"].append(_self_cache[i])
         return {k: (f"{sum(v['mapped'])}/{len(v['mapped'])}"
                     f" [self {sum(v['self'])}/{len(v['self'])}]")
                 for k, v in sc.items()}, \
