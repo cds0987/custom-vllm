@@ -1545,6 +1545,48 @@ Kiem ro ri: **0/6898 item trung 580 mau niem phong** (doi chieu chuoi
 prompt, chay tren chinh runtime train). Sanity 30 buoc: ce 1,497 |
 5,76 s/buoc | peak 20,91 GiB | 0 buoc OOM.
 
+## KHOANG CACH transformers vs vLLM: CHUOI CHAN DOAN (2026-08-28)
+
+**Trieu chung.** Val trong train (transformers) bao 9B-self tren gsm8k la
+16/35 = 46%; vLLM do tren 3000 mau la 86,1%. Doi chieu TREN CUNG 40 mau val
+(tra cuu pseudo_gold.json — no chi chua mau vLLM lam DUNG):
+
+    vLLM (nf4, Triton fast path) : 37/40 = 92%
+    toan bo 118 mau val          : 85%
+    toan bo 2882 mau train       : 86%
+    transformers                 : ~38-46%
+
+Cung model, cung prompt, cung grader -> LOI HARNESS, khong phai model.
+
+**Gia thuyet 1: FP4 vs NF4 — DA BI BAC.** `BitsAndBytesConfig(load_in_4bit=
+True)` mac dinh `quant_type="fp4"` (da in ra kiem chung) va `e5.load_4bit`
+chua bao gio dat tham so nay. Nghe rat thuyet phuc. Nhung do that:
+
+    transformers nf4 + double-quant : 15/40 = 38%
+    transformers fp4                : ~6/10 (con nhinh hon)
+
+NF4 KHONG dong duoc khoang cach. **Loai luong tu khong phai nguyen nhan.**
+Van giu ban va sang nf4 vi dung ve nguyen tac, nhung khong quy cong cho no.
+Ghi lai nhu mot lan suy luan nghe hop ly ma sai — chi so do moi phan xu duoc.
+
+**Gia thuyet 2 (dang do): thieu kernel GDN.** Model nay 75% la GDN. Kiem moi
+truong: `fla`, `causal_conv1d`, `flash_attn` DEU THIEU, trong khi
+`modeling_qwen3_5` nhac den chung 8/10/4 lan -> transformers roi ve duong
+tinh toan du phong, con vLLM luon dung Triton fast path (log co
+`qwen_triton_warmup`). Khop voi ghi chep E8 v3 (nhan manh "kernel
+fla/causal-conv1d fast path BAT") va voi quan sat "lab-fla cung ca ra ma
+tron" o Phase C.
+
+**Hai bay ha tang VAP LAI du da ghi tu truoc**: (1) `pkill -f 'X.py'` khop
+luon vao chinh dong bash chua chuoi do -> tu giet shell, output rong; phai
+dung `'[X]...'`. (2) `pip -q install A B` khi B fail bien dich thi A CUNG
+khong duoc cai, va `-q` giau mat loi -> tuong da xong (causal-conv1d can
+toolchain CUDA; fla thuan Triton, cai rieng thi duoc: 0.5.2).
+
+**Neu gia thuyet 2 dung, he qua rat rong**: moi so do transformers cua du an
+(cac tran self, va CA hai luot train joint49e/joint49p) deu chay tren duong
+GDN suy giam -> mapper dang hoc de lam hai long mot 9B yeu hon 9B that.
+
 ## JOINT 4->9 LUOT 1 + PSEUDO-GOLD (2026-08-28)
 
 **Luot 1 (joint49e) XONG**: warm-start v49, ctx 4096, tbptt 128, gold-cap 256,

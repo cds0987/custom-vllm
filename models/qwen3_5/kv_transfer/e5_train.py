@@ -54,13 +54,13 @@ def load_4bit(name):
         name, device_map="cuda",
         quantization_config=BitsAndBytesConfig(
             load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16,
-            # BUG THAT (2026-08-28): transformers mac dinh quant_type="fp4",
-            # KHONG phai nf4. Moi so do cua du an di qua ham nay deu chay tren
-            # FP4, trong khi vLLM va chuan QLoRA dung NF4. Do doi chieu tren
-            # CUNG 40 mau gsm8k val: vLLM(nf4) 37/40 = 92% vs duong nay 16/35
-            # = 46%. NF4 toi uu cho phan phoi chuan cua trong so; FP4 kem ro
-            # ret. Hau qua: cac tran "self" da bao deu THAP hon thuc te, va
-            # mapper dang duoc huan luyen de lam hai long mot model FP4.
+            # transformers mac dinh quant_type="fp4"; nf4 moi la chuan QLoRA
+            # va la thu vLLM dung -> dat tuong minh cho khoi lech ngam.
+            # CANH BAO, DUNG quy cong cho ban va nay: gia thuyet "fp4 la
+            # nguyen nhan khoang cach transformers 38% vs vLLM 92% tren
+            # gsm8k" DA BI BAC bang do (nf4 15/40 = 38%; fp4 ~6/10 con nhinh
+            # hon). Nguyen nhan that o cho khac — xem STATUS muc "KHOANG
+            # CACH transformers vs vLLM".
             bnb_4bit_quant_type="nf4",
             bnb_4bit_use_double_quant=True))
     model.eval()
@@ -117,13 +117,13 @@ def load_4bit_cpu_offload_io(name):
         name, device_map="cuda",
         quantization_config=BitsAndBytesConfig(
             load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16,
-            # BUG THAT (2026-08-28): transformers mac dinh quant_type="fp4",
-            # KHONG phai nf4. Moi so do cua du an di qua ham nay deu chay tren
-            # FP4, trong khi vLLM va chuan QLoRA dung NF4. Do doi chieu tren
-            # CUNG 40 mau gsm8k val: vLLM(nf4) 37/40 = 92% vs duong nay 16/35
-            # = 46%. NF4 toi uu cho phan phoi chuan cua trong so; FP4 kem ro
-            # ret. Hau qua: cac tran "self" da bao deu THAP hon thuc te, va
-            # mapper dang duoc huan luyen de lam hai long mot model FP4.
+            # transformers mac dinh quant_type="fp4"; nf4 moi la chuan QLoRA
+            # va la thu vLLM dung -> dat tuong minh cho khoi lech ngam.
+            # CANH BAO, DUNG quy cong cho ban va nay: gia thuyet "fp4 la
+            # nguyen nhan khoang cach transformers 38% vs vLLM 92% tren
+            # gsm8k" DA BI BAC bang do (nf4 15/40 = 38%; fp4 ~6/10 con nhinh
+            # hon). Nguyen nhan that o cho khac — xem STATUS muc "KHOANG
+            # CACH transformers vs vLLM".
             bnb_4bit_quant_type="nf4",
             bnb_4bit_use_double_quant=True))
     model.eval()
