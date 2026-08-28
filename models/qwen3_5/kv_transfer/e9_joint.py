@@ -479,9 +479,17 @@ def main():
                 best = score
                 save_ckpt("best")
                 print(f"    ky luc moi: {score}", flush=True)
-            if cev < args.ce_floor:
-                print(f"CE_FLOOR ({cev:.4f} < {args.ce_floor}) -> dung som",
-                      flush=True)
+            # CE cua MOT item dao dong 0,02-2,46 tuy item (do that trong run
+            # dau: 1.34/0.96/2.46/1.54/0.82/.../0.018). Lay ce cua dung buoc
+            # val lam dieu kien dung = tung dong xu: ~8%/moc x 8 moc ~ 50%
+            # kha nang dung som oan. Dung TRUNG BINH TRUOT 20 buoc gan nhat.
+            recent = [c for _, c in results["train_loss"][-20:]]
+            ce_ma = sum(recent) / max(len(recent), 1)
+            print(f"    ce trung binh 20 buoc = {ce_ma:.4f} "
+                  f"(ce buoc nay {cev:.4f})", flush=True)
+            if ce_ma < args.ce_floor:
+                print(f"CE_FLOOR (trung binh {ce_ma:.4f} < {args.ce_floor}) "
+                      "-> dung som", flush=True)
                 break
 
     vs, score = run_val(args.val_n)
