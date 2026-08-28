@@ -205,6 +205,25 @@ def load_data(args, tok_s):
         if before != len(data[k]):
             print(f"loai {before - len(data[k])} item khong co gold khoi {k}",
                   flush=True)
+    # PSEUDO-GOLD (user 2026-08-28: "cho no hoc ca buoc reasoning cua model
+    # large", "can map gan 9b nhat"): thay gold tham chieu bang chinh quy dao
+    # 9B tu di — nhung CHI voi item 9B lam DUNG (gen_pseudo.py da loc). Item
+    # 9B lam sai giu gold cu: khong mat mau, khong day mapper suy luan sai.
+    if args.pseudo_gold and Path(args.pseudo_gold).exists():
+        pg = json.loads(Path(args.pseudo_gold).read_text())
+        n_rep = 0
+        for split in ("train", "val"):
+            for it in data[split]:
+                g = pg.get(it.get("id", ""))
+                if g and g.get("gold"):
+                    it["gold"] = g["gold"]
+                    it["pseudo"] = True
+                    n_rep += 1
+        print(f"pseudo-gold: thay {n_rep} item bang quy dao 9B tu sinh",
+              flush=True)
+    elif args.pseudo_gold:
+        print(f"CANH BAO: khong thay {args.pseudo_gold} — chay voi gold cu",
+              flush=True)
     random.Random(SEED).shuffle(data["train"])
     random.Random(SEED).shuffle(data["val"])
     from collections import Counter
@@ -221,6 +240,10 @@ def main():
     ap.add_argument("--src-model", default="Qwen/Qwen3.5-4B")
     ap.add_argument("--tgt-model", default="Qwen/Qwen3.5-27B")
     ap.add_argument("--data-file", default="/content/train_items.json")
+    ap.add_argument("--pseudo-gold", default="",
+                    help="file do gen_pseudo.py sinh: thay gold tham chieu "
+                         "bang quy dao model dich TU DI (chi item no lam "
+                         "dung). Muc tieu la bam sat self, khong phai vuot.")
     ap.add_argument("--max-ctx", type=int, default=2048,
                     help="user 2026-08-28 'tang tran 1024-2048'; da do: 2048 "
                          "chay tron voi tbptt=64 (gold tu dong ha ve 16 o do)")
