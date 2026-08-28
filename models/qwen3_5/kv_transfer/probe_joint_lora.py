@@ -112,6 +112,33 @@ def attach_lora(model, r=16):
         return model, "fallback"
 
 
+def prefill_tbptt(model, ids, w, chunk=1024):
+    """Cat ngan lan truyen nguoc theo thoi gian (TBPTT) -- duong thay the cho
+    gradient checkpointing sau khi luot 3 chung minh GC va use_cache=True loai
+    tru nhau (ma o day forward 4B TON TAI de sinh cache).
+
+    T-w token dau chay no_grad (chi lay GIA TRI state), w token cuoi chay co
+    grad. Bo nho activation khi do phu thuoc w chu khong phu thuoc T.
+
+    XAP XI, khong phai chinh xac: LoRA chi nhan gradient tu w vi tri cuoi.
+    Voi GDN (hoi quy) day dung la TBPTT kinh dien; voi attention thi K/V cua
+    token cu thanh hang so -- tuc LoRA khong hoc duoc tu chung. Phai bao cao
+    ro nhu mot danh doi, khong duoc lang."""
+    past = None
+    cut = max(0, ids.shape[1] - w)
+    if cut:
+        with torch.no_grad():
+            for s_ in range(0, cut, chunk):
+                o = model(input_ids=ids[:, s_:min(s_ + chunk, cut)],
+                          past_key_values=past, use_cache=True, logits_to_keep=1)
+                past = o.past_key_values
+    for s_ in range(cut, ids.shape[1], chunk):
+        o = model(input_ids=ids[:, s_:s_ + chunk], past_key_values=past,
+                  use_cache=True, logits_to_keep=1)
+        past = o.past_key_values
+    return past
+
+
 def prefill_grad(model, ids, chunk=1024):
     """prefill_chunked ban CO GRAD -- day la diem khac cot loi: activation
     cua 4B phai duoc giu lai cho backward, nen peak TANG theo T (khong con
@@ -131,6 +158,10 @@ def main():
     ap.add_argument("--ctxs", default="1024,2048,4096")
     ap.add_argument("--src-dtypes", default="4bit,bf16")
     ap.add_argument("--gold", type=int, default=16)
+    ap.add_argument("--tbptt", type=int, default=0,
+                    help="cat lan truyen nguoc: chi w vi tri CUOI co grad "
+                         "(0 = tat). Duong thay the cho GC vi GC ep "
+                         "use_cache=False -- xem prefill_tbptt.")
     ap.add_argument("--gc-src", action="store_true",
                     help="gradient checkpointing tren 4B (chi phi MOI cua "
                          "duong joint la activation 4B khi prefill co grad)")
@@ -218,7 +249,9 @@ def main():
                 cut, warm = ids[:, :-WARM_P], ids[:, -WARM_P:]
                 gold = torch.randint(1000, 5000, (1, args.gold), device="cuda")
                 stage("nen")
-                src_past = prefill_grad(model_s, cut)          # (1) 4B CO GRAD
+                src_past = (prefill_tbptt(model_s, cut, args.tbptt)
+                            if args.tbptt else
+                            prefill_grad(model_s, cut))       # (1) 4B CO GRAD
                 stage("sau prefill 4B")
                 tpl = e5.build_template_from_meta(probe_t, metas[T])
                 stage("sau template 27B")
