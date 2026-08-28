@@ -59,6 +59,22 @@ def gib():
     return torch.cuda.max_memory_allocated() / 2**30
 
 
+def now():
+    return torch.cuda.memory_allocated() / 2**30
+
+
+_STAGE = []
+
+
+def stage(name):
+    """Luot 1 chi bao 'OOM peak 21,76' cho ca 3 ctx -> khong biet chang nao
+    an bo nho. Ghi moc tung chang de bien phong doan thanh so do."""
+    free, tot = torch.cuda.mem_get_info()
+    _STAGE.append((name, round(now(), 2), round(gib(), 2), round(free / 2**30, 2)))
+    print(f"    . {name:22} dang={now():6.2f} peak={gib():6.2f} "
+          f"trong={free/2**30:5.2f} GiB", flush=True)
+
+
 def load_src_bf16(name):
     """4B bf16 -- E6c da do: student luong tu hoa mat NUA bien; docs du an
     'KHONG QLoRA tren Qwen3.5'. Nhung bf16 = ~8GB thay vi 3,5GB, nen phai
@@ -115,6 +131,9 @@ def main():
     ap.add_argument("--ctxs", default="1024,2048,4096")
     ap.add_argument("--src-dtypes", default="4bit,bf16")
     ap.add_argument("--gold", type=int, default=16)
+    ap.add_argument("--gc-src", action="store_true",
+                    help="gradient checkpointing tren 4B (chi phi MOI cua "
+                         "duong joint la activation 4B khi prefill co grad)")
     args = ap.parse_args()
     ctxs = [int(x) for x in args.ctxs.split(",")]
 
@@ -155,6 +174,13 @@ def main():
             for p in model_s.parameters():
                 p.requires_grad_(False)
             model_s, lora_kind = attach_lora(model_s)
+            if args.gc_src:
+                try:
+                    model_s.gradient_checkpointing_enable()
+                    model_s.enable_input_require_grads()
+                    print("gradient checkpointing BAT tren 4B", flush=True)
+                except Exception as e:
+                    print(f"gc_src that bai: {type(e).__name__}: {e}", flush=True)
             model_s.train()
             theta_s = e5.e1.get_rope_theta(
                 AutoConfig.from_pretrained(args.src_model).get_text_config())
@@ -191,16 +217,22 @@ def main():
                 ids = torch.randint(1000, 5000, (1, T), device="cuda")
                 cut, warm = ids[:, :-WARM_P], ids[:, -WARM_P:]
                 gold = torch.randint(1000, 5000, (1, args.gold), device="cuda")
+                stage("nen")
                 src_past = prefill_grad(model_s, cut)          # (1) 4B CO GRAD
+                stage("sau prefill 4B")
                 tpl = e5.build_template_from_meta(probe_t, metas[T])
+                stage("sau template 27B")
                 student = e5.build_student_past(tpl, src_past, mapper)  # (2)
+                stage("sau mapper")
                 feed = torch.cat([warm, gold[:, :-1]], 1)
                 out = model_t(input_ids=feed, past_key_values=student,
                               use_cache=True)                  # (3) 27B
+                stage("sau forward 27B")
                 lg = out.logits[:, -args.gold + 1:, :].float()
                 loss = torch.nn.functional.cross_entropy(
                     lg.reshape(-1, lg.shape[-1]), gold[:, 1:].reshape(-1))
                 loss.backward()
+                stage("sau backward")
                 gsum = sum(int(p.grad is not None) for p in model_s.parameters()
                            if p.requires_grad)
                 gmap = sum(int(p.grad is not None) for p in mapper.params)

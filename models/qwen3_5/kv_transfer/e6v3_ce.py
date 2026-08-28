@@ -78,6 +78,50 @@ GOLD_MAX = 64        # fallback
 GMAX = {"bfcl": 16, "needle": 12, "ifstruct": 96, "pbtable": 64}
 # (128/96 OOM: feed 132 vi tri x fp32-states 5.15 trat phong bi L4)
 GEN_LEN = {"bfcl": 24, "needle": 16, "ifstruct": 160, "pbtable": 120}
+# --- 2026-08-28: mien MOI (gen_data.py). User: "co train mapper cho math/
+# reasoning ko? neu chi training cho bfcl thi failed cho task khac la dung
+# roi" -- kiem code cho thay data cu 0 mau math/reasoning VA moi gold deu
+# ngan-trich 12-16 token. gsm8k gold = loi giai day du chinh la tin hieu
+# "giu cache song qua sinh dai" con thieu. GEN_LEN bam theo ext_bench.N_NEW
+# de val luc train do DUNG cai benchmark cuoi se do.
+GMAX.update({"gsm8k": 256, "bbh": 24, "musr": 8,
+             "suite_rag": 16, "suite_mid": 16, "suite_math": 16,
+             "suite_swe": 16})
+GEN_LEN.update({"gsm8k": 320, "bbh": 48, "musr": 24,
+                "suite_rag": 24, "suite_mid": 24, "suite_math": 24,
+                "suite_swe": 24})
+NEW_KINDS = {"gsm8k", "bbh", "musr",
+             "suite_rag", "suite_mid", "suite_math", "suite_swe"}
+_GD = None
+
+
+def _gen_data():
+    """Nap gen_data.py mot lan (no keo theo ext_bench -> cham, chi nap khi
+    that su co item mien moi)."""
+    global _GD
+    if _GD is None:
+        spec2 = importlib.util.spec_from_file_location(
+            "gen_data", Path(__file__).parent / "gen_data.py")
+        _GD = importlib.util.module_from_spec(spec2)
+        spec2.loader.exec_module(_GD)
+    return _GD
+
+
+def merge_new_data(data, path):
+    """Tron data mien moi vao data cu. GIU LAI data cu (bfcl/needle/ifstruct/
+    pbtable) — khong de mapper QUEN nang luc da co 18/20 + 15/15; do chinh la
+    thu duy nhat dang ban duoc luc nay."""
+    from collections import Counter
+    extra = json.loads(Path(path).read_text())
+    before = len(data["train"]), len(data["val"])
+    data["train"] += extra["train"]
+    data["val"] += extra["val"]
+    random.Random(SEED).shuffle(data["train"])
+    print(f"tron data moi: train {before[0]}->{len(data['train'])}, "
+          f"val {before[1]}->{len(data['val'])}")
+    print("  train:", dict(Counter(x["kind"] for x in data["train"])))
+    print("  val  :", dict(Counter(x["kind"] for x in data["val"])))
+    return data
 CONV_WARM = e5.CONV_WARM   # (v3.0 — giu cho tham chieu)
 # v3.1 (user duyet 2026-08-24): CONV_WARM skip 4 vi tri dau cua GOLD = khong
 # bao gio day token quyet dinh (fn name dau). Giao thuc moi: cache cat tai
@@ -321,6 +365,13 @@ def main():
                          "CUNG 'v34/' cho moi target — hoc phi 2026-08-26: "
                          "chien dich 4->9 se de len mapper 4->27B neu khong "
                          "tach thu muc.")
+    ap.add_argument("--data-file", default="",
+                    help="2026-08-28: tron them data DA DANG do gen_data.py "
+                         "sinh (gsm8k/bbh/musr tach khoi tap test niem phong "
+                         "+ 4 ho suite_gen). Rong = giu nguyen data cu.")
+    ap.add_argument("--new-maxlen", type=int, default=2048,
+                    help="tran token cho item mien moi (musr dai ~1000-1500 "
+                         "token; TRAIN_MAX=1024 cu se cat cut narrative)")
     ap.add_argument("--dry-data", action="store_true")
     ap.add_argument("--skip-train", action="store_true")
     ap.add_argument("--train-check", action="store_true",
@@ -379,6 +430,8 @@ def main():
 
     if args.dry_data:
         data = build_data(tok=None, max_ctx=args.max_ctx)
+        if args.data_file:
+            data = merge_new_data(data, args.data_file)
         for split, items in data.items():
             from collections import Counter
             cnt = Counter(it["kind"] for it in items)
@@ -554,6 +607,8 @@ def main():
         tok_s, model_s = e5.load_4bit(args.src_model)
         tok = tok_s
         data = build_data(tok_s, args.max_ctx)
+        if args.data_file:
+            data = merge_new_data(data, args.data_file)
         if args.sanity:
             # do ca XAU NHAT: chi giu cac item train DAI nhat (needle 2000
             # dung dau) + val rut gon — du de do s/buoc va peak VRAM
@@ -568,7 +623,11 @@ def main():
                     pth = cdir / f"{split}{i}.pt"
                     if pth.exists():
                         continue
-                    ml = NK_MAXLEN if it["kind"] == "needle" else TRAIN_MAX
+                    ml = (NK_MAXLEN if it["kind"] == "needle" else
+                          args.new_maxlen if it["kind"] in NEW_KINDS
+                          else TRAIN_MAX)   # PHAI khop _maxlen() ben duoi:
+                    # cache 4B spill o day va prompt 27B doc lai phai CUNG
+                    # do dai, lech mot token la cache lech vi tri hoan toan
                     enc = tok_s(it["prompt"], return_tensors="pt", truncation=True,
                                 max_length=ml).to("cuda")
                     # v3.1: cache cat tai T-WARM_P (GDN khong tua nguoc duoc)
@@ -600,7 +659,11 @@ def main():
     data = json.loads((cdir / "data.json").read_text())
 
     def _maxlen(it):
-        return NK_MAXLEN if it["kind"] == "needle" else TRAIN_MAX
+        if it["kind"] == "needle":
+            return NK_MAXLEN
+        if it["kind"] in NEW_KINDS:
+            return args.new_maxlen
+        return TRAIN_MAX
 
     def enc_item(it):
         enc = tok(it["prompt"], return_tensors="pt", truncation=True,
@@ -891,7 +954,12 @@ def main():
                     inp = o.logits[:, -1, :].argmax(-1, keepdim=True)
                     gen.append(int(inp))
                 txt = tok.decode(gen)
-                if it["kind"] == "bfcl":
+                if it["kind"] in NEW_KINDS:
+                    # uy quyen cho CHINH grader cua benchmark cuoi (ext_bench.
+                    # score_text) — val luc train khong the troi khoi bao cao
+                    hit = _gen_data().score_item(it, txt)
+                    sc.setdefault(it["kind"], []).append(hit)
+                elif it["kind"] == "bfcl":
                     hit = int(it["fn"] in txt)
                     sc["bfcl"].append(hit)
                 elif it["kind"] == "needle":
