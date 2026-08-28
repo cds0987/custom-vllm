@@ -175,6 +175,17 @@ def load_data(args, tok_s):
         extra = json.loads(Path(args.data_file).read_text())
         data["train"] += extra["train"]
         data["val"] += extra["val"]
+    # ifstruct KHONG co truong "gold": trong e6v3_ce gold cua no do 27B TU
+    # SINH o buoc B0 (pseudo-gold), ma che do joint khong co B0 -> tok(None)
+    # nem "You need to specify either `text` or `text_target`". Loai han, va
+    # ghi ro so luong: phan quyet v3.5 da bo ifstruct/pbtable khoi thang do
+    # chinh (no cua DE, khong phai cua mapper) nen mat mat nay khong dang tiec.
+    for k in ("train", "val"):
+        before = len(data[k])
+        data[k] = [it for it in data[k] if it.get("gold")]
+        if before != len(data[k]):
+            print(f"loai {before - len(data[k])} item khong co gold khoi {k}",
+                  flush=True)
     random.Random(SEED).shuffle(data["train"])
     random.Random(SEED).shuffle(data["val"])
     from collections import Counter
@@ -412,10 +423,10 @@ def main():
             wts[:, 0] = FIRST_W          # token quyet dinh
             ce = (nll * wts).sum() / wts.sum()
             opt.zero_grad(set_to_none=True)
+            cev = ce.detach().item()
             ce.backward()
             opt.step()
             sched.step()
-            cev = float(ce)
             del st, o, logp, nll, ce
         except torch.cuda.OutOfMemoryError:
             print(f"  buoc {step} OOM (kind={it['kind']}, "
