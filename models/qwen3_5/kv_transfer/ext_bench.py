@@ -355,9 +355,11 @@ def check_nvcc():
 
 # ------------------------------------------------------------- self run ---
 
-def run_self(bench_list, tgt_model, max_len, sl):
+def run_self(bench_list, tgt_model, max_len, sl, tgt_quant="bnb"):
     import torch
-    tok, m = e5.load_4bit(tgt_model)
+    # self PHAI nap cung dang luong tu voi cross, neu khong thi so sanh
+    # retention (mapped/self) la so sanh hai model khac nhau
+    tok, m = _load_target(tgt_model, tgt_quant)
     items = json.load(open(PROMPTS_F))
     items = [it for it in items if it["bench"] in bench_list]
     a, b = (int(x) for x in sl.split(":")) if sl else (0, len(items))
@@ -392,8 +394,37 @@ def run_self(bench_list, tgt_model, max_len, sl):
 
 # ------------------------------------------------------------ cross run ---
 
+def _load_target(name, quant):
+    """Nap model DICH theo dung dang se SERVE.
+
+    Khe ho train/serve (user 2026-08-28): mapper hoc tren stock 9B + bnb NF4,
+    nhung production chay champion (khung W4A16 + trong so GDN ghep tu GGUF
+    Q4_K_M) -- khac CA luong tu LAN trong so. Bang chung cu mau thuan: E6c do
+    bnb ganh NUA vet nut (bf16 9/20 vs bnb 4-6/20), con C2b-8 do bf16 va W4A16
+    GIONG HET. Chua lan nao do tren mot mapper DA HUAN LUYEN -> phai do.
+
+    quant='bnb'  : bnb NF4 (giong luc train)
+    quant='auto' : de checkpoint tu khai (champion = compressed-tensors W4A16)
+    quant='bf16' : khong luong tu — moc doi chung sach
+    """
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    if quant == "bnb":
+        return e5.load_4bit(name)
+    tok = AutoTokenizer.from_pretrained(name)
+    kw = dict(device_map="cuda")
+    if quant == "bf16":
+        kw["dtype"] = torch.bfloat16
+    model = AutoModelForCausalLM.from_pretrained(name, **kw)
+    model.eval()
+    for prm in model.parameters():
+        prm.requires_grad_(False)
+    print(f"nap dich {name} (quant={quant})", flush=True)
+    return tok, model
+
+
 def run_cross(bench_list, src_model, tgt_model, mapper_path, max_len, sl,
-              lora_path=""):
+              lora_path="", tgt_quant="bnb"):
     """HAI PHA (bat buoc tren L4): 4B va 27B KHONG BAO GIO cung tren GPU.
 
     Bug that da gap: nap ca hai cung luc = 3,5GB + 18GB = 21,5GB tren card
@@ -451,7 +482,7 @@ def run_cross(bench_list, src_model, tgt_model, mapper_path, max_len, sl,
     print("CROSS_PHASE_A_DONE", flush=True)
 
     # ---------------- PHA 2: 27B mot minh -> map + decode ------------------
-    tok_t, model_t = e5.load_4bit(tgt_model)
+    tok_t, model_t = _load_target(tgt_model, tgt_quant)
     theta_t = e5.e1.get_rope_theta(model_t.config.get_text_config())
     with torch.no_grad():
         probe = model_t(input_ids=torch.tensor([[1, 2, 3]], device="cuda"),
@@ -532,6 +563,11 @@ if __name__ == "__main__":
     ap.add_argument("--src-model", default="Qwen/Qwen3.5-4B")
     ap.add_argument("--tgt-model", default="Qwen/Qwen3.5-27B")
     ap.add_argument("--mapper", default="/content/mapper_v427_8k.pt")
+    ap.add_argument("--tgt-quant", default="bnb",
+                    choices=["bnb", "auto", "bf16"],
+                    help="dang luong tu cua model DICH: bnb = giong luc train; "
+                         "auto = de checkpoint tu khai (champion W4A16); "
+                         "bf16 = moc doi chung sach. Do khe ho train/serve.")
     ap.add_argument("--lora", default="",
                     help="thu muc LoRA cua 4B (kien truc 2 lop e9_joint). "
                          "Bo trong = 4B goc, chi co mapper.")
@@ -545,9 +581,10 @@ if __name__ == "__main__":
         ok, out = check_nvcc()
         print("NVCC_OK" if ok else "NVCC_MISSING", out[:200])
     elif args.mode == "self":
-        run_self(bl, args.tgt_model, args.max_len, args.slice)
+        run_self(bl, args.tgt_model, args.max_len, args.slice,
+                 args.tgt_quant)
     elif args.mode == "cross":
         run_cross(bl, args.src_model, args.tgt_model, args.mapper,
-                  args.max_len, args.slice, args.lora)
+                  args.max_len, args.slice, args.lora, args.tgt_quant)
     else:
         agg()
