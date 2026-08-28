@@ -392,7 +392,8 @@ def run_self(bench_list, tgt_model, max_len, sl):
 
 # ------------------------------------------------------------ cross run ---
 
-def run_cross(bench_list, src_model, tgt_model, mapper_path, max_len, sl):
+def run_cross(bench_list, src_model, tgt_model, mapper_path, max_len, sl,
+              lora_path=""):
     """HAI PHA (bat buoc tren L4): 4B va 27B KHONG BAO GIO cung tren GPU.
 
     Bug that da gap: nap ca hai cung luc = 3,5GB + 18GB = 21,5GB tren card
@@ -412,6 +413,14 @@ def run_cross(bench_list, src_model, tgt_model, mapper_path, max_len, sl):
 
     # ---------------- PHA 1: 4B mot minh -> spill cache ra dia -------------
     tok_s, model_s = e5.load_4bit(src_model)
+    if lora_path:
+        # kien truc 2 lop (e9_joint): 4B da duoc LoRA ep "doc ho" cho model
+        # dich. Khong nap LoRA o day = do NHAM mapper cu tren 4B goc.
+        from peft import PeftModel
+        model_s = PeftModel.from_pretrained(model_s, lora_path)
+        model_s = model_s.merge_and_unload()
+        model_s.eval()
+        print(f"da nap+merge LoRA 4B: {lora_path}", flush=True)
     theta_s = e5.e1.get_rope_theta(
         AutoConfig.from_pretrained(src_model).get_text_config())
     with torch.no_grad():
@@ -523,6 +532,9 @@ if __name__ == "__main__":
     ap.add_argument("--src-model", default="Qwen/Qwen3.5-4B")
     ap.add_argument("--tgt-model", default="Qwen/Qwen3.5-27B")
     ap.add_argument("--mapper", default="/content/mapper_v427_8k.pt")
+    ap.add_argument("--lora", default="",
+                    help="thu muc LoRA cua 4B (kien truc 2 lop e9_joint). "
+                         "Bo trong = 4B goc, chi co mapper.")
     ap.add_argument("--max-len", type=int, default=8192)
     ap.add_argument("--slice", default="")
     args = ap.parse_args()
@@ -535,6 +547,7 @@ if __name__ == "__main__":
     elif args.mode == "self":
         run_self(bl, args.tgt_model, args.max_len, args.slice)
     elif args.mode == "cross":
-        run_cross(bl, args.src_model, args.tgt_model, args.mapper, args.max_len, args.slice)
+        run_cross(bl, args.src_model, args.tgt_model, args.mapper,
+                  args.max_len, args.slice, args.lora)
     else:
         agg()
