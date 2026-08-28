@@ -111,13 +111,10 @@ Cập nhật: 2026-08-28.
   .env root repo. Chi tiết STATUS mục E6 v3.4.
   Ngã rẽ kế: Phase C (KVConnector vLLM — template-xương tái dùng được)
   vs v3.5 (decode-time cho sinh dài) vs A100 cho 8K/16K.
-- **E6 v3.5 XONG (2026-08-25, user chốt "C, v3.5")**: mổ sinh-dài bằng 4
-  điều kiện → **TRẦN TEACHER: 27B-self cũng chỉ 1/15 + 2/10** dưới cùng
-  giao thức — suite ifstruct/pbtable là nợ của ĐỀ, không phải mapper;
-  rep-penalty 1.3 phản tác dụng (đè chết token-xương của output lặp cấu
-  trúc hợp lệ). Hành động: loại 2 suite khỏi thang chính thức; scope
-  cascade giữ nguyên (fn-calling 90% + retrieval ≤4K tuyệt đối). Chi
-  tiết STATUS mục E6 v3.5. **Phase C design đã chốt**
+- **E6 v3.5 XONG (2026-08-25)**: mổ sinh-dài → **TRẦN TEACHER: 27B-self
+  cũng chỉ 1/15 + 2/10** cùng giao thức — ifstruct/pbtable là nợ của ĐỀ,
+  không phải mapper; rep-penalty 1.3 phản tác dụng. Loại 2 suite khỏi thang
+  chính thức. Chi tiết STATUS. **Phase C design đã chốt**
   (docs/phase-c-design.md): 2 vLLM + LMCache MP + vá key-namespace;
   **C2a XONG (2026-08-25): 3/3 tiền đề PASS** — (1) block size 9B = 4B
   = **1056** (cùng dòng log "attention page >= mamba page"); (2) cả hai
