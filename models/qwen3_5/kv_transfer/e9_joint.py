@@ -581,14 +581,18 @@ def main():
                       "-> dung som", flush=True)
                 break
 
-    vs, score = run_val(args.val_n)
-    results["val"].append([args.steps, score, vs])
-    print(f"=== VAL cuoi: score={score} {vs}", flush=True)
-    save_results()
-    hf_up(out / "results.json", "results.json")
-    save_ckpt("last")
-    if score > best:
-        save_ckpt("best")
+    # val cuoi CHI chay khi buoc cuoi khong roi dung moc val — neu khong se
+    # lap lai y het val vua chay xong. Moi val ~10 phut (gsm8k sinh 320 token
+    # x 2 dieu kien), nen lan lap thua nay tốn that.
+    if step % args.val_every != 0:
+        vs, score = run_val(args.val_n)
+        results["val"].append([step, score, vs])
+        print(f"=== VAL cuoi: score={score} {vs}", flush=True)
+        save_results()
+        hf_up(out / "results.json", "results.json")
+        save_ckpt("last")
+        if score > best:
+            save_ckpt("best")
     print("E9_JOINT_EXIT", flush=True)
 
 
