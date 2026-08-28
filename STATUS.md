@@ -1545,6 +1545,80 @@ Kiem ro ri: **0/6898 item trung 580 mau niem phong** (doi chieu chuoi
 prompt, chay tren chinh runtime train). Sanity 30 buoc: ce 1,497 |
 5,76 s/buoc | peak 20,91 GiB | 0 buoc OOM.
 
+## JOINT 4->9 LUOT 1 + PSEUDO-GOLD (2026-08-28)
+
+**Luot 1 (joint49e) XONG**: warm-start v49, ctx 4096, tbptt 128, gold-cap 256,
+2000 buoc. BEST @1750 score 16. Val 40 mau (self do CUNG item):
+
+    bo        self   @1750
+    needle 4     4      4    <- cham tran
+    bfcl   4     4      4    <- cham tran
+    bbh   10     2      4
+    musr   5     1      3
+    gsm8k 13     7      0    <- hut hoan toan
+
+**HAI BUG THAT bat duoc bang dem, khong bang doan:**
+1. Nguong `gold_ids.shape[1] < 2` nem BO moi item gold DUNG 1 token. Dem bang
+   tokenizer tren 6623 item: **musr 474/474 = 100%, bbh 634/2500 = 25,4%,
+   tong 1108 = 16,7%** khong bao gio gop gradient. Dap an trac nghiem ("A")
+   va dap an ngan bbh ("valid"/so) deu 1 token. => cot musr trong val luot 1
+   KHONG phai cong cua huan luyen (mapper chua tung thay mot mau musr nao).
+2. `continue` khi bo item nhay LUON qua khoi val cuoi vong -> moc val roi
+   trung item bi bo la MAT HAN, im lang (moc 1500 bien mat khoi log). Thay
+   bang co `skipped` + dem `n_skip`.
+Vá thêm: cache cot `self` trong val (self KHONG doi theo buoc train — do that:
+y het nhau o ca 5 moc — nhung dang tinh lai moi lan = vut 50% chi phi val);
+bo val cuoi bi lap.
+
+**PSEUDO-GOLD bang vLLM OFFLINE (user: "cho no hoc ca buoc reasoning cua
+model large", "can map gan 9b nhat", "sao ko dung vllm mode offline")**
+
+Dich hoc doi tu dap an NGUOI VIET sang **quy dao 9B TU DI** -> dich trung voi
+thuoc do (retention = mapped/self). Chi giu dau ra CHAM DIEM DUNG; sai thi
+giu gold tham chieu => khong mat mau, khong day mapper suy luan sai.
+
+vLLM offline thay transformers: **577 tok/s vs 11,8 tok/s = nhanh 49 lan**
+(transformers bnb-4bit batch1 eager vs vLLM 0.27.1 + bitsandbytes + continuous
+batching + CUDA graph). 671.327 token trong **30,7 phut** thay vi ~9 gio.
+Teacher dung `quantization=bitsandbytes` tren stock 9B de KHOP model dang lam
+tran self. Unsloth FastLanguageModel da dong tu E8 (past=None khi training).
+
+    bo       n mau   9B tu lam dung   ty le
+    gsm8k     3000       2583         86,1%
+    bbh       2600        797         30,7%
+    musr       498        194         39,0%
+    TONG      6098       3574         58,6%
+
+**BA CON SO NAY LAT KET QUA VAL 40 MAU:**
+
+    bo       val 40 mau noi   do that (n lon)
+    gsm8k    54% (7/13)       86,1% (3000)
+    bbh      20% (2/10)       30,7% (2600)
+    musr     20% (1/5)        39,0%  (498)
+
+Ca ba deu lech nang — khoang tin cay 95% cua 7/13 trai tu 25% den 81%. User
+dung khi doi eval vai nghin mau. Hau qua: tran that cua gsm8k la 86% chu
+khong phai 54%, nen khoang hut cua mapper (0/13) LON HON tuong.
+
+Doi chieu ba model tren cung bai gsm8k: 4B 81,5% (200) | 27B 80,0% (200) |
+**9B 86,1% (3000)**.
+
+**Luot 2 (joint49p) DA PHONG**: pseudo-gold 3574 item + 2 bug da va + val-n
+100, warm-start tu best cua luot 1, 2500 buoc.
+
+**KHE HO TRAIN/SERVE (user hoi, da duyet do)**: mapper hoc tren stock 9B +
+bnb NF4 nhung production chay **champion** (khung W4A16 + trong so GDN ghep
+tu GGUF Q4_K_M) — khac CA luong tu LAN trong so. Bang chung cu MAU THUAN:
+E6c do bnb ganh NUA vet nut (bf16 9/20 vs bnb 4-6/20); C2b-8 do bf16 va
+W4A16 GIONG HET. Chua lan nao do tren mapper DA huan luyen. Da them
+`ext_bench --tgt-quant {bnb,auto,bf16}` cho ca run_self lan run_cross (self
+phai cung dang luong tu voi cross, neu khong retention la so sanh hai model
+khac nhau). Duong thu 3 vua duoc chung minh kha thi trong luot pseudo-gold:
+**vLLM nap duoc stock 9B voi bitsandbytes** (7,81 GiB, ctx 4096, FlashAttn 2,
+KV 201.821 token) -> co the SERVE dung model da train, xoa sach khe ho, doi
+lai toc do so voi Marlin W4A16 (chua do).
+
+
 **CHUYEN HUONG SANG CAP 4->9 (user 2026-08-28: "khoan dung idea moi ve
 mapper tren 4-27, ma dung cap 4-9 de dam bao chat luong da").** Da dung job
 4->27 va do lai bao cho 4->9. Ly do vat ly: 9B bnb-4bit + CPU-offload chi
