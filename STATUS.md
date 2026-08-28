@@ -1412,6 +1412,88 @@ quát — chỉ học được ánh xạ CHO MIỀN CỤ THỂ đã train**. B�
 lần này có thêm đối chứng 4B-self nên loại trừ được giả thuyết "model
 nguồn yếu".
 
+## KIẾN TRÚC 2 LỚP (LoRA-trên-4B + mapper) — CỔNG VRAM: MỞ, KHE HẸP (2026-08-28)
+
+User chốt hướng: "1 cải tiến 2 lớp mapper, 1 gắn vào 4b để ép 4b cho việc
+đọc cho 27B sau đó merge cái đó vào 4b, sau đó huấn luyện mapper dịch 4-27,
+tổng quát toàn bộ dataset". Về sản phẩm đây là hướng đúng: sau khi merge
+LoRA, lúc serve KHÔNG có module thừa trên đường nóng — ta bán một biến thể
+"Qwen3.5-4B-prefill-for-27B".
+
+Ràng buộc kỹ thuật: để LoRA trên 4B học được, gradient phải chảy từ output
+27B QUA mapper VÀO 4B → cả hai model phải cùng trên GPU KÈM đồ thị autograd.
+Đường tránh duy nhất (loss khớp-trạng-thái, chỉ cần 4B + cache 27B đọc từ
+đĩa) đã CHẾT 4 LẦN trong dự án (E8 v3 nMSE 10,5→1,06 kẹt, needle 0/5; luật
+error-placement) — không đi lại. Nên phải đo, `probe_joint_lora.py`.
+
+**Kết quả 5 lượt đo (mọi lượt đều PYTORCH_CUDA_ALLOC_CONF=expandable_segments):**
+
+    hai model cung tren GPU (27B 4bit CPU-offload + 4B 4bit + LoRA r=16)
+      = 16,16 GiB tinh  ->  con TRONG 5,54 GiB
+
+    chang                         T=256      T=512     T=1024
+    nen (2 model)                 16,16      16,16      16,16
+    sau prefill 4B CO GRAD        19,50      OOM        OOM
+    sau template 27B              19,66       -          -
+    sau mapper                    20,22       -          -
+    sau forward 27B                OOM        -          -
+
+**Thủ phạm được chỉ mặt: prefill 4B CÓ GRAD ăn +3,34 GiB ngay ở T=256**, và
+vượt hẳn 5,54 GiB khả dụng ở T=512. Ngay cả ở T=256 — mức vô dụng cho mọi
+bài thật (prompt bbh/gsm8k/musr dài tới 1512 token) — thì forward 27B sau đó
+vẫn OOM với 1,45 GiB còn lại. Thiếu KHÔNG PHẢI một chút: để chạy T=2048 cần
+thêm hàng chục GiB.
+
+**3 đòn bẩy đã thử và kết cục:**
+1. `expandable_segments:True` — bật ở mọi lượt, KHÔNG cứu (peak 21,65-21,76
+   ổn định qua mọi cấu hình → không phải bài phân mảnh).
+2. **Gradient checkpointing trên 4B — BẤT KHẢ THI VỀ NGUYÊN TẮC, không phải
+   vì thiếu bộ nhớ**: transformers tắt cứng `use_cache=False` khi bật GC
+   (log: "`use_cache=True` is incompatible with gradient checkpointing"), mà
+   forward 4B ở đây TỒN TẠI CHÍNH ĐỂ sinh cache → hai thứ loại trừ nhau. Đây
+   là cơ chế KHÁC hẳn lần đóng GC cho 27B hôm 2026-08-27 (lần đó GC chạy
+   nhưng peak y hệt baseline). Bài học chung: GC và cache-as-output không
+   sống chung.
+3. CPU-offload embed/lm_head của 27B — có hiệu lực (27B tĩnh 12,7 GiB đúng
+   như đo 2026-08-27), đã tính vào con số 16,16 ở trên.
+
+**Bài học hạ tầng**: `ps -eo pid,etimes,stat,pcpu` KHÔNG có cột lệnh nên mọi
+`grep` tên tiến trình đều rỗng — tưởng job chết trong khi nó đang chạy. Phải
+có `args` trong format.
+
+**ĐÒN BẨY THỨ 4 MỞ ĐƯỢC CỔNG: TBPTT (cắt lan truyền ngược theo thời gian).**
+Vì GC bị loại về nguyên tắc, dùng cách chặn khác cho ĐÚNG thủ phạm đã chỉ mặt:
+T−w token đầu chạy `no_grad` (chỉ lấy GIÁ TRỊ state), w token cuối chạy có
+grad → bộ nhớ activation phụ thuộc w, không phụ thuộc T (`prefill_tbptt`).
+
+    voi --tbptt 128:
+    chang                        T=512     T=1024     T=2048
+    nen (2 model)                16,16     16,18      16,18
+    sau prefill 4B (TBPTT)       17,92     18,01      18,15   (+1,8-2,0 GiB;
+                                                               truoc: +3,34 o T=256)
+    sau template 27B             18,09     18,22      18,42
+    sau mapper                   18,67     18,83      19,10
+    sau forward 27B              20,99     21,34       OOM
+    sau backward (peak)          21,18     21,50        -
+    ket qua                        OK        OK        OOM
+    t/buoc                        6,1s      6,0s         -
+    grad toi LoRA / mapper       60 / 208/208  (day du — duong autograd THONG)
+
+**PHÁN QUYẾT CỔNG: ĐI ĐƯỢC, nhưng khe rất hẹp** — trần ctx **1024**, còn
+trống 0,09 GiB ở đỉnh backward tại T=1024 (T=2048 OOM). Kiểm chứng đường
+autograd thông suốt: gradient tới đủ 60 tensor LoRA và 208/208 tham số mapper.
+
+**3 cái giá phải trả, không được lấp liếm:**
+1. **TBPTT là XẤP XỈ**: LoRA chỉ nhận gradient từ 128 vị trí CUỐI. Với GDN
+   (hồi quy) đây là TBPTT kinh điển, chấp nhận được; với attention thì K/V
+   của token cũ thành hằng số — LoRA không học được từ chúng.
+2. **Trần ctx 1024 cắt cụt MuSR** (narrative 1000-1500 token). gsm8k (~200)
+   và bbh (~200) thì vừa.
+3. **6,0 s/bước** vs ~1,4 s/bước của mapper-đơn → 1000 bước ≈ 1,7h.
+
+Trên A100 40GB cả 3 cái giá này biến mất; đây là giới hạn của L4, không phải
+của ý tưởng.
+
 **HIỆU CHỈNH NGAY SAU ĐÓ (user, 2026-08-28) — kết luận trên VƯỢT DỮ LIỆU.**
 User hỏi: "có train mapper cho math/reasoning không? nếu chỉ train BFCL thì
 fail task khác là đúng rồi". Kiểm `build_data()` trong `e6v3_ce.py`:
