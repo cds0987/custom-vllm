@@ -76,7 +76,40 @@ if [ -f /content/logs/evalbig_self.json ]; then echo "da co, bo qua"; else
   python3 -u eval_big.py self --tgt-model Qwen/Qwen3.5-9B --max-len 6144 || exit 1
 fi
 
-step "5/5 TRAIN joint49v (2500 buoc tu joint49s)"
+step "5/5 chuan bi: noi lai joint49v neu da co tien do"
+# Runtime bi thu hoi 4 lan trong ngay. Khong noi lai thi moi lan recycle la
+# mat sach gio train va quay ve joint49s. Uu tien: ban local -> ban tren HF ->
+# joint49s. Phai doc TU HF vi recycle xoa /content nhung HF thi con.
+INIT_M=/content/joint49s/mapper_best.pt
+INIT_L=/content/joint49s/lora_best
+if [ ! -f /content/joint49v/mapper_last.pt ]; then
+  python3 - <<'PYEOF' || true
+import os, shutil, pathlib
+from huggingface_hub import snapshot_download
+try:
+    p = snapshot_download("gunnybd01/qwen35-kv-mapper-4b-27b",
+                          allow_patterns=["joint49v/*"],
+                          local_dir="/content/_hf49v",
+                          token=os.environ.get("HF_TOKEN"))
+    src = pathlib.Path(p) / "joint49v"
+    if (src / "mapper_last.pt").exists():
+        shutil.copytree(src, "/content/joint49v", dirs_exist_ok=True)
+        print("NOI LAI tu HF joint49v/")
+    else:
+        print("HF chua co joint49v/mapper_last.pt -> bat dau tu joint49s")
+except Exception as e:
+    print("khong lay duoc joint49v tu HF:", type(e).__name__, str(e)[:80])
+PYEOF
+fi
+if [ -f /content/joint49v/mapper_last.pt ]; then
+  INIT_M=/content/joint49v/mapper_last.pt
+  [ -d /content/joint49v/lora_last ] && INIT_L=/content/joint49v/lora_last
+  echo "NOI LAI tu: $INIT_M"
+else
+  echo "BAT DAU MOI tu joint49s"
+fi
+
+step "5/5 TRAIN joint49v (dung theo val, patience 3)"
 python3 -u e9_joint.py \
   --tgt-model Qwen/Qwen3.5-9B \
   --data-file /content/train_items.json \
@@ -84,8 +117,8 @@ python3 -u e9_joint.py \
   --max-ctx 4096 --tbptt 128 --gold-cap 256 --gold-envelope 16384:256 \
   --steps 8000 --val-every 500 --val-n 150 --ce-floor 0.05 --patience 3 \
   --no-offload --verify-meta 512 \
-  --init-mapper /content/joint49s/mapper_best.pt \
-  --init-lora   /content/joint49s/lora_best \
+  --init-mapper "$INIT_M" \
+  --init-lora   "$INIT_L" \
   --out /content/joint49v \
   --hf-repo gunnybd01/qwen35-kv-mapper-4b-27b --hf-prefix joint49v
 
