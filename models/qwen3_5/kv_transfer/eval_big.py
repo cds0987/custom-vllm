@@ -26,6 +26,7 @@ import argparse
 import importlib.util
 import json
 import os
+import sys
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -421,3 +422,12 @@ def main():
 
 if __name__ == "__main__":   # BAT BUOC: LLM() o module level chet vi spawn
     main()
+    # os._exit THAY VI return: `datasets`/`huggingface_hub` de lai thread nen
+    # KHONG-daemon, nen interpreter ket o luc join va tien trinh treo VO HAN
+    # sau khi da in xong ket qua. Da dinh hai lan trong mot buoi — mot lan tren
+    # duong loi (traceback roi treo), mot lan tren duong THANH CONG (in
+    # EVALBIG_EXIT roi treo, chan ca chuoi 5 pha phia sau). Moi thu can ghi da
+    # ghi va flush truoc dong nay.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
