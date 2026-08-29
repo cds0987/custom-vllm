@@ -161,6 +161,35 @@ Mỗi job một log riêng. Task spill cache trăm GB phải kèm `df -h` vào c
 file spill đặt tên theo tham số (`tr{step}_L{ctx}_T{suffix}.pt`) để không dùng nhầm
 file cũ — đã dính một lần silent (704 vs 736 lệch shape).
 
+### 5.8. `pkill -f`/`ps | grep` tự bắn mình — dính 3 lần trong một buổi
+Mọi mẫu truyền cho `pkill -f` hoặc `ps aux | grep` đều **có mặt trong chính dòng
+lệnh của shell đang gọi nó**, nên nó khớp chính nó:
+
+- `ps aux | grep '[r]un_x.sh'` → báo "đang chạy" ngay lần đầu. Mẹo ngoặc vuông
+  chỉ ngăn *grep* tự khớp, không ngăn dòng `bash -c` **cha** (chứa nguyên chuỗi
+  mẫu) bị khớp.
+- `pkill -9 -f 'eval_big.py gen'` → giết luôn shell đang chạy nó, trước khi kịp
+  phóng job mới. Triệu chứng: cell trả về giữa chừng, không có lỗi nào.
+- Viết mẫu **trong comment** cũng đủ dính: `pkill -f 'eval_big[.]py gen'` chết vì
+  dòng comment ngay phía trên có chứa `eval_big.py gen`.
+
+**Cách chắc chắn**: dọn tiến trình bằng Python, đọc `/proc/*/cmdline` và loại
+`os.getpid()` ra trước. Biết PID của chính mình là thứ shell không có.
+
+### 5.9. Python in traceback rồi TREO — "còn sống" không có nghĩa là còn chạy
+`eval_big.py gen` ném AssertionError, in đủ traceback, rồi **không thoát**: kẹt ở
+lúc join thread nền của `datasets`/`huggingface_hub`. `kill -0` và `/proc/PID/cmdline`
+đều báo tiến trình còn sống, nên lock file kết luận "đang chạy" suốt 8 phút sau khi
+bài đã hỏng. Kiểm tra sống-chết phải đi kèm **mốc thời gian của log**; và khi dọn
+thì dùng `SIGKILL`, đừng đợi nó tự thoát.
+
+### 5.10. Dùng lại tập niêm phong phải dùng ĐÚNG kích thước đã báo cáo
+Gen lại `ext_bench_items.json` bằng mặc định `--n-each 500` trong khi số đã công
+bố là 200/bộ (bbh 98/**182** = 7×26, musr 115/**198** = 66×3, gsm8k 160/**200**) →
+tự bịa ra một tập test to hơn tập thật → báo rò rỉ giả cho gsm8k hàng 200-500.
+`TEST_BBH_PER = 200//26` và `TEST_MUSR_PER = 200//3` ghim cứng con số 200 đó; mọi
+chỗ dùng lại phải khớp.
+
 ## Ba nguyên tắc rút ra
 
 1. **Lỗi im lặng nguy hiểm hơn lỗi ồn ào.** Ưu tiên thiết kế sao cho sai thì
