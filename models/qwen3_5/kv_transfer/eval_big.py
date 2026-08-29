@@ -45,7 +45,19 @@ def _load(name):
 gd = _load("gen_data")
 eb = _load("ext_bench")
 
-N_NEW = {"gsm8k": 320, "bbh": 48, "musr": 24}
+def score(it, txt):
+    """gd.score_item chi biet bbh/gsm8k/musr/suite_*. bfcl/needle cham y het
+    e6v3_ce (bfcl: ten ham xuat hien; needle: ma 6 so xuat hien)."""
+    b = it["bench"]
+    if b == "bfcl":
+        return int(it["expect"] in txt)
+    if b == "needle":
+        return int(it["expect"] in txt)
+    return int(gd.score_item(it, txt))
+
+
+N_NEW = {"gsm8k": 320, "bbh": 48, "musr": 24, "bfcl": 24, "needle": 16,
+         "suite_rag": 24, "suite_mid": 24, "suite_math": 24, "suite_swe": 24}
 WARM_P = 5
 
 # ranh gioi dai da dung o noi khac (PHAI khop ext_bench/gen_data)
@@ -105,9 +117,71 @@ def build_items(n_bbh, n_gsm8k, n_musr):
     return items
 
 
-def check_overlap(items, others):
+def build_beam(n_bfcl, n_needle, n_suite, tok):
+    """Cac ho DANG VUOT TRAN (bfcl/needle/suite) o quy mo lon, dai NIEM PHONG.
+
+    bfcl   -- build_data() cua e6v3 an: exec_simple[:100], simple[:400],
+              parallel[:100], multiple[:100]. O day lay DUOI cac moc do.
+    needle -- sinh moi voi seed CHUA TUNG dung (build_data dung 30000-45000
+              va 100000-110000; o day 500000+).
+    suite  -- suite_gen seed 777 da dung cho train -> doi seed 31337.
+    """
+    e6 = _load("e6v3_ce")
+    items = []
+    # ---- bfcl: lay phan duoi cac moc build_data da an ----
+    for fname, skip in (("BFCL_v3_exec_simple.json", 100),
+                        ("BFCL_v3_simple.json", 400),
+                        ("BFCL_v3_parallel.json", 100),
+                        ("BFCL_v3_multiple.json", 100)):
+        try:
+            xs = e6.bfcl_load(fname, skip + n_bfcl // 4)[skip:]
+        except Exception as e:
+            print(f"bfcl bo qua {fname}: {type(e).__name__}: {e}")
+            continue
+        for j, it in enumerate(xs):
+            items.append({"bench": "bfcl", "kind": "bfcl", "sub": fname,
+                          "id": f"big/{fname}/{skip+j}", "prompt": it["prompt"],
+                          "expect": it["fn"]})
+    # ---- needle: seed moi hoan toan, 3 do dai ----
+    for ctx, n, seed in ((700, n_needle // 2, 500000),
+                         (2000, n_needle // 3, 510000),
+                         (4000, n_needle - n_needle // 2 - n_needle // 3,
+                          520000)):
+        if n <= 0:
+            continue
+        for j, it in enumerate(e6.needle_items(tok, n, seed, ctx_tok=ctx)):
+            items.append({"bench": "needle", "kind": "needle",
+                          "sub": f"ctx{ctx}", "id": f"big/needle{ctx}/{j}",
+                          "prompt": it["prompt"], "expect": it["code"]})
+    # ---- suite: seed khac han train ----
+    if n_suite:
+        sg = _load("suite_gen")
+        out = "/tmp/_suite_big.json"
+        sg.build_suite(n_suite, [1024, 2048, 4096],
+                       ["rag", "mid", "math", "swe"], out, tok, seed=31337)
+        for j, it in enumerate(json.load(open(out))):
+            fam = it["family"]
+            items.append({"bench": f"suite_{fam}", "kind": f"suite_{fam}",
+                          "sub": str(it.get("ctx")), "id": f"big/{fam}/{j}",
+                          "prompt": it["prompt"], "expect": it["expect"]})
+    return items
+
+
+def e6_prompts(tok):
+    """Prompt bfcl/needle/ifstruct/pbtable ma e6v3.build_data() sinh LUC CHAY.
+
+    Chung KHONG nam trong train_items.json (file do chi co gsm8k/bbh/musr/
+    suite), nen neu chi doi chieu file thi kiem ro ri se BO SOT dung hai ho
+    dang duoc do o day. Dung lai chinh build_data voi max_ctx lon nhat da
+    dung khi train (4096) de phu het bucket needle."""
+    e6 = _load("e6v3_ce")
+    d = e6.build_data(tok, max_ctx=4096)
+    return {x["prompt"] for x in d["train"] + d["val"] + d["test"]}
+
+
+def check_overlap(items, others, extra=None):
     """Doi chieu CHUOI PROMPT — khong tin suy luan chi so."""
-    seen = set()
+    seen = set(extra or ())
     for f in others:
         if not Path(f).exists():
             print(f"  CANH BAO: khong thay {f}")
@@ -136,7 +210,7 @@ def run_self(args):
         res = llm.generate([g["prompt"] for g in grp], sp)
         hit = 0
         for g, r in zip(grp, res):
-            h = gd.score_item(g, r.outputs[0].text)
+            h = score(g, r.outputs[0].text)
             out[g["id"]] = h
             hit += h
         print(f"self {bench}: {hit}/{len(grp)} = {100*hit/len(grp):.1f}%",
@@ -205,7 +279,11 @@ def run_mapped(args):
                         use_cache=True, logits_to_keep=1).past_key_values
     a_t, g_t = e5.split_layers(probe)
     Ht = e5._get(next(iter(g_t.values())).recurrent_states).shape[1]
-    mapper = e5.Mapper(len(a_t), len(g_t), Hs, Ht, attn_dim, theta_s, theta_t)
+    import torch as _t
+    _meta = _t.load(args.mapper, map_location="cpu").get("_meta", {})
+    mapper = e5.Mapper(len(a_t), len(g_t), Hs, Ht, attn_dim, theta_s, theta_t,
+                       attn_rank=_meta.get("attn_rank", 0),
+                       gdn_per_head=_meta.get("gdn_per_head", False))
     mapper.load(args.mapper)
     STOPS = e5.stop_ids(tok_t, model_t)
     print(f"mapper {args.mapper} | token dung {sorted(STOPS)}", flush=True)
@@ -232,7 +310,7 @@ def run_mapped(args):
                 if int(inp) in STOPS:
                     break
         txt = tok_t.decode(gen, skip_special_tokens=True)
-        out[it["id"]] = {"hit": gd.score_item(it, txt), "txt": txt[:400],
+        out[it["id"]] = {"hit": score(it, txt), "txt": txt[:400],
                          "n_tok": len(gen)}
         del past, cur, o
         torch.cuda.empty_cache()
@@ -277,17 +355,29 @@ def main():
     ap.add_argument("--tgt-model", default="Qwen/Qwen3.5-9B")
     ap.add_argument("--mapper", default="")
     ap.add_argument("--lora", default="")
-    ap.add_argument("--max-len", type=int, default=4096)
+    ap.add_argument("--max-len", type=int, default=6144)
     ap.add_argument("--slice", default="")
     ap.add_argument("--n-bbh", type=int, default=1300)
     ap.add_argument("--n-gsm8k", type=int, default=500)
     ap.add_argument("--n-musr", type=int, default=60)
+    ap.add_argument("--n-bfcl", type=int, default=400)
+    ap.add_argument("--n-needle", type=int, default=240)
+    ap.add_argument("--n-suite", type=int, default=500)
     args = ap.parse_args()
 
     if args.mode == "gen":
         items = build_items(args.n_bbh, args.n_gsm8k, args.n_musr)
+        if args.n_bfcl or args.n_needle or args.n_suite:
+            from transformers import AutoTokenizer
+            tok = AutoTokenizer.from_pretrained(args.src_model)
+            items += build_beam(args.n_bfcl, args.n_needle, args.n_suite, tok)
+            extra = e6_prompts(tok)
+            print(f"tap e6v3 (bfcl/needle/...) dung khi train: {len(extra)} "
+                  "prompt dua vao kiem ro ri", flush=True)
+        else:
+            extra = None
         check_overlap(items, ["/content/train_items.json",
-                              "/content/ext_bench_items.json"])
+                              "/content/ext_bench_items.json"], extra)
         json.dump(items, open(ITEMS_F, "w"))
         print(f"da ghi {len(items)} item -> {ITEMS_F}")
         print(" ", dict(Counter(i["bench"] for i in items)))
