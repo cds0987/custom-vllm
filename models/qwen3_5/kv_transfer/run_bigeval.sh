@@ -10,8 +10,11 @@
 #   3. tai joint49s    — checkpoint score 67 (an toan tren HF)
 #   4. eval_big  self  — cot tran, bang vLLM (dung dung token ket thuc; vong
 #                        greedy tay tung cho 32% thay vi 92% tren cung 40 mau)
-#   5. e9_joint  train — joint49v: 2500 buoc nua tu joint49s (48->50->61->64->67,
-#                        CHUA bao hoa o buoc cuoi)
+#   5. e9_joint  train — joint49v tu joint49s, DUNG THEO VAL (patience 3)
+#                        chu KHONG theo so buoc: 3/4 luot truoc bi cat ngang
+#                        vi runtime bi thu hoi hoac vi het so buoc — KHONG
+#                        luot nao dung vi HOI TU (49s van dang len o buoc cuoi).
+#                        Do mapper chua hoi tu thi so do chi la CAN DUOI.
 #
 # Pha 6 (eval_big mapped) chay rieng sau khi chon duoc checkpoint tot nhat.
 set -u
@@ -79,7 +82,7 @@ python3 -u e9_joint.py \
   --data-file /content/train_items.json \
   --pseudo-gold /content/pseudo_gold.json \
   --max-ctx 4096 --tbptt 128 --gold-cap 256 --gold-envelope 16384:256 \
-  --steps 2500 --val-every 500 --val-n 150 --ce-floor 0.2 \
+  --steps 8000 --val-every 500 --val-n 150 --ce-floor 0.05 --patience 3 \
   --no-offload --verify-meta 512 \
   --init-mapper /content/joint49s/mapper_best.pt \
   --init-lora   /content/joint49s/lora_best \

@@ -261,6 +261,13 @@ def main():
     ap.add_argument("--val-every", type=int, default=250)
     ap.add_argument("--val-n", type=int, default=40)
     ap.add_argument("--ce-floor", type=float, default=0.2)
+    ap.add_argument("--patience", type=int, default=0,
+                    help="Dung khi val score KHONG lap ky luc trong N moc lien "
+                         "tiep (0 = tat). Ly do them: lich su cho thay 3/4 luot "
+                         "train bi cat ngang vi runtime bi thu hoi hoac vi het "
+                         "so buoc — KHONG luot nao dung vi hoi tu. Do mot mapper "
+                         "chua hoi tu thi con so chi la CAN DUOI. Voi patience, "
+                         "--steps chi con la tran an toan.")
     ap.add_argument("--init-mapper", default="",
                     help="warm-start tu mapper da co (v427_4k / v49)")
     ap.add_argument("--init-lora", default="",
@@ -544,7 +551,7 @@ def main():
                 for k, v in sc.items()}, \
                sum(sum(v["mapped"]) for v in sc.values())
 
-    best, n_skip = -1, 0
+    best, n_skip, n_flat = -1, 0, 0
     t_start = time.time()
     for step in range(1, args.steps + 1):
         it = data["train"][(step - 1) % len(data["train"])]
@@ -621,9 +628,17 @@ def main():
             hf_up(out / "results.json", "results.json")
             save_ckpt("last")
             if score > best:
-                best = score
+                best, n_flat = score, 0
                 save_ckpt("best")
                 print(f"    ky luc moi: {score}", flush=True)
+            else:
+                n_flat += 1
+                print(f"    khong lap ky luc ({score} <= {best}), "
+                      f"{n_flat}/{args.patience or '-'} moc phang", flush=True)
+            if args.patience and n_flat >= args.patience:
+                print(f"PATIENCE: {n_flat} moc lien tiep khong lap ky luc "
+                      f"(tot nhat {best}) -> hoi tu, dung", flush=True)
+                break
             # CE cua MOT item dao dong 0,02-2,46 tuy item (do that trong run
             # dau: 1.34/0.96/2.46/1.54/0.82/.../0.018). Lay ce cua dung buoc
             # val lam dieu kien dung = tung dong xu: ~8%/moc x 8 moc ~ 50%
