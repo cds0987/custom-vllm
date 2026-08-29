@@ -261,6 +261,14 @@ def main():
     ap.add_argument("--val-every", type=int, default=250)
     ap.add_argument("--val-n", type=int, default=40)
     ap.add_argument("--ce-floor", type=float, default=0.2)
+    ap.add_argument("--accum", type=int, default=1,
+                    help="Gop gradient qua N mau roi moi buoc optimizer. "
+                         "KHONG nhanh hon (van tung ay luot forward), nhung "
+                         "huong gradient bot nhieu: CE cua MOT item dao dong "
+                         "0,02-2,46 tuy item (do that), nen batch hieu dung 1 "
+                         "la di theo tung mau mot. Khac han batch THAT: gop "
+                         "gradient khong can DEM prompt nen khong dung toi lop "
+                         "GDN hoi quy — an toan vo dieu kien.")
     ap.add_argument("--patience", type=int, default=0,
                     help="Dung khi val score KHONG lap ky luc trong N moc lien "
                          "tiep (0 = tat). Ly do them: lich su cho thay 3/4 luot "
@@ -551,7 +559,8 @@ def main():
                 for k, v in sc.items()}, \
                sum(sum(v["mapped"]) for v in sc.values())
 
-    best, n_skip, n_flat = -1, 0, 0
+    best, n_skip, n_flat, n_acc = -1, 0, 0, 0
+    opt.zero_grad(set_to_none=True)
     t_start = time.time()
     for step in range(1, args.steps + 1):
         it = data["train"][(step - 1) % len(data["train"])]
@@ -590,11 +599,16 @@ def main():
                     if txt and (txt[0].isdigit() or txt[0].isupper()):
                         wts[0, pi] = max(float(wts[0, pi]), args.w_entity)
             ce = (nll * wts).sum() / wts.sum()
-            opt.zero_grad(set_to_none=True)
             cev = ce.detach().item()
-            ce.backward()
-            opt.step()
-            sched.step()
+            # chia cho accum de tong gradient = TRUNG BINH, khong phai TONG
+            # (khong chia thi lr hieu dung nhan len accum lan)
+            (ce / args.accum).backward()
+            n_acc += 1
+            if n_acc >= args.accum:
+                opt.step()
+                sched.step()
+                opt.zero_grad(set_to_none=True)
+                n_acc = 0
             del st, o, logp, nll, ce
         except _SkipItem:
             n_skip += 1
@@ -605,7 +619,11 @@ def main():
             # dau skipped roi di tiep, val van chay.
             print(f"  buoc {step} OOM (kind={it['kind']}, "
                   f"len={len(it['prompt'])}) -> bo qua", flush=True)
+            # OOM giua backward de lai gradient CONG DO DANG cho item nay. Voi
+            # --accum no lam ban ca cua so gop, khong chi mot buoc -> vut ca
+            # cua so. Mat mot cua so re hon la buoc mot huong gradient hong.
             opt.zero_grad(set_to_none=True)
+            n_acc = 0
             skipped, n_skip = True, n_skip + 1
         gc.collect()
         torch.cuda.empty_cache()
