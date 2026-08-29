@@ -33,6 +33,10 @@ fi
 for pkg in peft bitsandbytes datasets; do
   python3 -c "import $pkg" 2>/dev/null || pip install -q "$pkg" 2>&1 | tail -2
 done
+# setup_env.sh in ro "source /tmp/vllm_env.sh before running vllm": no dat
+# LD_LIBRARY_PATH toi libcudart cu13. Thieu -> vLLM chet luc nap. `|| true`
+# vi da co lan `run.sh serve` chet CAM khi file nay vang (set -e nuot loi).
+[ -f /tmp/vllm_env.sh ] && . /tmp/vllm_env.sh || true
 python3 -c "import vllm,torch,peft,bitsandbytes;print('vllm',vllm.__version__,'torch',torch.__version__)"
 
 step "1/5 tap niem phong CU (chi de kiem ro ri)"
