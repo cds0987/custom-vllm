@@ -360,6 +360,8 @@ def run_self(bench_list, tgt_model, max_len, sl, tgt_quant="bnb"):
     # self PHAI nap cung dang luong tu voi cross, neu khong thi so sanh
     # retention (mapped/self) la so sanh hai model khac nhau
     tok, m = _load_target(tgt_model, tgt_quant)
+    STOPS = e5.stop_ids(tok, m)
+    print(f"token dung sinh: {sorted(STOPS)}", flush=True)
     items = json.load(open(PROMPTS_F))
     items = [it for it in items if it["bench"] in bench_list]
     a, b = (int(x) for x in sl.split(":")) if sl else (0, len(items))
@@ -371,7 +373,11 @@ def run_self(bench_list, tgt_model, max_len, sl, tgt_quant="bnb"):
         n_new = N_NEW[it["bench"]]
         t0 = time.time()
         with torch.no_grad():
+            # PHAI truyen eos_token_id TUONG MINH: checkpoint khong co
+            # generation_config.json va config.eos_token_id o cap tren la
+            # None -> generate() co the KHONG DUNG dung cho (xem e5.stop_ids)
             gen_ids = m.generate(**enc, max_new_tokens=n_new, do_sample=False,
+                                 eos_token_id=sorted(STOPS),
                                  pad_token_id=tok.eos_token_id)
         txt = tok.decode(gen_ids[0, enc["input_ids"].shape[1]:], skip_special_tokens=True)
         row = {"id": it["id"], "bench": it["bench"], "text": txt, "lat": round(time.time() - t0, 2)}
@@ -491,6 +497,8 @@ def run_cross(bench_list, src_model, tgt_model, mapper_path, max_len, sl,
     Ht = e5._get(next(iter(g_t.values())).recurrent_states).shape[1]
     mapper = e5.Mapper(len(a_t), len(g_t), Hs, Ht, attn_dim, theta_s, theta_t)
     mapper.load(mapper_path)
+    STOPS_T = e5.stop_ids(tok_t, model_t)
+    print(f"token dung sinh: {sorted(STOPS_T)}", flush=True)
     print(f"mapper nap: {mapper_path}", flush=True)
 
     out = []
@@ -515,7 +523,7 @@ def run_cross(bench_list, src_model, tgt_model, mapper_path, max_len, sl,
                 cur = o.past_key_values
                 inp = o.logits[:, -1, :].argmax(-1, keepdim=True)
                 gen_ids.append(int(inp))
-                if inp.item() == tok_t.eos_token_id:
+                if int(inp) in STOPS_T:
                     break
         txt = tok_t.decode(gen_ids)
         row = {"id": it["id"], "bench": it["bench"], "text": txt,

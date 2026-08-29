@@ -455,6 +455,10 @@ def main():
         return int(re.sub(r"\s+", " ", it["gold"])[:30]
                    in re.sub(r"\s+", " ", txt))
 
+    STOPS = e5.stop_ids(tok_t, model_t)
+    print(f"token dung sinh: {sorted(STOPS)} "
+          f"({[tok_t.decode([i]) for i in sorted(STOPS)]})", flush=True)
+
     @torch.no_grad()
     def _greedy(past, warm, n_new):
         o = model_t(input_ids=warm, past_key_values=past, use_cache=True)
@@ -466,8 +470,8 @@ def main():
             cur = o.past_key_values
             inp = o.logits[:, -1, :].argmax(-1, keepdim=True)
             gen.append(int(inp))
-            if inp.item() == tok_t.eos_token_id:
-                break
+            if int(inp) in STOPS:   # xem e5.stop_ids: checkpoint khai eos
+                break               # bat nhat quan, dung sai = sinh tran
         del cur, o
         return tok_t.decode(gen)
 

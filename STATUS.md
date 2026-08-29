@@ -1569,7 +1569,56 @@ NF4 KHONG dong duoc khoang cach. **Loai luong tu khong phai nguyen nhan.**
 Van giu ban va sang nf4 vi dung ve nguyen tac, nhung khong quy cong cho no.
 Ghi lai nhu mot lan suy luan nghe hop ly ma sai — chi so do moi phan xu duoc.
 
-**Gia thuyet 2 (dang do): thieu kernel GDN.** Model nay 75% la GDN. Kiem moi
+**Gia thuyet 2: thieu kernel GDN — CUNG BI BAC.** `fla`, `causal_conv1d`,
+`flash_attn` deu thieu that (modeling_qwen3_5 nhac den 8/10/4 lan), va vLLM
+co in `Using Triton/FLA GDN prefill kernel`. Nhung cai `fla 0.5.2` roi do
+lai: **17/40 = 42%** so voi khong co fla **15/40 = 38%** — chenh 2 mau, la
+nhieu. Kernel KHONG phai nguyen nhan.
+
+**Gia thuyet 3: DUNG SAI TOKEN KET THUC — XAC NHAN (2026-08-29).**
+
+Checkpoint Qwen3.5 khai BAT NHAT QUAN:
+
+    tokenizer.eos_token_id = 248046  '<|im_end|>'
+    config.eos_token_id    = 248044  '<|endoftext|>'   (o text_config)
+
+Moi vong greedy tu viet trong du an (`e9_joint._greedy`, `ext_bench`
+run_cross) chi kiem `tok.eos_token_id` = 248046.
+
+Thi nghiem doi chung tren vLLM (CUNG 40 mau, CUNG engine, chi khac dieu
+kien dung — sinh mot lan roi cham hai kieu):
+
+    dung dung (eos that)        : 37/40 = 92%
+    ep sinh TRAN 320 tok        : 13/40 = 32%
+    do dai TB khi dung dung     : 184 token (ngan sach 320)
+    token KET THUC that su      : 248044 '<|endoftext|>'  38/40 ca
+                                  248046 '<|im_end|>'      0/40 ca
+
+**Khong mot mau nao ket thuc bang 248046.** Nen vong lap khong bao gio dung,
+sinh tran het 320 token roi lan man; bo cham gsm8k lay SO CUOI CUNG trong van
+ban -> nhat phai so trong phan thua. 32% khop gan nhu chinh xac voi 38-42%
+do duoc o transformers.
+
+**PHAM VI ANH HUONG (rong):**
+- `e9_joint` val — ca cot self LAN cot mapped cua ca hai luot train
+  joint49e/joint49p. Moi con so val da bao deu THAP hon thuc te.
+- `ext_bench` run_cross (vong greedy tay) VA run_self (`m.generate` khong
+  truyen `eos_token_id` tuong minh, ma checkpoint khong co
+  generation_config.json va `config.eos_token_id` cap tren la None)
+  -> **cac baseline 27B-self 53,8/80,0/58,1% va 4B-self 81,5/34,6/4,5% deu
+  dang nghi ngo, nhieu kha nang bi ep thap**.
+- Cac so CROSS cua chien dich 4->27B cung chiu cung loi.
+
+**Vá**: them `e5.stop_ids(tok, model)` gom eos tu tokenizer + config +
+text_config + generation_config + tra cuu ten token, dung o e9_joint va
+ext_bench (ca greedy tay lan `generate(eos_token_id=...)`).
+
+**Bai hoc phuong phap**: hai gia thuyet dau (fp4/nf4, kernel fla) deu NGHE
+RAT HOP LY, deu co bang chung gian tiep ung ho (mac dinh fp4 la that; thieu
+kernel la that), va deu SAI. Chi thi nghiem doi chung truc tiep — sinh mot
+lan, cham hai kieu — moi phan xu duoc.
+
+**Gia thuyet 2 (da bac): thieu kernel GDN.** Model nay 75% la GDN. Kiem moi
 truong: `fla`, `causal_conv1d`, `flash_attn` DEU THIEU, trong khi
 `modeling_qwen3_5` nhac den chung 8/10/4 lan -> transformers roi ve duong
 tinh toan du phong, con vLLM luon dung Triton fast path (log co

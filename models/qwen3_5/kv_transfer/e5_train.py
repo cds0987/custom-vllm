@@ -134,6 +134,51 @@ def load_4bit_cpu_offload_io(name):
     return tok, model
 
 
+def stop_ids(tok, model=None):
+    """Tap DAY DU token dung sinh.
+
+    BUG THAT (do 2026-08-29, xac nhan bang thi nghiem doi chung tren vLLM):
+    checkpoint Qwen3.5 khai BAT NHAT QUAN --
+        tokenizer.eos_token_id = 248046  '<|im_end|>'
+        config.eos_token_id    = 248044  '<|endoftext|>'
+    Nhung khi sinh THAT tren 40 mau gsm8k, token ket thuc la 248044 o 38/40
+    ca va 248046 o 0 ca. Moi vong greedy tu viet trong du an chi kiem
+    `tok.eos_token_id` (248046) -> KHONG BAO GIO DUNG -> sinh tran het ngan
+    sach roi lan man; bo cham gsm8k lay SO CUOI CUNG nen nhat phai so trong
+    phan thua.
+
+    Do doi chung (cung vLLM, cung 40 mau, chi khac dieu kien dung):
+        dung dung          : 37/40 = 92%
+        ep sinh tran 320   : 13/40 = 32%   (do dai TB khi dung dung: 184 tok)
+
+    Day la nguyen nhan cua khoang cach transformers-vs-vLLM, KHONG phai
+    fp4/nf4 (da bac) va KHONG phai thieu kernel fla (da bac).
+    """
+    ids = set()
+    for src in (getattr(tok, "eos_token_id", None),
+                getattr(tok, "pad_token_id", None)):
+        if isinstance(src, int):
+            ids.add(src)
+    if model is not None:
+        cfg = model.config
+        tcfg = cfg.get_text_config() if hasattr(cfg, "get_text_config") else cfg
+        for c in (cfg, tcfg, getattr(model, "generation_config", None)):
+            e = getattr(c, "eos_token_id", None) if c is not None else None
+            if isinstance(e, int):
+                ids.add(e)
+            elif isinstance(e, (list, tuple)):
+                ids.update(int(x) for x in e)
+    for t in ("<|endoftext|>", "<|im_end|>"):
+        try:
+            i = tok.convert_tokens_to_ids(t)
+            if isinstance(i, int) and i >= 0:
+                ids.add(i)
+        except Exception:
+            pass
+    ids.discard(None)
+    return ids
+
+
 def rope_cs(T, dim, theta, device):
     import torch
     inv = 1.0 / (theta ** (torch.arange(0, dim, 2, device=device).float() / dim))
