@@ -133,7 +133,8 @@ python3 -u e9_joint.py \
   --data-file /content/train_items.json \
   --pseudo-gold /content/pseudo_gold.json \
   --max-ctx 4096 --tbptt 128 --gold-cap 256 --gold-envelope 16384:256 \
-  --steps ${STEPS:-8000} --val-every 500 --val-n 150 --ce-floor 0.05 \n  --patience ${PAT:-3} --accum ${ACCUM:-1} \
+  --steps ${STEPS:-8000} --val-every 500 --val-n 150 --ce-floor 0.05 \
+  --patience ${PAT:-3} --accum ${ACCUM:-1} \
   --no-offload --verify-meta 512 \
   --init-mapper "$INIT_M" \
   --init-lora   "$INIT_L" \
