@@ -11,9 +11,9 @@
 #   4. eval_big  self  — cot tran, bang vLLM (dung dung token ket thuc; vong
 #                        greedy tay tung cho 32% thay vi 92% tren cung 40 mau)
 #   5. e9_joint  train — joint49v tu joint49s, DUNG THEO VAL (patience 3)
-#                        chu KHONG theo so buoc: 3/4 luot truoc bi cat ngang
-#                        vi runtime bi thu hoi hoac vi het so buoc — KHONG
-#                        luot nao dung vi HOI TU (49s van dang len o buoc cuoi).
+#                        chu KHONG theo so buoc: 3/4 luot truoc bi cat ngang
+#                        vi runtime bi thu hoi hoac vi het so buoc — KHONG
+#                        luot nao dung vi HOI TU (49s van dang len o buoc cuoi).
 #                        Do mapper chua hoi tu thi so do chi la CAN DUOI.
 #
 # Pha 6 (eval_big mapped) chay rieng sau khi chon duoc checkpoint tot nhat.
