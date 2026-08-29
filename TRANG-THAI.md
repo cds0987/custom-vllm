@@ -123,70 +123,31 @@ Cập nhật: 2026-08-28.
   vào fallback builtin (vốn crash trên model lai). Kiến trúc 1-GPU cho
   C2b: TUẦN TỰ qua L2 POSIX (4B producer ghi đĩa → stop → 9B consumer
   đọc) — né hẳn bài đồng trú E3B.
-- **C2b VERDICT INTERIM (2026-08-26, 7 lượt phân xử C2b→C2b-7, chi tiết
-  bảng trong STATUS mục PHASE C; kết quả HF c2b/..c2b7/)**:
-  (1) **Cơ chế vận chuyển HOÀN CHỈNH** — vá 1 dòng key lmcache
-  (`qwen35-shared`), hit mọi độ dài, **TTFT 30K 11-24s → ~1s (×12-16)**;
-  (2) đã chốt bằng đo: fp8-scale là tầng lỗi thật (bf16 KV bắt buộc),
-  block-align cần để hit; ĐÃ LOẠI: suffix-re-prefill (rem=2),
-  champion-graft (stock giống hệt), producer-W4A16 (bf16 giống hệt);
-  (3) **bất biến qua MỌI biến thể: cross lấy đúng 4-6 chữ số đầu rồi
-  degenerate** → giả thuyết tầng lỗi thật (chưa kiểm): **trang GDN-state
-  KHÔNG được truyền/áp — chỉ attention KV sang** (khớp E0: thiếu 1 trong
-  2 là chết; E7: attention thẳng hàng → token đầu vẫn chạy). Chẩn đoán
-  kế: instrument key nhóm object GDN trong lmcache. 6 bài học hạ tầng
-  ghi STATUS (cùng-torch CUDA-IPC, port 8080, kill theo chủ cổng, pkill
-  tự khớp → '[e]', 2-writer null-bytes, L1 pinned háo hức).
-- **LAB-CHECK (2026-08-26, user chỉ đạo "kiểm ngoài vLLM trước"; HF
-  c2b_lab/)**: 4B→9B copy-NGUYÊN transformers bf16, protocol E1, trên
-  ĐÚNG 4 prompt aligned đang fail ở vLLM → **self 4/4 | copy 3/4 mã
-  TRỌN VẸN** (439814✓ 025150✓ 071412✓; ca 30K-2 ra '9346666' — đúng
-  chữ ký degeneration). Hai tầng sự thật: (1) **vLLM làm MẤT THÊM
-  thật** — lab 3/4 mã trọn vs vLLM 1/4 chỉ 4 số đầu, CÙNG đề → nghi
-  án trang GDN rơi trong kho ĐỨNG VỮNG, giờ có mốc đối chứng định
-  lượng; (2) biên phương pháp MỎNG hơn E1 trên đề filler tổng hợp 30K
-  (E1 12/12 là FineWeb thật; continuation sau mã cũng lú nhẹ) — fail
-  vLLM một phần là khuếch đại biên mỏng sẵn.
-- **KHÁM KHO GDN (2026-08-26, đầu dò OBJGRP-PROBE tiêm vào
-  _run_object_group_transfer_plan)**: **GIẢ THUYẾT TRANG-GDN-RƠI BỊ
-  BÁC** — plan chạy ĐỐI XỨNG cho cả 2 nhóm object (group 0 attention +
-  group 1 mamba/GDN: 76/76 lần, cặp đôi từng timestamp, cả store lẫn
-  retrieve; 4 lần RETRIEVE = đủ 4 prompt). Kho giao đủ hai nửa vở —
-  đo-hơn-suy-luận thêm một lần (kết quả âm quý). Nghi phạm còn lại
-  DUY NHẤT sau khi đối chiếu lab-check: **trọng số consumer W4A16**
-  — lab 3/4 dùng 9B bf16-weights; mọi lượt vLLM đều consumer W4A16
-  (champion lẫn stock); E6c từng đo: student lượng tử hóa mất nửa biên.
-- **C2b-8 + VERDICT CUỐI PHASE C (2026-08-26, HF c2b8/)**: consumer
-  bf16-weights trong vLLM (8K-only, 30K không vừa L4 bf16) → cross VẪN
-  1/2, ca 0 cụt '4398' giống hệt W4A16 → giả thuyết W4A16-consumer CŨNG
-  bị bác. **Kết luận: không còn "một con bug" — là ĐỊNH LUẬT BIÊN MỎNG**:
-  cross-cache decode đứng sát mép vực số học, nhiễu nhỏ nào (kernel GDN
-  vLLM≠fla, roundtrip trang, lượng tử hóa) cũng lật ca cận biên (lab-fla
-  cùng ca ra mã trọn; junk sau mã có Ở CẢ lab). Transport stack đã ĐÚNG
-  (2 nhóm object giao đủ 76/76; bf16 KV + block-align + L1 + cùng-torch
-  = điều kiện cần, đã vá; TTFT ×12-16 thật). Hệ quả: exact-retrieval
-  serving cần POLISHER gia cố biên (công nghệ mapper sẵn có); scope ngữ
-  nghĩa chat/QA/RAG (E2-E3) chưa đo trên serving = bài đo kế; 4B→27B
-  batch không ảnh hưởng. Chi tiết STATUS mục PHASE C VERDICT CUỐI.
-- **C2b-N XONG (2026-08-26, user đòi N lớn; HF c2bN/)**: 240 prompt @8K,
-  10 wave tự động 2h không ngã → **self 240/240 = 100% | cross 137/240
-  = 57,1% (CI ~51-63%) | tốc độ ×2,7 @8K**. Tỷ lệ thật của biên-mỏng:
-  không phải vách đá, không phải gần-hoàn-hảo — ~57% ca sống qua nhiễu.
-  Kinh tế: hybrid "thử cross, miss thì cold-prefill" đã lời TTFT ngay;
-  polisher cần kéo 57→95%+ cho exact-retrieval thuần. GPU trống, không
-  job nền — chờ user định hướng (polisher / hybrid-fallback / cascade
-  4→27 batch / kernel-diff bước 1).
+- **C2b VERDICT INTERIM (2026-08-26, 7 lượt)**: cơ chế vận chuyển HOÀN
+  CHỈNH — vá 1 dòng key lmcache, **TTFT 30K 11-24s → ~1s (×12-16)**. Chốt:
+  bf16 KV bắt buộc, block-align cần để hit; đã loại suffix-re-prefill,
+  champion-graft, producer-W4A16. Bất biến: cross lấy 4-6 chữ số đầu rồi
+  degenerate. 6 bài học hạ tầng ghi STATUS.
+- **LAB-CHECK (2026-08-26)**: copy-nguyên ngoài vLLM trên đúng 4 prompt
+  fail → **self 4/4 | copy 3/4 mã trọn** (vLLM chỉ 1/4). vLLM làm MẤT
+  THÊM thật; và biên phương pháp mỏng hơn E1 trên filler tổng hợp.
+- **KHÁM KHO GDN (2026-08-26)**: **giả thuyết trang-GDN-rơi BỊ BÁC** —
+  plan chạy đối xứng cả 2 nhóm object (76/76). Kho giao đủ hai nửa vở.
+- **C2b-8 + VERDICT CUỐI PHASE C (2026-08-26)**: consumer bf16-weights →
+  cross VẪN 1/2, cụt y hệt W4A16 → giả thuyết W4A16 CŨNG bị bác.
+  **Kết luận: không còn "một con bug" — là ĐỊNH LUẬT BIÊN MỎNG**:
+  cross-cache decode sát mép vực số học, nhiễu nhỏ nào cũng lật ca cận
+  biên. Transport stack ĐÚNG (76/76, TTFT ×12-16 thật). Exact-retrieval
+  cần POLISHER. Chi tiết STATUS.
+- **C2b-N XONG (2026-08-26)**: 240 prompt @8K → **self 100% | cross 57,1%
+  (CI 51-63%) | ×2,7**. Tỷ lệ thật của biên-mỏng. Hybrid "thử cross, miss
+  thì cold-prefill" đã lời TTFT ngay; polisher cần kéo 57→95%+.
 - **C2c sem XONG (2026-08-26)**: scope ngữ nghĩa (QA paraphrase wikitext)
   trên serving **self 90% | cross 55%** — sát mức needle số (57%): định luật
   biên mỏng áp cho MỌI decode đầu trên cache ngoại. HF `c2c_sem/`.
-- **Hạ tầng vá cùng đợt**: ghim `vllm==0.27.1` trong `setup_env.sh`
-  (runtime mới từng kéo 0.28.0 không ghim = drift ngầm âm thầm — MỌI
-  số Phase C trước đó đo trên 0.27.1, phải cảnh giác runtime mới);
-  `run.sh serve` từng chết câm khi thiếu `/tmp/vllm_env.sh` (set -e +
-  source fail) → vá `|| true`; **học phí token**: gõ tay HF_TOKEN vào
-  Colab cell làm mất 1 ký tự → 401 hàng loạt — từ nay đọc token từ
-  file + assert độ dài, không gõ tay secret; mọi `HfApi()` trong repo
-  đã vá `token=` tường minh.
+- **Hạ tầng vá cùng đợt**: ghim `vllm==0.27.1`; `run.sh serve` chết câm
+  khi thiếu `/tmp/vllm_env.sh` → vá `|| true`; học phí token: gõ tay
+  HF_TOKEN mất 1 ký tự → 401 hàng loạt, từ nay đọc từ file + assert.
 - **User chốt hướng mới (2026-08-26)**: copy-nguyên 4→9 "hên xui" →
   chuyển sang **train mapper functional-loss cho 4→9** (tái dùng
   `e6v3_ce.py`, chỉ đổi `--tgt-model`; theo E7 cặp 4→9 CCA-GDN≥0,9 dễ
@@ -287,6 +248,48 @@ Cập nhật: 2026-08-28.
   KẾT LUẬN VƯỢT DỮ LIỆU — hạ xuống "chưa xác định". Phép đo phân giải:
   train lại với data đa dạng (suite_gen.py 4 họ ĐÃ dựng sẵn, chưa dùng
   cho train + gsm8k/bbh train-split) rồi đo lại đúng benchmark đó.
+
+- **NGÀY 28-29/08 — CHIẾN DỊCH JOINT 4→9 + 4 BUG HARNESS** (chi tiết STATUS):
+  - **Pseudo-gold bằng vLLM offline** (gợi ý user): 577 tok/s vs 11,8 của
+    transformers = **nhanh 49×**; 671k token trong 30,7 phút. Thu 3.574/6.098
+    mẫu 9B tự làm đúng → đích học đổi từ đáp án người viết sang **quỹ đạo 9B
+    tự đi** (user: "cần map gần 9B nhất" → đích trùng luôn thước đo).
+  - **BỐN BUG HARNESS** làm mọi số trước đó sai: (1) ngưỡng gold<2 token loại
+    16,7% dữ liệu (musr 100%, bbh 25%); (2) `continue` nuốt mốc val im lặng;
+    (3) val tính lại cột `self` mỗi mốc dù nó không đổi; (4) **DỪNG SAI TOKEN
+    KẾT THÚC** — tokenizer khai 248046 `<|im_end|>` nhưng model kết thúc bằng
+    248044 `<|endoftext|>` (38/40 ca), nên vòng sinh KHÔNG DỪNG, sinh tràn rồi
+    lan man, bộ chấm gsm8k lấy số cuối → **92% tụt còn 32%**. Ảnh hưởng cả
+    `e9_joint` lẫn `ext_bench` → **các baseline 27B-self/4B-self đã báo cáo
+    đều đáng nghi, nhiều khả năng bị ép thấp**. Vá bằng `e5.stop_ids()`.
+    Hai giả thuyết trước đó (fp4-vs-nf4, thiếu kernel `fla`) đều nghe hợp lý,
+    đều có bằng chứng gián tiếp đúng, và đều **bị bác bằng đo**.
+  - **Val 150 mẫu, cột `self` tra cứu từ pseudo-gold** (miễn phí + chuẩn hơn).
+    Lượt `joint49s` score 48→50→61→64→**67**, chưa bão hoà. Mapper **VƯỢT TRẦN**
+    ở bfcl 12/12 (trần 9), musr 12/15 (trần 2), bbh 25/41 (trần 9), suite_mid
+    5/5 (trần 0) — tức nó không chỉ dịch cache mà mang thêm kỹ năng vào.
+    **Nhưng gsm8k đứng im 1-5/53 trong khi trần 44/53.**
+  - **ĐỌC TAY 20 ĐẦU RA gsm8k** (user chỉ đạo "đọc lỗi trước đã"): self 17/20,
+    mapped 0/20; lặp trigram 0,137 và 19/20 đúng định dạng → **KHÔNG** phải
+    rác/định dạng. 13/17 ca là **"văn hoàn hảo, đề bài bị bóp méo"**: con SỐ
+    sống sót, QUAN HỆ và việc gán thuộc tính cho THỰC THỂ bị đảo lộn
+    ("Kate 29 tuổi"→"Tully 29 tuổi"; "già hơn nửa tuổi"→"trẻ hơn 20 năm";
+    bịa ra con dê không có trong đề).
+  - **GIẢ THUYẾT ĐANG KIỂM**: mapper phân bổ tham số **ngược** với nơi thông
+    tin nằm — attention 16,8M (CCA 0,93-0,98, đã thẳng hàng sẵn) vs GDN 0,8M
+    (CCA 0,23-0,9, chỗ quyết định), và A,B còn dùng chung cho cả 32 head.
+    Lượt `joint49u`: GDN 0,8→25,2M (mỗi head một cặp), attention giữ nguyên,
+    warm-start chính xác, + `--w-entity 3.0`. **Val 500: score 52 (vs 48)
+    nhưng gsm8k 3/53 (vs 2/53) — KHÔNG nhích; bfcl tụt 11→5.** Chờ mốc
+    1000-2500. Nếu gsm8k vẫn đứng → bác giả thuyết dung lượng, nghi phạm
+    chuyển sang **dạng hàm** (`A·S·B` không biểu diễn nổi quan hệ).
+  - Bài học thiết kế: lượt `joint49t` hỏng vì tôi cắt attention xuống hạng 64
+    để "giữ tổng tham số" → CE nhảy 0,9→5-12. Giả định "attention thẳng hàng
+    nên chỉ cần chỉnh nhẹ" đúng cho KHỞI TẠO, sai cho ma trận ĐÃ TRAIN 5.000
+    bước (hạng cao).
+  - Công cụ mới: `gen_pseudo_vllm.py`, `inspect_fail.py`, `eval_big.py`
+    (~1.900 mẫu niêm phong từ dải chưa đụng), `e5.stop_ids()`,
+    `Mapper(attn_rank, gdn_per_head)`.
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
