@@ -427,29 +427,51 @@ def main():
         feed = torch.cat([warm, gold_ids[:, :-1]], 1)
         return cut, warm, gold_ids, feed
 
+    # Dong ho tung chang. BAT BUOC synchronize truoc khi doc dong ho: CUDA
+    # chay bat dong bo, khong dong bo thi moi thoi gian se don het vao chang
+    # cuoi cung co doc ket qua ve CPU -> ket luan nghen SAI.
+    T_ACC = {}
+
+    class clock:
+        def __init__(self, k):
+            self.k = k
+
+        def __enter__(self):
+            torch.cuda.synchronize()
+            self.t = time.time()
+            return self
+
+        def __exit__(self, *a):
+            torch.cuda.synchronize()
+            T_ACC[self.k] = T_ACC.get(self.k, 0.0) + time.time() - self.t
+            return False
+
     def prefill_tbptt(ids, w):
         """T-w token dau no_grad, w token cuoi co grad (xem docstring dau
         file: GC bi loai ve nguyen tac nen day la duong duy nhat chan duoc
         activation cua 4B)."""
         past, cutp = None, max(0, ids.shape[1] - w)
         if cutp:
-            with torch.no_grad():
+            with clock("4B-nograd"), torch.no_grad():
                 for s in range(0, cutp, 1024):
                     o = model_s(input_ids=ids[:, s:min(s + 1024, cutp)],
                                 past_key_values=past, use_cache=True,
                                 logits_to_keep=1)
                     past = o.past_key_values
-        for s in range(cutp, ids.shape[1], 1024):
-            o = model_s(input_ids=ids[:, s:s + 1024], past_key_values=past,
-                        use_cache=True, logits_to_keep=1)
-            past = o.past_key_values
+        with clock("4B-grad"):
+            for s in range(cutp, ids.shape[1], 1024):
+                o = model_s(input_ids=ids[:, s:s + 1024], past_key_values=past,
+                            use_cache=True, logits_to_keep=1)
+                past = o.past_key_values
         return past
 
     def student_past(cut):
         src = prefill_tbptt(cut, args.tbptt)
-        tpl = e5.build_template_from_meta(
-            probe_t, meta_for_len(base_meta, T_BASE, cut.shape[1]))
-        st = e5.build_student_past(tpl, src, mapper)
+        with clock("template"):
+            tpl = e5.build_template_from_meta(
+                probe_t, meta_for_len(base_meta, T_BASE, cut.shape[1]))
+        with clock("mapper"):
+            st = e5.build_student_past(tpl, src, mapper)
         del tpl
         return st
 
@@ -578,7 +600,8 @@ def main():
                 skipped = True
                 raise _SkipItem
             st = student_past(cut)
-            o = model_t(input_ids=feed, past_key_values=st, use_cache=True)
+            with clock("9B-forward"):
+                o = model_t(input_ids=feed, past_key_values=st, use_cache=True)
             logp = torch.log_softmax(o.logits[:, WARM_P - 1:].float(), -1)
             nll = -logp.gather(2, gold_ids.unsqueeze(-1)).squeeze(-1)
             wts = torch.ones_like(nll)
@@ -602,7 +625,8 @@ def main():
             cev = ce.detach().item()
             # chia cho accum de tong gradient = TRUNG BINH, khong phai TONG
             # (khong chia thi lr hieu dung nhan len accum lan)
-            (ce / args.accum).backward()
+            with clock("backward"):
+                (ce / args.accum).backward()
             n_acc += 1
             if n_acc >= args.accum:
                 opt.step()
@@ -630,9 +654,16 @@ def main():
 
         if step % 20 == 0 and not skipped:
             results["train_loss"].append([step, round(cev, 4)])
+            tot = sum(T_ACC.values()) or 1.0
+            share = " ".join(f"{k} {100*v/tot:.0f}%"
+                             for k, v in sorted(T_ACC.items(),
+                                                key=lambda x: -x[1]))
             print(f"buoc {step}/{args.steps} ce={cev:.4f} "
                   f"{(time.time()-t_start)/step:.2f}s/buoc "
                   f"peak={gib():.2f}GiB", flush=True)
+            print(f"    thoi gian: {tot/20:.2f}s/buoc do duoc | {share}",
+                  flush=True)
+            T_ACC.clear()
         if args.sanity and step >= args.sanity:
             print(f"SANITY xong {step} buoc, peak={gib():.2f}GiB, "
                   f"{(time.time()-t_start)/step:.2f}s/buoc", flush=True)
