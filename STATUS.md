@@ -1545,6 +1545,43 @@ Kiem ro ri: **0/6898 item trung 580 mau niem phong** (doi chieu chuoi
 prompt, chay tren chinh runtime train). Sanity 30 buoc: ce 1,497 |
 5,76 s/buoc | peak 20,91 GiB | 0 buoc OOM.
 
+## GIA THUYET DUNG LUONG GDN: BI BAC (2026-08-29, luot joint49u)
+
+Doi chieu TRUC TIEP cung moc, cung du lieu, cung warm-start, chi khac dung
+luong GDN (0,8M -> 25,2M, moi head mot cap A,B) + `--w-entity 3.0`:
+
+    moc     score cu   score moi      gsm8k cu   gsm8k moi
+     500       48         52             2/53       3/53
+    1000       50         47             1/53       1/53
+    1500       61         60             2/53       2/53
+
+**Trung khit.** Gap 30 lan tham so GDN, cong trong so x3 cho chu so va ten
+rieng -> KHONG doi gi. gsm8k dung nguyen 1-3/53 (tran 44/53).
+
+Moc phan xu da NEU TRUOC khi chay ("neu toi 1500 ma gsm8k van 2-5 thi bac"),
+nen day khong phai suy dien sau khi thay so.
+
+Ghi nhan phu: bfcl tut 11->5 o moc 500-1000 roi hoi ve 9/12 o moc 1500 ->
+cu tut do la nhieu do xao tron tam thoi, khong phai hu hai that.
+
+**Day la lan thu 5 trong du an "them dung luong" that bai trong khi van de o
+cho khac** (E1 ridge, E4 concat-ridge, E8 LoRA r=64, E6 v3 lop ham, va lan
+nay). Dung tinh than luat error-placement.
+
+**Hai nghi pham con lai:**
+ (a) SAI DANG HAM — `A.S.B` la song tuyen, chi xoay/co gian hai truc doc lap
+     cua ma tran nho; them tham so cho CUNG mot dang ham khong tao ra kha
+     nang bieu dien moi.
+ (b) TUONG — ban tom tat GDN cua 4B khong chua cau truc quan he o dang 9B
+     doc lai duoc.
+
+**Phep do phan xu (`probe_restate.py`, dang chay)**: khong hoi dap an ma bat
+model THUAT LAI DE BAI tu cache, dem ty le giu duoc CON SO / TEN RIENG /
+QUAN HE, so truc tiep voi self ke lai cung de.
+    giu SO nhung mat QUAN HE -> (a), doi dang ham la dung huong
+    mat CA HAI               -> (b), chot pham vi o trich xuat/chon lua
+
+
 ## DOC TAY 20 DAU RA gsm8k HONG -> GIA THUYET PHAN BO THAM SO (2026-08-29)
 
 User chi dao: "sau mot ngay chi sua bo may do, doc loi truoc da". Chay
