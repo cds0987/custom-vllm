@@ -197,17 +197,48 @@ def rope_apply(x, cos, sin, sign):
 
 class Mapper:
     def __init__(self, n_attn_tgt, n_gdn_tgt, gdn_heads_s, gdn_heads_t,
-                 attn_dim, theta_s, theta_t, device="cuda"):
+                 attn_dim, theta_s, theta_t, device="cuda",
+                 attn_rank=0, gdn_per_head=False):
+        """attn_rank>0 va gdn_per_head=True = DOI NGAN SACH THAM SO
+        (user duyet 2026-08-29).
+
+        Ly do, tu so do chu khong tu cam tinh:
+          - E7: attention THANG HANG toan ho (CCA 0,93-0,98 moi cap) -> chi
+            can chinh RAT NHE. GDN moi la cho quyet dinh (CCA 0,23-0,9).
+          - Nhung ban cu cap 16,8M tham so cho attention va chi 0,8M cho GDN
+            (ty le 20:1), va con bat A,B DUNG CHUNG cho moi head.
+          - Doc tay 20 dau ra gsm8k hong: con SO song sot (viec cua attention)
+            nhung QUAN HE va viec gan thuoc tinh cho thuc the bi dao lon
+            (viec cua GDN). 13/17 ca la "van mach lac, de bi bop meo".
+
+        Nen: attention chuyen sang HANG THAP  W = I + U@V  (giu khoi tao dong
+        nhat, giam ~8 lan tham so); phan tiet kiem duoc dồn cho GDN bang cach
+        cho MOI HEAD mot cap A,B rieng. Tong tham so xap xi giu nguyen -> neu
+        gsm8k nhich thi la do CHO DAT, khong the do "duoc them tham so".
+        """
         import torch
         self.theta_s, self.theta_t = theta_s, theta_t
         self.ckpt = False   # v3.3: bat = recompute map_attn trong backward
                             # (autograd map_attn fp32 ~0.5GB@1K, ~1GB@2K ctx)
+        self.attn_rank = int(attn_rank)
+        self.gdn_per_head = bool(gdn_per_head)
+        self.attn_dim = attn_dim
         self.params = []
         self.WK, self.bK, self.WV, self.bV = [], [], [], []
+        self.UK, self.VK_, self.UV, self.VV_ = [], [], [], []
         for _ in range(n_attn_tgt):
-            for lst in (self.WK, self.WV):
-                w = torch.eye(attn_dim, device=device).float().requires_grad_(True)
-                lst.append(w); self.params.append(w)
+            if self.attn_rank:
+                r = self.attn_rank
+                for lu, lv in ((self.UK, self.VK_), (self.UV, self.VV_)):
+                    u = torch.zeros(attn_dim, r, device=device,
+                                    requires_grad=True)      # 0 -> W = I
+                    v = (torch.randn(r, attn_dim, device=device)
+                         * (1.0 / attn_dim ** 0.5)).requires_grad_(True)
+                    lu.append(u); lv.append(v); self.params += [u, v]
+            else:
+                for lst in (self.WK, self.WV):
+                    w = torch.eye(attn_dim, device=device).float().requires_grad_(True)
+                    lst.append(w); self.params.append(w)
             for lst in (self.bK, self.bV):
                 b = torch.zeros(attn_dim, device=device, requires_grad=True)
                 lst.append(b); self.params.append(b)
@@ -215,10 +246,22 @@ class Mapper:
         for _ in range(n_gdn_tgt):
             a = torch.full((gdn_heads_t, gdn_heads_s), 1.0 / gdn_heads_s,
                            device=device).requires_grad_(True)
-            A = torch.eye(128, device=device).float().requires_grad_(True)
-            B = torch.eye(128, device=device).float().requires_grad_(True)
+            if self.gdn_per_head:
+                eye = torch.eye(128, device=device).float()
+                A = eye.expand(gdn_heads_s, 128, 128).clone().requires_grad_(True)
+                B = eye.expand(gdn_heads_s, 128, 128).clone().requires_grad_(True)
+            else:
+                A = torch.eye(128, device=device).float().requires_grad_(True)
+                B = torch.eye(128, device=device).float().requires_grad_(True)
             self.alpha.append(a); self.A.append(A); self.B.append(B)
             self.params += [a, A, B]
+        n = sum(p.numel() for p in self.params)
+        n_attn = sum(p.numel() for p in
+                     (self.WK + self.WV + self.UK + self.VK_ + self.UV
+                      + self.VV_ + self.bK + self.bV))
+        print(f"Mapper: {n/1e6:.1f}M tham so | attention {n_attn/1e6:.1f}M "
+              f"| GDN {(n-n_attn)/1e6:.1f}M "
+              f"(attn_rank={self.attn_rank}, gdn_per_head={self.gdn_per_head})")
 
     def map_attn(self, j, k, v):
         if self.ckpt:
@@ -235,8 +278,14 @@ class Mapper:
         k_st = rope_apply(k.float(), cos_s, sin_s, -1)         # strip src rope
         flat_k = k_st.permute(0, 2, 1, 3).reshape(T, H * dh)   # (T, 1024)
         flat_v = v.float().permute(0, 2, 1, 3).reshape(T, H * dh)
-        mk = (flat_k @ self.WK[j] + self.bK[j]).reshape(1, T, H, dh).permute(0, 2, 1, 3)
-        mv = (flat_v @ self.WV[j] + self.bV[j]).reshape(1, T, H, dh).permute(0, 2, 1, 3)
+        if self.attn_rank:      # W = I + U@V  -> x@W = x + (x@U)@V
+            ok = flat_k + (flat_k @ self.UK[j]) @ self.VK_[j] + self.bK[j]
+            ov = flat_v + (flat_v @ self.UV[j]) @ self.VV_[j] + self.bV[j]
+        else:
+            ok = flat_k @ self.WK[j] + self.bK[j]
+            ov = flat_v @ self.WV[j] + self.bV[j]
+        mk = ok.reshape(1, T, H, dh).permute(0, 2, 1, 3)
+        mv = ov.reshape(1, T, H, dh).permute(0, 2, 1, 3)
         mk = rope_apply(mk, cos_t, sin_t, +1)                  # apply tgt rope
         return mk.to(torch.bfloat16), mv.to(torch.bfloat16)
 
@@ -246,20 +295,75 @@ class Mapper:
         S = S[0].float()
         rms = S.pow(2).mean((-2, -1), keepdim=True).sqrt() + 1e-6
         Sn = S / rms                                            # tame sv_max~110
+        # gdn_per_head: A,B co dang (Hs,128,128) -> A@Sn@B thanh batched
+        # matmul theo tung head (moi head mot quy tac rieng). Ban cu chi co
+        # MOT cap (128,128) broadcast cho ca 32 head -> ep moi head phai bien
+        # doi giong het nhau, qua chat cho thu phai chuyen tai la QUAN HE.
         mapped = torch.einsum("ts,sij->tij", self.alpha[j],
                               self.A[j] @ Sn @ self.B[j])
         return (mapped * rms.mean())[None].to(torch.bfloat16)
 
     def state_dict(self):
-        return {"WK": self.WK, "bK": self.bK, "WV": self.WV, "bV": self.bV,
-                "alpha": self.alpha, "A": self.A, "B": self.B}
+        d = {"bK": self.bK, "bV": self.bV, "alpha": self.alpha,
+             "A": self.A, "B": self.B,
+             "_meta": {"attn_rank": self.attn_rank,
+                       "gdn_per_head": self.gdn_per_head}}
+        if self.attn_rank:
+            d.update({"UK": self.UK, "VK": self.VK_,
+                      "UV": self.UV, "VV": self.VV_})
+        else:
+            d.update({"WK": self.WK, "WV": self.WV})
+        return d
 
     def load(self, path):
+        """Nap checkpoint, CHUYEN DUOC tu dang cu sang dang moi.
+
+        Checkpoint cu: WK/WV day (D,D), A/B dung chung (128,128).
+        Dang moi: U,V hang thap va A/B theo tung head.
+        Chuyen doi giu lai gan het cong da train:
+          - attention: SVD cua (W - I), giu r thanh phan lon nhat -> U,V
+          - GDN: sao chep cap A,B cu cho MOI head (bao toan chinh xac)
+        Nho vay khong phai train lai tu dau khi doi phan bo tham so.
+        """
         import torch
         sd = torch.load(path, map_location="cuda")
-        for name in ("WK", "bK", "WV", "bV", "alpha", "A", "B"):
+        for name in ("bK", "bV", "alpha"):
             for dst, src in zip(getattr(self, name), sd[name]):
                 dst.data.copy_(src.data)
+        # ---- attention ----
+        old_full = "WK" in sd
+        if self.attn_rank and old_full:
+            for lst_u, lst_v, key in ((self.UK, self.VK_, "WK"),
+                                      (self.UV, self.VV_, "WV")):
+                for j, (u, v) in enumerate(zip(lst_u, lst_v)):
+                    W = sd[key][j].data.float()
+                    M = W - torch.eye(W.shape[0], device=W.device)
+                    U, S_, Vh = torch.linalg.svd(M, full_matrices=False)
+                    r = self.attn_rank
+                    sq = S_[:r].sqrt()
+                    u.data.copy_(U[:, :r] * sq)
+                    v.data.copy_((sq[:, None] * Vh[:r]))
+            print(f"  attention: chuyen {len(self.UK)*2} ma tran day -> hang "
+                  f"{self.attn_rank} bang SVD (giu phan lon phep bien doi)")
+        elif self.attn_rank:
+            for name, key in ((self.UK, "UK"), (self.VK_, "VK"),
+                              (self.UV, "UV"), (self.VV_, "VV")):
+                for dst, src in zip(name, sd[key]):
+                    dst.data.copy_(src.data)
+        else:
+            for name in ("WK", "WV"):
+                for dst, src in zip(getattr(self, name), sd[name]):
+                    dst.data.copy_(src.data)
+        # ---- GDN ----
+        for name in ("A", "B"):
+            for dst, src in zip(getattr(self, name), sd[name]):
+                if dst.dim() == 3 and src.dim() == 2:
+                    dst.data.copy_(src.data.unsqueeze(0).expand_as(dst))
+                else:
+                    dst.data.copy_(src.data)
+        if self.gdn_per_head and sd["A"][0].dim() == 2:
+            print(f"  GDN: sao chep cap A,B dung chung -> {self.A[0].shape[0]} "
+                  "head rieng (bao toan chinh xac hanh vi cu)")
 
 
 # ---------------- disk-spilled source caches (phase A -> phase B) -----------

@@ -276,6 +276,18 @@ def main():
                          "co nay cho 9B: offload chi can cho 27B, con voi 9B "
                          "no lam moi buoc greedy phai qua lm_head tren CPU "
                          "(val 40 mau: ~14 phut thay vi vai phut).")
+    ap.add_argument("--w-entity", type=float, default=1.0,
+                    help="trong so CE cho token la CHU SO hoac TEN RIENG "
+                         "(viet hoa). 1.0 = tat. Nham dung thu quan sat duoc "
+                         "la bi pha khi doc tay dau ra gsm8k hong.")
+    ap.add_argument("--attn-rank", type=int, default=0,
+                    help="hang thap cho ma tran attention cua mapper (0 = "
+                         "day du 1024x1024). Attention da thang hang san "
+                         "(CCA 0,98) nen khong can day du.")
+    ap.add_argument("--gdn-per-head", action="store_true",
+                    help="moi head GDN mot cap A,B rieng thay vi dung chung. "
+                         "Cung voi --attn-rank = DOI NGAN SACH tham so tu "
+                         "attention sang GDN, giu tong xap xi khong doi.")
     ap.add_argument("--gold-envelope", default="",
                     help="bao do 'T:gold,...' do bang probe_joint_lora cho "
                          "CAP MODEL dang dung (27B khac 9B). Rong = dung bao "
@@ -376,7 +388,9 @@ def main():
     attn_dim = k0.shape[1] * k0.shape[3]
     del probe_s
 
-    mapper = e5.Mapper(len(a_t), len(g_t), Hs, Ht, attn_dim, theta_s, theta_t)
+    mapper = e5.Mapper(len(a_t), len(g_t), Hs, Ht, attn_dim, theta_s, theta_t,
+                       attn_rank=args.attn_rank,
+                       gdn_per_head=args.gdn_per_head)
     mapper.ckpt = True
     if args.init_mapper and Path(args.init_mapper).exists():
         mapper.load(args.init_mapper)
@@ -553,6 +567,21 @@ def main():
             nll = -logp.gather(2, gold_ids.unsqueeze(-1)).squeeze(-1)
             wts = torch.ones_like(nll)
             wts[:, 0] = FIRST_W          # token quyet dinh
+            if args.w_entity > 1.0:
+                # (user duyet 2026-08-29) Doc tay 20 dau ra gsm8k hong cho
+                # thay thu bi pha la CON SO va TEN THUC THE: "Kate 29 tuoi"
+                # thanh "Tully 29 tuoi", "gia hon nua tuoi" thanh "tre hon 20
+                # nam", de khong co de ma mapper bia ra de. Trong so FIRST_W
+                # hien chi danh vao token DAU — dung cho bfcl (token dau la
+                # ten ham) nhung vo nghia cho gsm8k. Danh thang vao chu so va
+                # ten rieng = nham dung trieu chung da quan sat.
+                pieces = tok_t.convert_ids_to_tokens(gold_ids[0].tolist())
+                for pi, pc in enumerate(pieces):
+                    if not pc:
+                        continue
+                    txt = pc.lstrip("Ġ▁ ")
+                    if txt and (txt[0].isdigit() or txt[0].isupper()):
+                        wts[0, pi] = max(float(wts[0, pi]), args.w_entity)
             ce = (nll * wts).sum() / wts.sum()
             opt.zero_grad(set_to_none=True)
             cev = ce.detach().item()
