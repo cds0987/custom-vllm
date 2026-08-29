@@ -4,7 +4,7 @@ File này được CLAUDE.md nạp tự động đầu mỗi phiên. Claude TỰ
 trạng thái thay đổi — KHÔNG cần hỏi user. Giới hạn cứng ≤300 dòng; chi tiết dồn
 sang `STATUS.md`.
 
-Cập nhật: 2026-08-28.
+Cập nhật: 2026-08-29.
 
 ## Trạng thái hiện tại
 
@@ -38,116 +38,35 @@ Cập nhật: 2026-08-28.
 - Paper 2608.03893: mapper tự cài ở `models/qwen3_5/kv_transfer/` (không có code
   chính thức). **E0 phán quyết: context sống ở CẢ GDN state lẫn KV** (needle
   10/10 → 0/10 khi xóa một trong hai) → Phase B GDN-mapping bắt buộc.
-- **E1 XONG (2026-08-15): COPY NGUYÊN cache 4B→9B giữ 100% needle (12/12,
-  NLL 0,043 vs self 0,011, transplant 0,08s); ridge mapper 0/12 (R² heldout
-  0,73/0,60 — thiếu là chết); no_ctx sàn 0/12.** TTFT 1,5K: ×1,27; trần ×2 @30K.
-  Kết luận: cặp Qwen3.5 4B/9B cache-compatible THÔ, không cần mapper; mapper chỉ
-  còn cho cặp lệch shape (27B). R² không phải proxy retention. Chi tiết STATUS.md.
-- Identity gate cứu 1 vòng GPU (bắt bug λ GDN); calib mất 1 lần do runtime
-  recycle (đã thu lại); chuẩn phóng nền mới: subprocess.Popen thay !nohup.
-- **E2+E3 XONG (2026-08-15)**: copy giữ QA 9/9 tới 16K và 2/2 @30K; retention
-  "hiểu" giảm đơn điệu 74%@2K → 53%@30K; **decode parity 11,8=11,8 tok/s**
-  (mọi số decode 9B thuần giữ nguyên cho cross); 4B prefill vLLM 4771-5514
-  tok/s → cascade TTFT 30K ×1,66. Chi tiết STATUS mục E1/E2/E3.
-- **E3B: đồng trú 2 vLLM server 1-L4 naive = BẤT KHẢ THI** (0.27.1 cộng VRAM
-  process khác vào mình) — giải xong ở E3C bên dưới.
-- **E4 XONG (2026-08-15)**: 27B chạy được transformers/bnb-4bit trên L4 (mới).
-  Số chốt: 4B↔9B CCA attention 0,98 (copy giữ ngôi, thiếu hụt @30K khoanh vùng
-  GDN sâu); **x→27B attention CCA 0,93-0,97 = GO**, GDN giữa CCA 0,27 = tường
-  tuyến tính, GDN sâu đuôi nặng (sv_max 110); concat-ridge thua ridge 1-lớp ở
-  N hiện tại. **Kiến trúc chốt: mapper per-layer + functional loss (E5)** —
-  chi tiết STATUS mục E4. Target user chốt: 27B, không bỏ.
-- **E3C XONG: đồng trú 2 server/1 L4 THÀNH CÔNG** (combo: util thấp 0,35 +
-  --kv-cache-memory-bytes + eager). Giá: 9B KV −63% (208K token, ~4 phiên),
-  4B prefill đồng trú 3406 tok/s @30K (71% solo) → TTFT chỉ còn ×1,15-1,2.
-  1-GPU cascade = khả thi cơ học, đáng giá khi ít phiên + nhiều cold-miss;
-  giá trị lớn ở 2-GPU. Chi tiết STATUS mục E3C.
-- **E5→E6→E7→E6b XONG (2026-08-15, ngày thí nghiệm dài nhất dự án)** — số
-  chốt trong STATUS. Tóm tắt: (1) 9B-copy trên BFCL: NLL parity 99% nhưng
-  greedy hit 6/20 — vết nứt biên-mỏng; E6b loại nhiễu spill, phát hiện
-  **suffix re-prefill phản tác dụng** (luật nhất quán nội tại của cache);
-  **E6c chốt: bnb gánh nửa vết nứt (bf16 copy 9/20 vs bnb 4-6/20), nửa còn
-  lại là information bottleneck thật của cache 4B ở biên mỏng** — copy NLL
-  thậm chí TỐT hơn self (2,43 vs 2,64) mà greedy vẫn thua: error-placement
-  lần 4. Scope copy an toàn: chat/QA/RAG; function-calling cần polisher
-  (đo lại trên W4A16 Marlin thật trong Phase C). (2) 27B-mapper v2 hội tụ trong
-  miền (KL 0,63) nhưng 0/20 ngoài miền — v3 cần miền train đa dạng. (3) Ma
-  trận 8 cặp: **pairability = CCA-GDN ≥ 0,9**; attention thẳng hàng toàn họ;
-  {0.8B,2B} GDN lạc hệ; 4B→27B là cặp học sáng nhất (0,785).
-- Deep-innovation 6 đề xuất (chi tiết STATUS); user chọn #5
-  compatibility-finetuning → E8 dưới đây.
-- **E8 ĐÓNG (2026-08-15, compatibility LoRA 2B→9B)**: gate trần thông tin
-  SÁNG (2B self needle 5/5) nhưng cả 3 đòn thua sạch (v1 LoRA-GDN 0/5×6 mốc;
-  v2 13s/bước kill; v3 nMSE 10,5→1,06 rồi kẹt ~0,96, needle 0/5).
-  **PHÁN QUYẾT: phương ngữ GDN nhóm nhỏ không sửa được bằng adapter nhẹ;
-  4B là prefill-helper duy nhất của 9B.** Bài học: FastLanguageModel không
-  dùng được cho cache-loss (past=None khi train). Chi tiết STATUS E8.
-
-- **E6 v3 ĐÓNG (2026-08-24)**: CE-gold loss, val 0 toàn tuyến, test niêm
-  phong mapped 0/20 → nghi lớp hàm. BỊ LẬT bởi v3.1. Chi tiết STATUS.
-- **E6 v3.1 ĐỘT PHÁ (2026-08-24): mapper 4B→27B SỐNG — BFCL 16/20**.
-  Nguyên nhân v3.0 chết: CONV_WARM bỏ token GOLD đầu khỏi loss. Fix: cache
-  cắt T-5 + warm conv 5 token cuối + CE trọn gold. Chi tiết STATUS.
-- **E6 v3.2 XONG (2026-08-25)**: BFCL 17/20 nhưng needle@2K vách đá 1/10
-  (retention-length law) — vách đá này ĐÃ SỤP ở v3.3 bên dưới. Chi tiết
-  STATUS mục E6 v3.2.
-- **E6 v3.3 CODE (2026-08-24)**: bỏ deepcopy, B1 tiền tính teacher,
-  checkpoint map_attn, needle curriculum → chi tiết STATUS. `--gdn-bf16` loại.
-- **E6 v3.3 XONG (2026-08-25): BFCL 18/20 + needle@2K 10/10 — VÁCH ĐÁ ĐỘ
-  DÀI SỤP** (needle curriculum tới 2000: vách đá là artifact phân phối
-  train). ~2,2 s/bước, 0 retry. ifstruct/pbtable: repetition
-  collapse sinh dài (>~30 tok) + nghi trần teacher pseudo-gold — thuốc
-  v3.4 ở decode-time. Scope cascade 4B→27B: fn-calling 90% trần +
-  retrieval ≤2000 tuyệt đối. Chi tiết STATUS mục E6 v3.3.
-  ~~NỢ UPLOAD KHẨN (6d)~~ → **ĐÃ THÀNH HỌC PHÍ LẦN 2 (2026-08-25):
-  runtime recycle NUỐT SẠCH mapper_v33.pt (18/20+10/10) + mapper_v32.pt
-  — 5 lần nhắc Colab Secrets HF_TOKEN không được thêm. Số liệu/code/công
-  thức còn nguyên trong git; tái tạo = ~10h GPU (xác định). TỪ GIỜ:
-  KHÔNG phóng train dài khi chưa có đường upload sống (điều kiện cứng
-  trước v3.4 full).**
-- **E6 v3.4-long XONG (2026-08-25): 18/20 BFCL + needle NIÊM PHONG 15/15**
-  (10@2K + 5@4K). Ladder: L4 trần 4096; template-XƯƠNG thay teacher
-  prefill (~1,4 s/bước). Auto-upload HF `v34/` mỗi mốc val. Token flow:
-  .env root repo. Chi tiết STATUS mục E6 v3.4.
-  Ngã rẽ kế: Phase C (KVConnector vLLM — template-xương tái dùng được)
-  vs v3.5 (decode-time cho sinh dài) vs A100 cho 8K/16K.
-- **E6 v3.5 XONG (2026-08-25)**: mổ sinh-dài → **TRẦN TEACHER: 27B-self
-  cũng chỉ 1/15 + 2/10** cùng giao thức — ifstruct/pbtable là nợ của ĐỀ,
-  không phải mapper; rep-penalty 1.3 phản tác dụng. Loại 2 suite khỏi thang
-  chính thức. Chi tiết STATUS. **Phase C design đã chốt**
-  (docs/phase-c-design.md): 2 vLLM + LMCache MP + vá key-namespace;
-  **C2a XONG (2026-08-25): 3/3 tiền đề PASS** — (1) block size 9B = 4B
-  = **1056** (cùng dòng log "attention page >= mamba page"); (2) cả hai
-  boot sạch flags production (9B 471s fresh / 4B 311s); (3)
-  **LMCACHE_EXT_OK 0.5.4** — connector external import được, không rơi
-  vào fallback builtin (vốn crash trên model lai). Kiến trúc 1-GPU cho
-  C2b: TUẦN TỰ qua L2 POSIX (4B producer ghi đĩa → stop → 9B consumer
-  đọc) — né hẳn bài đồng trú E3B.
-- **C2b VERDICT INTERIM (2026-08-26, 7 lượt)**: cơ chế vận chuyển HOÀN
-  CHỈNH — vá 1 dòng key lmcache, **TTFT 30K 11-24s → ~1s (×12-16)**. Chốt:
-  bf16 KV bắt buộc, block-align cần để hit; đã loại suffix-re-prefill,
-  champion-graft, producer-W4A16. Bất biến: cross lấy 4-6 chữ số đầu rồi
-  degenerate. 6 bài học hạ tầng ghi STATUS.
-- **LAB-CHECK (2026-08-26)**: copy-nguyên ngoài vLLM trên đúng 4 prompt
-  fail → **self 4/4 | copy 3/4 mã trọn** (vLLM chỉ 1/4). vLLM làm MẤT
-  THÊM thật; và biên phương pháp mỏng hơn E1 trên filler tổng hợp.
-- **KHÁM KHO GDN (2026-08-26)**: **giả thuyết trang-GDN-rơi BỊ BÁC** —
-  plan chạy đối xứng cả 2 nhóm object (76/76). Kho giao đủ hai nửa vở.
-- **C2b-8 + VERDICT CUỐI PHASE C (2026-08-26)**: consumer bf16-weights →
-  cross VẪN 1/2, cụt y hệt W4A16 → giả thuyết W4A16 CŨNG bị bác.
-  **Kết luận: không còn "một con bug" — là ĐỊNH LUẬT BIÊN MỎNG**:
-  cross-cache decode sát mép vực số học, nhiễu nhỏ nào cũng lật ca cận
-  biên. Transport stack ĐÚNG (76/76, TTFT ×12-16 thật). Exact-retrieval
-  cần POLISHER. Chi tiết STATUS.
-- **C2b-N XONG (2026-08-26)**: 240 prompt @8K → **self 100% | cross 57,1%
-  (CI 51-63%) | ×2,7**. Tỷ lệ thật của biên-mỏng. Hybrid "thử cross, miss
-  thì cold-prefill" đã lời TTFT ngay; polisher cần kéo 57→95%+.
-- **C2c sem XONG (2026-08-26)**: scope ngữ nghĩa (QA paraphrase wikitext)
-  trên serving **self 90% | cross 55%** — sát mức needle số (57%): định luật
-  biên mỏng áp cho MỌI decode đầu trên cache ngoại. HF `c2c_sem/`.
-- **Hạ tầng vá cùng đợt**: ghim `vllm==0.27.1`; `run.sh serve` chết câm
-  khi thiếu `/tmp/vllm_env.sh` → vá `|| true`; học phí token: gõ tay
-  HF_TOKEN mất 1 ký tự → 401 hàng loạt, từ nay đọc từ file + assert.
+- **E1→E8 (2026-08-15) — TÓM TẮT, chi tiết STATUS.md**: copy nguyên cache
+  4B→9B giữ 100% needle tới 30K, decode parity, TTFT 30K ×1,66 (2 GPU) /
+  ×1,15-1,2 (đồng trú E3C: util 0,35 + --kv-cache-memory-bytes + eager; naive
+  E3B bất khả thi). **Định luật ghép đôi E7**: attention thẳng hàng toàn họ
+  (CCA 0,93-0,98); số phận cặp nằm 100% ở GDN — ≥0,9 bê được, ~0,8 học được
+  (4→27B), ~0,23 tường ({0.8B,2B} lạc hệ). **E8 đóng**: phương ngữ GDN nhóm
+  nhỏ không sửa được bằng adapter nhẹ (3 đòn LoRA/loss đều 0/5 dù gate thông
+  tin sáng 5/5). Scope copy an toàn: chat/QA/RAG; function-calling hụt biên
+  mỏng (E6c: bnb gánh nửa vết nứt, nửa còn lại là bottleneck thật).
+- **E6 v3.1→v3.5 (2026-08-24→25) — mapper 4→27B, chi tiết STATUS.md**:
+  v3.0 chết vì CONV_WARM bỏ token gold đầu khỏi loss; fix (cache cắt T-5 +
+  warm 5 token cuối + CE trọn gold) → **v3.4 chốt 18/20 BFCL + needle niêm
+  phong 15/15**, ladder trần L4 4096, template-XƯƠNG thay teacher prefill
+  (~1,4 s/bước). v3.2 vách đá needle@2K là artifact phân phối train, đã sụp ở
+  v3.3 bằng needle curriculum. **v3.5: ifstruct/pbtable là nợ của ĐỀ** —
+  27B-self cũng chỉ 1/15 cùng giao thức → loại khỏi thang chính thức.
+  **Học phí lần 2**: runtime recycle nuốt mapper_v33 (kỷ lục) + v3.2 →
+  từ đó KHÔNG phóng train dài khi chưa có đường upload sống.
+- **PHASE C (KVConnector vLLM thật, 2026-08-25→26) — chi tiết STATUS.md**:
+  C2a 3/3 tiền đề PASS (block size 9B = 4B = 1056; LMCACHE_EXT_OK 0.5.4).
+  **Cơ chế vận chuyển HOÀN CHỈNH: vá 1 dòng key lmcache → TTFT 30K 11-24s
+  → ~1s (×12-16)**, kho GDN giao đủ 76/76. Nhưng exact-retrieval **cross
+  57,1% (N=240 @8K, CI 51-63) vs self 100%**; scope ngữ nghĩa C2c cũng
+  **self 90% | cross 55%**. Mọi giả thuyết "một con bug" đều bị bác (W4A16,
+  bf16-consumer, trang-GDN-rơi) → **ĐỊNH LUẬT BIÊN MỎNG**: decode đầu trên
+  cache ngoại sát mép vực số học. Hybrid thử-cross-fail-thì-cold đã lời TTFT
+  ngay; polisher cần kéo 57→95%+.
+- **Hạ tầng vá cùng đợt**: ghim `vllm==0.27.1`; `run.sh serve` chết câm khi
+  thiếu `/tmp/vllm_env.sh` → vá `|| true`; HF_TOKEN đọc từ file + assert.
 - **User chốt hướng (2026-08-26)**: copy-nguyên 4→9 "hên xui" → train
   mapper functional-loss cho 4→9; dựng `suite_gen.py` (4 họ đề) + `c2suite.sh`.
 - **Giai đoạn A + ladder 4→9 XONG (2026-08-27)**: sanity chạy trọn không
@@ -282,6 +201,28 @@ Cập nhật: 2026-08-28.
   - Công cụ mới: `gen_pseudo_vllm.py`, `inspect_fail.py`, `eval_big.py`
     (~1.900 mẫu niêm phong từ dải chưa đụng), `e5.stop_ids()`,
     `Mapper(attn_rank, gdn_per_head)`.
+
+- **ĐANG CHẠY (2026-08-29, user duyệt "ok" + "test ~2000 samples, training
+  ~6000 samples")** — `run_bigeval.sh`, 5 pha nối tiếp trên 1 L4, mỗi pha
+  idempotent (recycle chỉ cần chạy lại cell):
+  1. `ext_bench gen` — dựng lại tập niêm phong CŨ, chỉ để kiểm rò rỉ.
+  2. `eval_big gen` — **2000 mẫu niêm phong MỚI**: bbh 700 (hàng 107-250) +
+     bfcl 400 (**dưới** các mốc `build_data` đã ăn) + suite 500 (seed 31337,
+     train dùng 777) + needle 240 (seed 500017/510023/520031) + musr 60 +
+     gsm8k 100 (giữ nhỏ: là họ đang hỏng và tốn 320 token/mẫu).
+     Kiểm rò rỉ đối chiếu CHUỖI prompt với train_items.json **lẫn** tập
+     `e6v3.build_data()` sinh lúc chạy — thiếu vế sau thì đúng hai họ
+     bfcl/needle lọt lưới.
+  3. tải `joint49s` (score 67) từ HF.
+  4. `eval_big self` bằng vLLM (~20 phút) — cột trần.
+  5. **train `joint49v`**: warm-start joint49s, 2500 bước nữa (49s đi
+     48→50→61→64→**67**, CHƯA bão hoà), ctx 4096/tbptt 128/gold 256,
+     auto-upload HF `joint49v/` mỗi mốc val.
+  Pha 6 `run_bigmapped.sh` (mapped 2000 mẫu, ~4h, resume bằng --slice) chạy
+  sau khi chọn checkpoint tốt nhất.
+- **Bẫy hạ tầng dính lại lần 3**: `ps aux | grep '[r]un_x.sh'` — mẹo ngoặc
+  vuông chỉ tránh grep tự khớp chính nó, dòng `bash -c` CHA vẫn chứa nguyên
+  chuỗi mẫu → luôn báo "đang chạy". Từ nay dùng LOCK FILE + `kill -0`.
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
