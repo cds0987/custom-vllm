@@ -444,6 +444,17 @@ def main():
                 hf_up(f, f"lora_{tag}/{f.name}")
 
     _self_cache = {}
+    # tra cuu self tu pseudo_gold.json: {id: 1} voi moi mau 9B TU LAM DUNG.
+    # Mau khong co trong file = 9B lam SAI (gen_pseudo chi ghi ca dung).
+    _self_lookup = {}
+    if args.pseudo_gold and Path(args.pseudo_gold).exists():
+        pgd = json.loads(Path(args.pseudo_gold).read_text())
+        for it_ in data["val"]:
+            i_ = it_.get("id")
+            if i_ and it_["kind"] in NEW_KINDS:
+                _self_lookup[i_] = 1 if i_ in pgd else 0
+        print(f"tra cuu self tu pseudo-gold: {len(_self_lookup)} mau "
+              f"(khong phai tinh lai)", flush=True)
 
     def _grade(it, txt):
         if it["kind"] in NEW_KINDS:
@@ -499,16 +510,21 @@ def main():
             sc[it["kind"]]["mapped"].append(_grade(it, _greedy(st, warm, n_new)))
             del st
             torch.cuda.empty_cache()
-            # self KHONG DOI theo buoc train (9B tu doc chang lien quan gi den
-            # mapper dang hoc) — do that: cot self y het nhau o ca 5 moc val.
-            # Tinh mot lan roi dung lai => giam MOT NUA chi phi val, doi lai
-            # duoc val-n gap doi voi cung thoi gian.
-            if i not in _self_cache:
+            # self KHONG can tinh lai TI NAO nua: pseudo_gold.json (do bang
+            # vLLM tren 3000/2600/498 mau) da ghi CHINH XAC tung mau nao 9B tu
+            # lam dung. Tra cuu la ra — mien phi, va chuan hon han vi do bang
+            # engine dung eos dung, tren quy mo lon. Bo duoc MOT NUA chi phi
+            # val -> dồn het cho cot mapped.
+            if it.get("id") in _self_lookup:
+                sc[it["kind"]]["self"].append(_self_lookup[it["id"]])
+            elif i not in _self_cache:      # ho khong co trong pseudo-gold
                 slf = e5.prefill_chunked(model_t, cut)
                 _self_cache[i] = _grade(it, _greedy(slf, warm, n_new))
                 del slf
                 torch.cuda.empty_cache()
-            sc[it["kind"]]["self"].append(_self_cache[i])
+                sc[it["kind"]]["self"].append(_self_cache[i])
+            else:
+                sc[it["kind"]]["self"].append(_self_cache[i])
         return {k: (f"{sum(v['mapped'])}/{len(v['mapped'])}"
                     f" [self {sum(v['self'])}/{len(v['self'])}]")
                 for k, v in sc.items()}, \
