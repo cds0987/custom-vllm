@@ -41,13 +41,17 @@ python3 -c "import vllm,torch,peft,bitsandbytes;print('vllm',vllm.__version__,'t
 
 step "1/5 tap niem phong CU (chi de kiem ro ri)"
 if [ -f /content/ext_bench_items.json ]; then echo "da co, bo qua"; else
-  python3 -u ext_bench.py gen --bench bbh,gsm8k,musr --n-each 500 2>&1 | tail -8
+  # --n-each 200, KHONG phai mac dinh 500: tap test da BAO CAO la 200/bo
+  # (bbh 98/182 = 7 hang x 26 tac vu, musr 115/198 = 66 x 3, gsm8k 160/200)
+  # va TEST_BBH_PER/TEST_MUSR_PER trong gen_data ghim cung con 200 do. Dung
+  # 500 la tu bia ra mot tap niem phong TO HON tap that -> bao ro ri GIA.
+  python3 -u ext_bench.py gen --bench bbh,gsm8k,musr --n-each 200 2>&1 | tail -8
 fi
 
 step "2/5 dung 2000 mau niem phong MOI"
 if [ -f /content/eval_big_items.json ]; then echo "da co, bo qua"; else
-  python3 -u eval_big.py gen --n-bbh 700 --n-gsm8k 100 --n-musr 60 \
-      --n-bfcl 400 --n-needle 240 --n-suite 500 || exit 1
+  python3 -u eval_big.py gen --n-bbh 800 --n-gsm8k 100 --n-musr 60 \
+      --n-bfcl 600 --n-needle 240 --n-suite 500 || exit 1
 fi
 
 step "3/5 tai joint49s (mapper score 67 + lora)"
