@@ -148,16 +148,8 @@ Cập nhật: 2026-08-28.
 - **Hạ tầng vá cùng đợt**: ghim `vllm==0.27.1`; `run.sh serve` chết câm
   khi thiếu `/tmp/vllm_env.sh` → vá `|| true`; học phí token: gõ tay
   HF_TOKEN mất 1 ký tự → 401 hàng loạt, từ nay đọc từ file + assert.
-- **User chốt hướng mới (2026-08-26)**: copy-nguyên 4→9 "hên xui" →
-  chuyển sang **train mapper functional-loss cho 4→9** (tái dùng
-  `e6v3_ce.py`, chỉ đổi `--tgt-model`; theo E7 cặp 4→9 CCA-GDN≥0,9 dễ
-  hơn 4→27 CCA 0,785 — kỳ vọng hội tụ nhanh). Đã dựng thêm `suite_gen.py`
-  (4 họ đề rag/mid-info/reasoning-math/swe, đích user "vài ngàn prompt,
-  target 80-90% như normal decode") + `c2suite.sh` (chiến dịch lớn,
-  resume-được theo wave) — CHƯA phóng, chờ mapper Giai đoạn A xong.
-  Kế hoạch 2 giai đoạn: A) sanity mapper 4→9 với data cũ (0 code mới,
-  ~1-2h) → tín hiệu đi/không; B) nếu khả quan, tích hợp data 4 họ mới
-  vào train loop rồi đo trên `c2suite.sh`.
+- **User chốt hướng (2026-08-26)**: copy-nguyên 4→9 "hên xui" → train
+  mapper functional-loss cho 4→9; dựng `suite_gen.py` (4 họ đề) + `c2suite.sh`.
 - **Giai đoạn A + ladder 4→9 XONG (2026-08-27)**: sanity chạy trọn không
   sửa code, ~1,7-1,8 s/bước, peak 8,76GiB; ladder 4096/8192/16384 đều
   KHÔNG OOM (9,1/10,0/11,9GiB) → chốt max-ctx 16384. Vá `hf_up()` ghim
