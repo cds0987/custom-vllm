@@ -76,7 +76,25 @@ if [ -f /content/logs/evalbig_self.json ]; then echo "da co, bo qua"; else
   python3 -u eval_big.py self --tgt-model Qwen/Qwen3.5-9B --max-len 6144 || exit 1
 fi
 
+step "4b/5 PROBE gom lo (user: batch=1 la ko duoc)"
+# Chay TRUOC train vi ket qua cua no quyet dinh cau hinh train (batch that hay
+# chi gradient accumulation). Train xong roi moi do thi phai train lai.
+if [ -f /content/logs/probe_batch.log ]; then echo "da co, bo qua"; else
+  python3 -u probe_batch.py --src-model Qwen/Qwen3.5-4B \
+      2>&1 | tee /content/logs/probe_batch.log | tail -40
+fi
+
 step "5/5 chuan bi: noi lai joint49v neu da co tien do"
+# CONG CHO: khong tu dong train. Cau hinh train (batch that / --accum bao
+# nhieu) PHU THUOC ket qua probe 4b, va do la quyet dinh cua user. Chay lien
+# tay se train sai cau hinh roi phai train lai — dat hon nhieu lan viec cho.
+if [ ! -f /content/train_cfg.sh ]; then
+  echo "CHUA CO /content/train_cfg.sh -> DUNG o day, cho cau hinh train."
+  echo "RUN_BIGEVAL_CHO_CAU_HINH"
+  exit 0
+fi
+. /content/train_cfg.sh
+echo "cau hinh train: accum=${ACCUM:-1} steps=${STEPS:-8000} patience=${PAT:-3}"
 # Runtime bi thu hoi 4 lan trong ngay. Khong noi lai thi moi lan recycle la
 # mat sach gio train va quay ve joint49s. Uu tien: ban local -> ban tren HF ->
 # joint49s. Phai doc TU HF vi recycle xoa /content nhung HF thi con.
@@ -115,7 +133,7 @@ python3 -u e9_joint.py \
   --data-file /content/train_items.json \
   --pseudo-gold /content/pseudo_gold.json \
   --max-ctx 4096 --tbptt 128 --gold-cap 256 --gold-envelope 16384:256 \
-  --steps 8000 --val-every 500 --val-n 150 --ce-floor 0.05 --patience 3 \
+  --steps ${STEPS:-8000} --val-every 500 --val-n 150 --ce-floor 0.05 \n  --patience ${PAT:-3} --accum ${ACCUM:-1} \
   --no-offload --verify-meta 512 \
   --init-mapper "$INIT_M" \
   --init-lora   "$INIT_L" \
