@@ -1545,6 +1545,65 @@ Kiem ro ri: **0/6898 item trung 580 mau niem phong** (doi chieu chuoi
 prompt, chay tren chinh runtime train). Sanity 30 buoc: ce 1,497 |
 5,76 s/buoc | peak 20,91 GiB | 0 buoc OOM.
 
+## DOC TAY 20 DAU RA gsm8k HONG -> GIA THUYET PHAN BO THAM SO (2026-08-29)
+
+User chi dao: "sau mot ngay chi sua bo may do, doc loi truoc da". Chay
+`inspect_fail.py` tren mapper joint49s (val score 67).
+
+**So lieu:**
+
+    self 17/20   |  mapped 0/20   |  17 ca self-dung -> mapped-sai
+    lap trigram TB      0,137   -> KHONG degenerate
+    co "Final Answer"   19/20   -> dinh dang DUNG
+    dap an dung xuat hien 4/20
+    phan loai: 13 mach-lac-nhung-sai | 2 co dap an ma cham truot | 2 lap rac
+
+**76% ca hong la "van ban hoan hao, noi dung sai".** Doc tay ra DUNG MOT
+kieu: con SO song sot, QUAN HE va viec gan thuoc tinh cho THUC THE bi dao lon.
+
+    de that (self doc dung)            mapper doc thanh
+    Lydia trong cay luc 4t, cay 7 nam  "Lydia can 7 nam de DAT TOI tuoi 4"
+    25 nguoi, 3/5 mua ca phe           "so nguoi den la 3/5 cua so nguoi mua"
+    KATE 29 tuoi                       "TULLY 29 tuoi... nhac lai (thua)"
+    cuon 2 GIA HON NUA TUOI cuon 1     "cuon 2 TRE HON 20 NAM"
+    20 cuu, 10 bo, 14 cho              "cuu chet het... DE chet gap doi cuu"
+    4 XE trong tiem                    "tiem co 20 LOP"
+    200 bo xuong x 20%                 "20 bo xuong x 20% = 40" (dung voi 200)
+
+Model suy luan rat chuan — tu mot de bai da bi bop meo.
+
+**GIA THUYET: mapper phan bo tham so NGUOC voi noi thong tin nam.**
+
+    phan       tham so   vai tro                CCA giua cac model (E4/E7)
+    attention   16,8M    token/vi tri           0,93-0,98  (THANG HANG SAN)
+    GDN          0,8M    ban tom tat quan he    0,23-0,9   (CHO QUYET DINH)
+
+Ty le 20:1 nghieng ve phan gan nhu khong can dich. Va A,B con DUNG CHUNG cho
+ca 32 head -> ep moi head bien doi giong het nhau.
+
+Trieu chung khop chinh xac: attention giu token -> con so song; GDN giu tom
+tat -> quan he chet. Giai thich ca bang: bfcl/needle/bbh/musr la bai
+TRICH XUAT/CHON LUA (viec cua attention, dich tot, VUOT ca tran); gsm8k doi
+CAU TRUC QUAN HE chinh xac (viec cua GDN, dang bi bo doi).
+
+**BAI HOC THIET KE THI NGHIEM (luot joint49t hong).** Y dinh ban dau: doi
+ngan sach — cat attention xuong hang thap (SVD) va dồn cho GDN, giu TONG tham
+so khong doi, de khong the do "duoc them tham so". Nhung CE nhay 0,9 -> 5-12
+ngay lap tuc. Nguyen nhan: gia dinh "attention thang hang nen chi can chinh
+nhe" dung cho KHOI TAO, SAI cho mot ma tran DA TRAIN ~5000 buoc — phep bien
+doi no hoc duoc co HANG CAO, cat con 64/1024 la mat phan lon.
+Doi sang: GIU NGUYEN attention, chi them dung luong GDN (0,8 -> 25,2M).
+Warm-start khi do CHINH XAC (A,B cu sao chep cho tung head), CE ve 0,19.
+Danh doi con lai: tong 17,6 -> 42M nen van co confound "nhieu tham so hon",
+nhung toan bo phan them nam DUNG o GDN — dung cho gia thuyet chi vao.
+
+Kem `--w-entity 3.0`: trong so CE x3 cho token la CHU SO hoac TEN RIENG —
+nham thang vao thu quan sat duoc la bi pha (FIRST_W cu chi danh token dau,
+dung cho bfcl vi do la ten ham, vo nghia cho gsm8k).
+
+Ket qua: luot joint49u, cho val moc 500/1000/1500/2000/2500.
+
+
 ## KHOANG CACH transformers vs vLLM: CHUOI CHAN DOAN (2026-08-28)
 
 **Trieu chung.** Val trong train (transformers) bao 9B-self tren gsm8k la
