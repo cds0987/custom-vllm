@@ -143,10 +143,12 @@ def build_beam(n_bfcl, n_needle, n_suite, tok):
                           "id": f"big/{fname}/{skip+j}", "prompt": it["prompt"],
                           "expect": it["fn"]})
     # ---- needle: seed moi hoan toan, 3 do dai ----
-    for ctx, n, seed in ((700, n_needle // 2, 500000),
-                         (2000, n_needle // 3, 510000),
+    # seed KHONG chia het cho 400: e6.needle_items lay stream seed = seed%400,
+    # nen seed tron 400 se tai dung DUNG lat filler cua train (30000%400 == 0).
+    for ctx, n, seed in ((700, n_needle // 2, 500017),
+                         (2000, n_needle // 3, 510023),
                          (4000, n_needle - n_needle // 2 - n_needle // 3,
-                          520000)):
+                          520031)):
         if n <= 0:
             continue
         for j, it in enumerate(e6.needle_items(tok, n, seed, ctx_tok=ctx)):
