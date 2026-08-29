@@ -181,8 +181,20 @@ def e6_prompts(tok):
     return {x["prompt"] for x in d["train"] + d["val"] + d["test"]}
 
 
-def check_overlap(items, others, extra=None):
-    """Doi chieu CHUOI PROMPT — khong tin suy luan chi so."""
+def check_overlap(items, others, extra=None, max_drop=0.05):
+    """Doi chieu CHUOI PROMPT — khong tin suy luan chi so.
+
+    LOAI BO thay vi assert, nhung CO NGUONG. Ly do: hai kieu "trung" khac han
+    nhau ve ban chat, va gop chung lai thi mat thong tin.
+
+      - trung LE TE  = ban than dataset co dong lap (bbh/causal_judgement co
+        cau hoi lap nguyen van o nhieu hang). Bo di la dung, khong co gi de sua.
+      - trung HANG LOAT = dai chi so tinh sai (vd tap niem phong duoc dung lai
+        voi n khac luc bao cao). Bo di la GIAU LOI — phai dung, va sua dai.
+
+    Nguong 5%: duoi thi bo + ghi ro, tren thi nem. In ro tung bo de biet duong
+    nao lech, thay vi mot dong "RO RI" khong noi duoc gi.
+    """
     seen = set(extra or ())
     for f in others:
         if not Path(f).exists():
@@ -191,9 +203,22 @@ def check_overlap(items, others, extra=None):
         d = json.loads(Path(f).read_text())
         pool = (d["train"] + d["val"]) if isinstance(d, dict) else d
         seen |= {x["prompt"] for x in pool}
-    bad = [it["id"] for it in items if it["prompt"] in seen]
-    print(f"kiem ro ri: {len(bad)}/{len(items)} trung {len(seen)} mau da dung")
-    assert not bad, f"RO RI: {bad[:5]}"
+    bad = [it for it in items if it["prompt"] in seen]
+    r = len(bad) / max(len(items), 1)
+    print(f"kiem ro ri: {len(bad)}/{len(items)} ({100*r:.1f}%) trung "
+          f"{len(seen)} mau da dung")
+    if bad:
+        print("  theo bo:", dict(Counter(it["bench"] for it in bad)))
+        print("  vi du :", [it["id"] for it in bad[:5]])
+    if r > max_drop:
+        raise AssertionError(
+            f"RO RI {100*r:.1f}% > nguong {100*max_drop:.0f}% — day la lech "
+            f"DAI CHI SO, khong phai dong lap trong dataset. Sua dai truoc khi "
+            f"chay tiep. Vi du: {[it['id'] for it in bad[:5]]}")
+    keep = [it for it in items if it["prompt"] not in seen]
+    if bad:
+        print(f"  -> bo {len(bad)}, con {len(keep)} mau")
+    return keep
 
 
 # ----------------------------------------------------------------- self ----
@@ -378,8 +403,10 @@ def main():
                   "prompt dua vao kiem ro ri", flush=True)
         else:
             extra = None
-        check_overlap(items, ["/content/train_items.json",
-                              "/content/ext_bench_items.json"], extra)
+        print("truoc khi kiem:", dict(Counter(i["bench"] for i in items)),
+              flush=True)
+        items = check_overlap(items, ["/content/train_items.json",
+                                      "/content/ext_bench_items.json"], extra)
         json.dump(items, open(ITEMS_F, "w"))
         print(f"da ghi {len(items)} item -> {ITEMS_F}")
         print(" ", dict(Counter(i["bench"] for i in items)))
