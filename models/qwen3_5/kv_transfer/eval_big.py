@@ -225,6 +225,79 @@ def check_overlap(items, others, extra=None, max_drop=0.05):
 
 # ----------------------------------------------------------------- self ----
 
+def run_self_hf(args, items):
+    """Duong transformers cho ban CO LoRA.
+
+    vLLM khong nap duoc checkpoint da merge: model 4B luu ra mang tien to
+    'language_model.' ma loader cua vLLM khong hieu ("no module or parameter
+    named 'language_model' in Qwen3_5Model"). Thay vi di sua ten khoa, dung
+    transformers generate co gom lo — o day KHONG tiem cache nen transformers
+    tu lo mask/position_ids, tuc dung duong da duoc ho tro chinh thuc.
+    Van co CONG KIEM batch1 vs batchB.
+    """
+    import torch
+    from peft import PeftModel
+    e5 = _load("e5_train")
+    tok, model = e5.load_4bit(args.tgt_model)
+    model = PeftModel.from_pretrained(model, args.lora).merge_and_unload()
+    model.eval()
+    tok.truncation_side = "left"
+    tok.padding_side = "left"          # cau hoi nam O CUOI prompt
+    if tok.pad_token_id is None:
+        tok.pad_token = tok.eos_token
+    STOPS = e5.stop_ids(tok, model)
+
+    @torch.no_grad()
+    def gen(grp):
+        enc = tok([g["prompt"] for g in grp], return_tensors="pt",
+                  padding=True, truncation=True,
+                  max_length=args.max_len).to("cuda")
+        o = model.generate(**enc, max_new_tokens=N_NEW[grp[0]["bench"]],
+                           do_sample=False, pad_token_id=tok.pad_token_id,
+                           eos_token_id=sorted(STOPS))
+        new = o[:, enc["input_ids"].shape[1]:]
+        return [tok.decode(r, skip_special_tokens=True) for r in new]
+
+    by = defaultdict(list)
+    for it in items:
+        by[it["bench"]].append(it)
+    B = max(1, args.decode_batch)
+    # cong kiem
+    if args.verify_batch and B > 1:
+        vs = items[:args.verify_batch]
+        bad = 0
+        for k in range(0, len(vs), B):
+            grp = [x for x in vs[k:k+B] if x["bench"] == vs[k]["bench"]]
+            for it, tb in zip(grp, gen(grp)):
+                if score(it, tb) != score(it, gen([it])[0]):
+                    bad += 1
+        print(f"cong kiem batch (hf): {len(vs)-bad} khop / {bad} lech", flush=True)
+        if bad:
+            raise SystemExit("GOM LO SAI KET QUA")
+    out, t0 = {}, time.time()
+    for bench, grp in by.items():
+        hit = 0
+        for k in range(0, len(grp), B):
+            sub = grp[k:k+B]
+            for it, txt in zip(sub, gen(sub)):
+                h = score(it, txt); out[it["id"]] = h; hit += h
+            torch.cuda.empty_cache()
+        print(f"self {bench}: {hit}/{len(grp)} = {100*hit/len(grp):.1f}%",
+              flush=True)
+    fn = OUT_DIR / f"evalbig_self_{self_tag(args)}.json"
+    json.dump(out, open(fn, "w"))
+    print(f"self xong {(time.time()-t0)/60:.1f} phut -> {fn.name}")
+    if os.environ.get("HF_TOKEN"):
+        try:
+            from huggingface_hub import HfApi
+            HfApi(token=os.environ["HF_TOKEN"]).upload_file(
+                path_or_fileobj=str(fn), repo_id=args.hf_repo,
+                path_in_repo=f"evalbig/{fn.name}")
+            print("HF-UP", fn.name)
+        except Exception as e:
+            print("HF-UP FAIL", type(e).__name__)
+
+
 def self_tag(args):
     """Ten file theo MODEL (+lora): chay 4B ma ghi de len cot tran cua 9B thi
     mat luon 12,3 phut da ton, va tro thanh so bao cao sai."""
@@ -239,6 +312,9 @@ def run_self(args):
         keep = set(args.benches.split(","))
         items = [it for it in items if it["bench"] in keep]
         print(f"loc bo: con {len(items)} mau", flush=True)
+
+    if args.lora and args.engine == "hf":
+        return run_self_hf(args, items)
 
     model_path = args.tgt_model
     if args.lora:
@@ -578,6 +654,9 @@ def main():
     ap.add_argument("--src-model", default="Qwen/Qwen3.5-4B")
     ap.add_argument("--tgt-model", default="Qwen/Qwen3.5-9B")
     ap.add_argument("--mapper", default="")
+    ap.add_argument("--engine", default="vllm",
+                    choices=["vllm", "hf"],
+                    help="hf = transformers (bat buoc khi co --lora: vLLM khong nap duoc checkpoint da merge)")
     ap.add_argument("--identity-mapper", action="store_true",
                     help="KHONG nap checkpoint: Mapper khoi tao mac dinh la "
                          "W=I, A=B=I, alpha=1/Hs -> chinh la COPY NGUYEN cache "
