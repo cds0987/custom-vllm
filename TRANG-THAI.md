@@ -4,7 +4,7 @@ File này được CLAUDE.md nạp tự động đầu mỗi phiên. Claude TỰ
 trạng thái thay đổi — KHÔNG cần hỏi user. Giới hạn cứng ≤300 dòng; chi tiết dồn
 sang `STATUS.md`.
 
-Cập nhật: 2026-08-29.
+Cập nhật: 2026-08-30.
 
 ## Trạng thái hiện tại
 
@@ -202,27 +202,70 @@ Cập nhật: 2026-08-29.
     (~1.900 mẫu niêm phong từ dải chưa đụng), `e5.stop_ids()`,
     `Mapper(attn_rank, gdn_per_head)`.
 
-- **ĐANG CHẠY (2026-08-29, user duyệt "ok" + "test ~2000 samples, training
-  ~6000 samples")** — `run_bigeval.sh`, 5 pha nối tiếp trên 1 L4, mỗi pha
-  idempotent (recycle chỉ cần chạy lại cell):
-  1. `ext_bench gen` — dựng lại tập niêm phong CŨ, chỉ để kiểm rò rỉ.
-  2. `eval_big gen` — **2000 mẫu niêm phong MỚI**: bbh 700 (hàng 107-250) +
-     bfcl 400 (**dưới** các mốc `build_data` đã ăn) + suite 500 (seed 31337,
-     train dùng 777) + needle 240 (seed 500017/510023/520031) + musr 60 +
-     gsm8k 100 (giữ nhỏ: là họ đang hỏng và tốn 320 token/mẫu).
-     Kiểm rò rỉ đối chiếu CHUỖI prompt với train_items.json **lẫn** tập
-     `e6v3.build_data()` sinh lúc chạy — thiếu vế sau thì đúng hai họ
-     bfcl/needle lọt lưới.
-  3. tải `joint49s` (score 67) từ HF.
-  4. `eval_big self` bằng vLLM (~20 phút) — cột trần.
-  5. **train `joint49v`**: warm-start joint49s, 2500 bước nữa (49s đi
-     48→50→61→64→**67**, CHƯA bão hoà), ctx 4096/tbptt 128/gold 256,
-     auto-upload HF `joint49v/` mỗi mốc val.
-  Pha 6 `run_bigmapped.sh` (mapped 2000 mẫu, ~4h, resume bằng --slice) chạy
-  sau khi chọn checkpoint tốt nhất.
-- **Bẫy hạ tầng dính lại lần 3**: `ps aux | grep '[r]un_x.sh'` — mẹo ngoặc
-  vuông chỉ tránh grep tự khớp chính nó, dòng `bash -c` CHA vẫn chứa nguyên
-  chuỗi mẫu → luôn báo "đang chạy". Từ nay dùng LOCK FILE + `kill -0`.
+- **KẾT QUẢ CUỐI GIAI ĐOẠN 1 (2026-08-30) — cascade 4B→9B trên 1.650 mẫu
+  NIÊM PHONG** (mapper `joint49w/mapper_best`, HF `evalbig_joint49w/`):
+
+  | bộ | n | mapper | trần 9B | |
+  |---|---|---|---|---|
+  | needle | 240 | 98,3% | 100% | 0,98× |
+  | suite_mid | 126 | 97,6% | 100% | 0,98× |
+  | suite_rag | 126 | 90,5% | 97,6% | 0,93× |
+  | bfcl | 200 | 88,5% | 64,5% | 1,37× |
+  | bbh | 779 | 66,0% | 30,3% | 2,18× |
+  | suite_swe | 123 | 47,2% | 99,2% | **0,48×** |
+  | musr | 56 | 42,9% | 50,0% | 0,86× |
+  | **tổng** | 1.650 | 75,5% | 60,8% | 1,24× |
+
+  **Đọc**: truy hồi giữ gần trọn (0,93-0,98× trần) — phần bán được. bbh/bfcl
+  vượt trần nhưng **so sánh không công bằng**: mapper đã train trên đúng hai họ
+  đó, cột trần là 9B zero-shot. **Nghi phần lớn 2,18× là ĐỊNH DẠNG chứ không
+  phải suy luận**: 9B-self được ĐÚNG 0,0% trên movie_recommendation,
+  disambiguation_qa, geometric_shapes, temporal_sequences (0/30 chằn chặn) —
+  gần như chắc chắn là trả lời sai khuôn chứ không phải không làm được. CHƯA
+  KIỂM (đọc tay đầu ra self). **suite_swe là thất bại thật: 47,2% vs 99,2%** —
+  mapper phá hơn nửa số ca 9B tự làm được; nó lọt vào danh sách "đã ghi nhận
+  chạy" chỉ vì val có 3-7 mẫu.
+- **Train ĐÃ BÃO HOÀ — hai lần độc lập**: `joint49v` (có gsm8k) 67→66→62;
+  `joint49w` (bỏ gsm8k+suite_math) 100→95. Không mốc nào lập kỷ lục sau
+  `joint49s`. Thêm bước/thêm-bớt dữ liệu đều không lên → muốn tiến phải đổi
+  lớp hàm hoặc đa dạng hoá miền, không phải đổi số bước.
+- **GOM LÔ DECODE cho eval: nhanh 6,7 lần** (1.150 mẫu 14 phút vs ~90 phút),
+  cổng kiểm 24 khớp/0 lệch. `batch_decode.py`. **Đảo một kết luận cũ của
+  chính mình**: probe_batch đã bác gom lô vì đệm trái làm attention keys sai
+  96% — nhưng lỗi đó thuộc PREFILL. Ở decode: trạng thái GDN không có chiều
+  thời gian; RoPE đã áp lúc dựng cache nên đệm trái chỉ đổi chỉ số, miễn là
+  truyền `position_ids` riêng từng hàng. Ta tự dựng cache nên đặt được mask/vị
+  trí theo hàng — đúng cái prefill không cho phép.
+- **Vì sao KHÔNG dùng flash-attention** (user hỏi): đo trên chính cấu hình này
+  — decode 1 token trên 9B ctx~500 thì nhân trọng số ~18 GFLOP, attention
+  ~6 MFLOP = **0,03%**. Nút cổ chai là batch=1 (mỗi token đọc ~5GB trọng số
+  4-bit từ HBM; trần L4 ~60 tok/s, đang được 10).
+- **eval_big dùng template-XƯƠNG thay prefill 9B đầy đủ**: `build_student_past`
+  thay sạch mọi tensor của template nên prefill 9B ở đó là tính toán thừa
+  (~40 phút/lượt). Kèm verify-meta ở T=256/1024 đối chiếu prefill thật.
+- **Mapper nhiều số hạng (`--gdn-terms`)**: `S' = Σ A_r·S·B_r` thay một
+  `A·S·B`. Số hạng r>0 khởi tạo BẰNG 0 → bước 0 giống hệt checkpoint cũ, nên
+  warm-start không thể tụt (bài học joint49t: đổi hình dạng làm CE nhảy
+  0,9→5-12). `test_mapper_terms.py` 14/14, không cần GPU. Ngưỡng so sánh đặt
+  theo bf16 (5e-3) vì đo được bước làm tròn bf16 tại biên độ đó là 0,018 —
+  gấp 9 lần độ lệch quan sát.
+- **Bốn bẫy hạ tầng ghi vào docs/03**: (1) `pkill -f`/`ps|grep` khớp chính
+  dòng lệnh của mình, dính cả khi mẫu nằm trong COMMENT → dọn tiến trình bằng
+  Python đọc `/proc` và loại `os.getpid()`; (2) Python in traceback rồi TREO ở
+  join thread nền của `datasets` → `os._exit(0)`; (3) heredoc qua tool ăn mất
+  một lớp backslash → `\n` thành văn bản, argparse báo `unrecognized
+  arguments: n n` SAU khi đã nạp model; nay có test quét mọi `.sh`; (4) file
+  kết quả eval phải mang TÊN CHECKPOINT — chạy joint49w suýt nối lại 800 mẫu
+  của joint49s thành một con số.
+- **Colab recycle ~1,5 giờ/lần (8 lần trong ngày)**: mọi thứ đắt tiền đã lên
+  HF nên không mất gì; val-every hạ 500→250, và vLLM chỉ cài khi pha nào cần
+  (train không dùng) → khởi động lại từ 13 phút xuống 26 giây.
+- **ĐANG CHẠY**: `diag_fit.py` — chấm mapper trên CHÍNH tập train, cùng grader
+  và cùng giao thức WARM_P=5 với val. train≫val = quá khớp (phóng to mapper là
+  sai hướng); train≈val = thiếu dung lượng hoặc sai lớp hàm (phóng to là đúng).
+  Sau đó theo kết quả: `R=4 + per-head` (117,5M, gấp 6,7 lần) hoặc đa dạng hoá
+  dữ liệu.
+
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
