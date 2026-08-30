@@ -239,7 +239,8 @@ def run_self_hf(args, items):
     from peft import PeftModel
     e5 = _load("e5_train")
     tok, model = e5.load_4bit(args.tgt_model)
-    model = PeftModel.from_pretrained(model, args.lora).merge_and_unload()
+    if args.lora:
+        model = PeftModel.from_pretrained(model, args.lora).merge_and_unload()
     model.eval()
     tok.truncation_side = "left"
     tok.padding_side = "left"          # cau hoi nam O CUOI prompt
@@ -302,8 +303,8 @@ def self_tag(args):
     """Ten file theo MODEL (+lora): chay 4B ma ghi de len cot tran cua 9B thi
     mat luon 12,3 phut da ton, va tro thanh so bao cao sai."""
     t = args.tgt_model.split("/")[-1].replace(".", "").lower()
-    return t + ("_lora" if args.lora else "")
-
+    return (t + ("_lora" if args.lora else "")
+            + ("_hf" if args.engine == "hf" else ""))
 
 def run_self(args):
     from vllm import LLM, SamplingParams
@@ -313,42 +314,37 @@ def run_self(args):
         items = [it for it in items if it["bench"] in keep]
         print(f"loc bo: con {len(items)} mau", flush=True)
 
-    if args.lora and args.engine == "hf":
+    if args.engine == "hf":
         return run_self_hf(args, items)
 
-    model_path = args.tgt_model
+    # vLLM co ho tro LoRA SAN (enable_lora + LoRARequest): nap adapter truc
+    # tiep, khong phai merge roi luu ra dia. Duong merge truoc do vua hong vua
+    # sai phuong phap: checkpoint luu ra mang tien to 'language_model.' ma
+    # loader vLLM khong hieu, VA no bat phai do 4B+LoRA bang transformers
+    # trong khi 4B thuan do bang vLLM -> lan nhieu do ENGINE vao so sanh.
+    kw = dict(model=args.tgt_model, max_model_len=args.max_len,
+              gpu_memory_utilization=0.90, quantization="bitsandbytes")
+    lora_req = None
     if args.lora:
-        # vLLM khong nap duoc adapter tren duong bnb-4bit mot cach chac chan
-        # -> merge vao ban BF16 roi luu ra dia. 4B bf16 ~8GB, vua.
-        import shutil
-        import torch as _t
-        from transformers import AutoModelForCausalLM, AutoTokenizer
-        from peft import PeftModel
-        dst = "/content/_merged_" + self_tag(args)
-        if not Path(dst, "config.json").exists():
-            print(f"merge LoRA vao ban bf16 -> {dst}", flush=True)
-            m = AutoModelForCausalLM.from_pretrained(
-                args.tgt_model, dtype=_t.bfloat16, device_map="cpu")
-            m = PeftModel.from_pretrained(m, args.lora).merge_and_unload()
-            m.save_pretrained(dst)
-            AutoTokenizer.from_pretrained(args.tgt_model).save_pretrained(dst)
-            del m
-            import gc
-            gc.collect()
-        model_path = dst
-
-    kw = dict(model=model_path, max_model_len=args.max_len,
-              gpu_memory_utilization=0.90)
-    if not args.lora:
-        kw["quantization"] = "bitsandbytes"
+        import json as _j
+        rank = 16
+        cfg = Path(args.lora, "adapter_config.json")
+        if cfg.exists():
+            rank = int(_j.loads(cfg.read_text()).get("r", 16))
+        kw.update(enable_lora=True, max_lora_rank=rank)
+        print(f"vLLM enable_lora, rank={rank}", flush=True)
     llm = LLM(**kw)
+    if args.lora:
+        from vllm.lora.request import LoRARequest
+        lora_req = LoRARequest("adapter", 1, args.lora)
     by = defaultdict(list)
     for it in items:
         by[it["bench"]].append(it)
     out, t0 = {}, time.time()
     for bench, grp in by.items():
         sp = SamplingParams(temperature=0.0, max_tokens=N_NEW[bench])
-        res = llm.generate([g["prompt"] for g in grp], sp)
+        res = llm.generate([g["prompt"] for g in grp], sp,
+                           lora_request=lora_req)
         hit = 0
         for g, r in zip(grp, res):
             h = score(g, r.outputs[0].text)
