@@ -334,6 +334,7 @@ def run_mapped(args):
     with torch.no_grad():
         probe = model_t(input_ids=torch.tensor([[1, 2, 3]], device="cuda"),
                         use_cache=True, logits_to_keep=1).past_key_values
+    probe_t = probe
     a_t, g_t = e5.split_layers(probe)
     Ht = e5._get(next(iter(g_t.values())).recurrent_states).shape[1]
     import torch as _t
@@ -344,6 +345,45 @@ def run_mapped(args):
     mapper.load(args.mapper)
     STOPS = e5.stop_ids(tok_t, model_t)
     print(f"mapper {args.mapper} | token dung {sorted(STOPS)}", flush=True)
+
+    # ---- TEMPLATE-XUONG thay cho prefill 9B day du ----
+    # build_student_past thay sach moi tensor cua template, chi dung hinh dang
+    # va cac truong int -> prefill 9B chi de lay hinh dang la tinh toan thua.
+    import copy as _copy
+    T_BASE = 512
+    with torch.no_grad():
+        _ids = torch.randint(1000, 5000, (1, T_BASE), device="cuda")
+        _past = e5.prefill_chunked(model_t, _ids)
+    base_meta = e5.cache_meta(_past)
+    del _past, _ids
+    torch.cuda.empty_cache()
+
+    def meta_for_len(t):
+        m = _copy.deepcopy(base_meta)
+        m["cache_ints"] = {k: (t if v == T_BASE else v)
+                           for k, v in m["cache_ints"].items()}
+        for lay in m["layers"]:
+            lay["ints"] = {k: (t if v == T_BASE else v)
+                           for k, v in lay["ints"].items()}
+            if lay["kind"] == "a":
+                for key in ("k", "v"):
+                    sh, dt = lay[key]
+                    lay[key] = (tuple(t if d == T_BASE else d for d in sh), dt)
+        return m
+
+    # DOI CHIEU voi prefill THAT: template lech vi tri = cache vo nghia ma
+    # KHONG bao loi. Khong co buoc nay thi tiet kiem thoi gian bang cach lam
+    # sai ket qua.
+    for _t in (256, 1024):
+        with torch.no_grad():
+            _ids = torch.randint(1000, 5000, (1, _t), device="cuda")
+            _p = e5.prefill_chunked(model_t, _ids)
+        if e5.cache_meta(_p) != meta_for_len(_t):
+            raise SystemExit(f"VERIFY-META LECH o T={_t} — dung lai, KHONG "
+                             "duoc dung template suy ra")
+        del _p, _ids
+        torch.cuda.empty_cache()
+    print(f"verify-meta KHOP o T=256 va T=1024 (base {T_BASE})", flush=True)
 
     # NOI LAI: nap ket qua da co (local, hoac keo tu HF neu recycle xoa sach)
     out = json.loads(mp.read_text()) if mp.exists() else {}
@@ -368,7 +408,8 @@ def run_mapped(args):
         cut, warm = ids[:, :-WARM_P], ids[:, -WARM_P:]
         src = e5.load_cache(spill / (it["id"].replace("/", "_") + ".pt"))
         with torch.no_grad():
-            tpl = e5.prefill_chunked(model_t, cut)
+            tpl = e5.build_template_from_meta(
+                probe_t, meta_for_len(cut.shape[1]))
             past = e5.build_student_past(tpl, src, mapper)
             del tpl, src
             o = model_t(input_ids=warm, past_key_values=past, use_cache=True)
