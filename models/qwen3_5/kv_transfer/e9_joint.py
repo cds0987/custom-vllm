@@ -670,7 +670,13 @@ def main():
             opt.zero_grad(set_to_none=True)
             n_acc = 0
             skipped, n_skip = True, n_skip + 1
-        gc.collect()
+        # gc.collect() moi buoc ton hang tram mili-giay (quet toan bo heap
+        # Python) x 8000 buoc. Do duoc: buoc that 3,00s trong khi tong cac
+        # chang do duoc chi 2,53s -> 0,47s (15,7%) khong nam trong chang nao.
+        # Gio goi moi 20 buoc, VA goi ngay sau buoc OOM (do la luc that su
+        # can chong phan manh).
+        if step % 20 == 0 or skipped:
+            gc.collect()
         torch.cuda.empty_cache()
 
         if step % 20 == 0 and not skipped:
