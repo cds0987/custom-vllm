@@ -224,6 +224,13 @@ def load_data(args, tok_s):
     elif args.pseudo_gold:
         print(f"CANH BAO: khong thay {args.pseudo_gold} — chay voi gold cu",
               flush=True)
+    if args.drop_kinds:
+        drop = set(args.drop_kinds.split(","))
+        for k in ("train", "val", "test"):
+            n0 = len(data[k])
+            data[k] = [it for it in data[k] if it["kind"] not in drop]
+            print(f"loai {sorted(drop)} khoi {k}: {n0} -> {len(data[k])}",
+                  flush=True)
     random.Random(SEED).shuffle(data["train"])
     random.Random(SEED).shuffle(data["val"])
     from collections import Counter
@@ -261,6 +268,12 @@ def main():
     ap.add_argument("--val-every", type=int, default=250)
     ap.add_argument("--val-n", type=int, default=40)
     ap.add_argument("--ce-floor", type=float, default=0.2)
+    ap.add_argument("--drop-kinds", default="",
+                    help="Loai han cac ho nay khoi train VA val (phay ngan "
+                         "cach). User chot 2026-08-30 giai doan 1: "
+                         "gsm8k,suite_math — tap trung cac ho DA GHI NHAN "
+                         "mapper chay. Gia phai tra: mat 2583 quy dao "
+                         "pseudo-gold cua gsm8k (nguon giam sat sach nhat).")
     ap.add_argument("--accum", type=int, default=1,
                     help="Gop gradient qua N mau roi moi buoc optimizer. "
                          "KHONG nhanh hon (van tung ay luot forward), nhung "

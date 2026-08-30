@@ -162,7 +162,7 @@ python3 -u e9_joint.py \
   --pseudo-gold /content/pseudo_gold.json \
   --max-ctx 4096 --tbptt 128 --gold-cap 256 --gold-envelope 16384:256 \
   --steps ${STEPS:-8000} --val-every 500 --val-n 150 --ce-floor 0.05 \
-  --patience ${PAT:-3} --accum ${ACCUM:-1} \
+  --patience ${PAT:-3} --accum ${ACCUM:-1} \n  --drop-kinds "${DROP:-gsm8k,suite_math}" \
   --no-offload --verify-meta 512 \
   --init-mapper "$INIT_M" \
   --init-lora   "$INIT_L" \
