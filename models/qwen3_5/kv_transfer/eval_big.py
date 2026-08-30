@@ -270,12 +270,12 @@ def run_mapped(args):
     # Doc ket qua da cham TRUOC pha A. Neu khong, sau moi lan recycle pha A se
     # prefill lai ca 1875 mau (~50 phut) du phan lon da co diem.
     done = set()
-    mp = OUT_DIR / "evalbig_mapped.json"
+    mp = OUT_DIR / f"{args.hf_prefix or 'evalbig'}_mapped.json"
     if not mp.exists() and args.hf_prefix:
         try:
             from huggingface_hub import hf_hub_download
             p_ = hf_hub_download(args.hf_repo,
-                                 f"{args.hf_prefix}/evalbig_mapped.json",
+                                 f"{args.hf_prefix}/{mp.name}",
                                  token=os.environ.get("HF_TOKEN"))
             mp.write_bytes(pathlib.Path(p_).read_bytes())
             print(f"keo ket qua do dang tu HF", flush=True)
@@ -355,7 +355,7 @@ def run_mapped(args):
                 from huggingface_hub import HfApi
                 HfApi(token=os.environ["HF_TOKEN"]).upload_file(
                     path_or_fileobj=str(mp), repo_id=args.hf_repo,
-                    path_in_repo=f"{args.hf_prefix}/evalbig_mapped.json")
+                    path_in_repo=f"{args.hf_prefix}/{mp.name}")
             except Exception as e:
                 print(f"  HF-UP loi: {type(e).__name__}", flush=True)
 
@@ -404,7 +404,8 @@ def run_mapped(args):
 def run_agg():
     items = {it["id"]: it for it in json.loads(Path(ITEMS_F).read_text())}
     slf = json.loads((OUT_DIR / "evalbig_self.json").read_text())
-    mpd = json.loads((OUT_DIR / "evalbig_mapped.json").read_text())
+    mpd = json.loads((OUT_DIR / (os.environ.get("EVALBIG_PREFIX",
+        "evalbig") + "_mapped.json")).read_text())
     st = defaultdict(lambda: {"n": 0, "self": 0, "mapped": 0})
     for i, m in mpd.items():
         b = items[i]["bench"]

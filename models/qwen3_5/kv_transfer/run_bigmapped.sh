@@ -51,9 +51,10 @@ echo "=== mapped tren $CK ${SL:+(slice $SL)} ==="
 python3 -u eval_big.py mapped \
   --tgt-model Qwen/Qwen3.5-9B --max-len 6144 \
   --mapper "$CK/mapper_best.pt" $LORA ${SL:+--slice $SL} \
-  --hf-prefix evalbig || exit 1
+  --hf-prefix "evalbig_$(basename $CK)" || exit 1
 
-python3 -u eval_big.py agg | tee /content/logs/evalbig_agg.txt
+EVALBIG_PREFIX="evalbig_$(basename $CK)" python3 -u eval_big.py agg \
+  | tee /content/logs/evalbig_agg.txt
 
 python3 - <<'PYEOF'
 import os, pathlib
