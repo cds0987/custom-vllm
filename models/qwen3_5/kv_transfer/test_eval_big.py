@@ -18,6 +18,22 @@ def _load(name):
     return m
 
 
+def check_shell_scripts():
+    """Bat bay '\n' viet thanh CHUOI thay vi xuong dong trong file .sh.
+
+    Da tai dien 3 lan trong mot buoi: moi lan va bang heredoc qua tool, mot lop
+    backslash bi an mat nen '\\' den Python chi con '\'. Trieu chung o
+    Colab la argparse bao 'unrecognized arguments: n n' SAU khi da nap xong
+    model — tuc mat vai phut moi biet.
+    """
+    bad = []
+    for f in sorted(_H.glob("*.sh")):
+        for i, ln in enumerate(f.read_text(encoding="utf-8").split(chr(10)), 1):
+            if chr(92) + "n" in ln and not ln.lstrip().startswith("#"):
+                bad.append(f"{f.name}:{i}: {ln.strip()[:70]}")
+    return bad
+
+
 def main():
     eb = _load("eval_big")
     ok = fail = 0
@@ -55,6 +71,13 @@ def main():
     # --- score() luon tra int 0/1 (agg cong don) ---
     v = eb.score({"bench": "bfcl", "expect": "f"}, "f(")
     chk("score tra int", isinstance(v, int), True)
+
+    sh_bad = check_shell_scripts()
+    for b in sh_bad:
+        fail += 1
+        print(f"FAIL .sh co backslash-n van ban -> {b}")
+    if not sh_bad:
+        ok += 1
 
     print(f"\n{ok} dat / {fail} hong")
     sys.exit(1 if fail else 0)

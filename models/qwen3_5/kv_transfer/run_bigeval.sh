@@ -176,8 +176,10 @@ python3 -u e9_joint.py \
   --data-file /content/train_items.json \
   --pseudo-gold /content/pseudo_gold.json \
   --max-ctx 4096 --tbptt 128 --gold-cap 256 --gold-envelope 16384:256 \
-  --steps ${STEPS:-8000} --val-every ${VALEVERY:-250} --val-n ${VALN:-150} \n  --ce-floor 0.05 \
-  --patience ${PAT:-3} --accum ${ACCUM:-1} \n  --drop-kinds "${DROP:-gsm8k,suite_math}" \
+  --steps ${STEPS:-8000} --val-every ${VALEVERY:-250} --val-n ${VALN:-150} \
+  --ce-floor 0.05 \
+  --patience ${PAT:-3} --accum ${ACCUM:-1} \
+  --drop-kinds "${DROP:-gsm8k,suite_math}" \
   --no-offload --verify-meta 512 \
   --init-mapper "$INIT_M" \
   --init-lora   "$INIT_L" \
