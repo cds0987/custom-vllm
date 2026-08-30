@@ -26,6 +26,7 @@ import argparse
 import importlib.util
 import json
 import os
+import pathlib
 import sys
 import time
 from collections import Counter, defaultdict
@@ -261,6 +262,29 @@ def run_mapped(args):
     spill = Path("/content/big_spill")
     spill.mkdir(parents=True, exist_ok=True)
 
+    # Doc ket qua da cham TRUOC pha A. Neu khong, sau moi lan recycle pha A se
+    # prefill lai ca 1875 mau (~50 phut) du phan lon da co diem.
+    done = set()
+    mp = OUT_DIR / "evalbig_mapped.json"
+    if not mp.exists() and args.hf_prefix:
+        try:
+            from huggingface_hub import hf_hub_download
+            p_ = hf_hub_download(args.hf_repo,
+                                 f"{args.hf_prefix}/evalbig_mapped.json",
+                                 token=os.environ.get("HF_TOKEN"))
+            mp.write_bytes(pathlib.Path(p_).read_bytes())
+            print(f"keo ket qua do dang tu HF", flush=True)
+        except Exception as e:
+            print(f"HF chua co ket qua do dang ({type(e).__name__})", flush=True)
+    if mp.exists():
+        done = set(json.loads(mp.read_text()))
+        print(f"NOI LAI: da cham {len(done)} mau", flush=True)
+    items = [it for it in items if it["id"] not in done]
+    print(f"con {len(items)} mau phai chay", flush=True)
+    if not items:
+        print("MAPPED XONG (khong con gi)", flush=True)
+        return
+
     # PHA 1: 4B mot minh -> cache ra dia (bo cuc hai pha, xem e5_train)
     tok_s, model_s = e5.load_4bit(args.src_model)
     if args.lora:
@@ -280,7 +304,7 @@ def run_mapped(args):
     attn_dim = k0.shape[1] * k0.shape[3]
     del pr
     for i, it in enumerate(items):
-        pth = spill / f"x{i}.pt"
+        pth = spill / (it["id"].replace("/", "_") + ".pt")
         if pth.exists():
             continue
         ids = tok_s(it["prompt"], return_tensors="pt", truncation=True,
@@ -316,12 +340,28 @@ def run_mapped(args):
     STOPS = e5.stop_ids(tok_t, model_t)
     print(f"mapper {args.mapper} | token dung {sorted(STOPS)}", flush=True)
 
-    out, t0 = {}, time.time()
+    # NOI LAI: nap ket qua da co (local, hoac keo tu HF neu recycle xoa sach)
+    out = json.loads(mp.read_text()) if mp.exists() else {}
+
+    def _flush(tag=""):
+        json.dump(out, open(mp, "w"))
+        if args.hf_prefix and os.environ.get("HF_TOKEN"):
+            try:
+                from huggingface_hub import HfApi
+                HfApi(token=os.environ["HF_TOKEN"]).upload_file(
+                    path_or_fileobj=str(mp), repo_id=args.hf_repo,
+                    path_in_repo=f"{args.hf_prefix}/evalbig_mapped.json")
+            except Exception as e:
+                print(f"  HF-UP loi: {type(e).__name__}", flush=True)
+
+    t0, n_new = time.time(), 0
     for i, it in enumerate(items):
+        if it["id"] in out:
+            continue
         ids = tok_t(it["prompt"], return_tensors="pt", truncation=True,
                     max_length=args.max_len)["input_ids"].to("cuda")
         cut, warm = ids[:, :-WARM_P], ids[:, -WARM_P:]
-        src = e5.load_cache(spill / f"x{i}.pt")
+        src = e5.load_cache(spill / (it["id"].replace("/", "_") + ".pt"))
         with torch.no_grad():
             tpl = e5.prefill_chunked(model_t, cut)
             past = e5.build_student_past(tpl, src, mapper)
@@ -342,14 +382,15 @@ def run_mapped(args):
                          "n_tok": len(gen)}
         del past, cur, o
         torch.cuda.empty_cache()
-        if i % 25 == 24:
+        n_new += 1
+        if n_new % 25 == 0:
             h = sum(v["hit"] for v in out.values())
             el = (time.time() - t0) / 60
+            con = len(items) - (i + 1)
             print(f"mapped {i+1}/{len(items)} dung {h} ({100*h/len(out):.1f}%) "
-                  f"| {el:.0f} phut | con ~{el/(i+1)*(len(items)-i-1):.0f} phut",
-                  flush=True)
-            json.dump(out, open(OUT_DIR / "evalbig_mapped.json", "w"))
-    json.dump(out, open(OUT_DIR / "evalbig_mapped.json", "w"))
+                  f"| {el:.0f} phut | con ~{el/n_new*con:.0f} phut", flush=True)
+            _flush()          # ghi + len HF moi 25 mau: recycle chi mat <25 mau
+    _flush()
     print("MAPPED XONG", flush=True)
 
 
@@ -385,6 +426,9 @@ def main():
     ap.add_argument("--lora", default="")
     ap.add_argument("--max-len", type=int, default=6144)
     ap.add_argument("--slice", default="")
+    ap.add_argument("--hf-repo", default="gunnybd01/qwen35-kv-mapper-4b-27b")
+    ap.add_argument("--hf-prefix", default="evalbig",
+                    help="rong = tat noi-lai va upload")
     ap.add_argument("--n-bbh", type=int, default=1300)
     ap.add_argument("--n-gsm8k", type=int, default=500)
     ap.add_argument("--n-musr", type=int, default=60)

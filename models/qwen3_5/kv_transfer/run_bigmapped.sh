@@ -1,39 +1,72 @@
 #!/usr/bin/env bash
-# Pha 6: chay MAPPED tren 2000 mau niem phong. Tach rieng vi phai doi chon
-# duoc checkpoint tot nhat (joint49v hay joint49s) tu ket qua val.
+# Pha 6: MAPPED tren 1875 mau niem phong — cot con thieu ben canh cot self.
 #
-#   bash run_bigmapped.sh /content/joint49v          # thu muc chua mapper_best.pt + lora_best
+#   bash run_bigmapped.sh [/content/joint49s] [slice]
 #
 # ~4 gio: transformers TUAN TU (vLLM khong cho tiem cache do mapper dung).
-# Resume duoc: pha A bo qua file spill da co; --slice cat khuc neu can.
+# NOI LAI duoc: eval_big ghi + upload HF moi 25 mau, va bo qua mau da cham —
+# runtime da bi thu hoi 5 lan trong ~10 tieng nen chay lien 4 gio chac chan dut.
 set -u
 cd "$(dirname "$0")"
-CK="${1:-/content/joint49v}"
+CK="${1:-/content/joint49s}"
 SL="${2:-}"
+mkdir -p /content/logs
+
+# moi truong (idempotent, khong can vLLM cho pha nay)
+for pkg in peft bitsandbytes datasets; do
+  python3 -c "import $pkg" 2>/dev/null || pip install -q "$pkg" 2>&1 | tail -2
+done
+
+# bo 1875 mau: keo tu HF neu recycle da xoa
+python3 - <<'PYEOF' || true
+import os, pathlib
+from huggingface_hub import hf_hub_download
+d = pathlib.Path("/content/eval_big_items.json")
+if not d.exists():
+    p = hf_hub_download("gunnybd01/qwen35-kv-mapper-4b-27b",
+                        "evalbig/eval_big_items.json",
+                        token=os.environ.get("HF_TOKEN"))
+    d.write_bytes(pathlib.Path(p).read_bytes())
+    print("keo bo mau tu HF:", d.stat().st_size, "byte")
+PYEOF
+
+# checkpoint: local hoac keo tu HF
+if [ ! -f "$CK/mapper_best.pt" ]; then
+  python3 - "$CK" <<'PYEOF'
+import os, sys, shutil, pathlib
+from huggingface_hub import snapshot_download
+name = pathlib.Path(sys.argv[1]).name
+p = snapshot_download("gunnybd01/qwen35-kv-mapper-4b-27b",
+                      allow_patterns=[f"{name}/*"], local_dir="/content/_hfck",
+                      token=os.environ.get("HF_TOKEN"))
+shutil.copytree(pathlib.Path(p) / name, sys.argv[1], dirs_exist_ok=True)
+print("keo checkpoint:", sorted(x.name for x in pathlib.Path(sys.argv[1]).iterdir()))
+PYEOF
+fi
 [ -f "$CK/mapper_best.pt" ] || { echo "KHONG THAY $CK/mapper_best.pt"; exit 1; }
 LORA=""
 [ -d "$CK/lora_best" ] && LORA="--lora $CK/lora_best"
+
 echo "=== mapped tren $CK ${SL:+(slice $SL)} ==="
 python3 -u eval_big.py mapped \
   --tgt-model Qwen/Qwen3.5-9B --max-len 6144 \
-  --mapper "$CK/mapper_best.pt" $LORA ${SL:+--slice $SL} || exit 1
+  --mapper "$CK/mapper_best.pt" $LORA ${SL:+--slice $SL} \
+  --hf-prefix evalbig || exit 1
+
 python3 -u eval_big.py agg | tee /content/logs/evalbig_agg.txt
 
-# quy tac 6d: len HF NGAY, cung phien
-python3 - "$CK" <<'EOF'
-import os, sys, pathlib
+python3 - <<'PYEOF'
+import os, pathlib
 from huggingface_hub import HfApi
 api = HfApi(token=os.environ.get("HF_TOKEN"))
-pref = "evalbig_" + pathlib.Path(sys.argv[1]).name
-for f in ["/content/eval_big_items.json", "/content/logs/evalbig_self.json",
-          "/content/logs/evalbig_mapped.json", "/content/logs/evalbig_agg.txt",
-          "/content/logs/bigmapped.log"]:
+for f in ["/content/logs/evalbig_agg.txt", "/content/logs/bigmapped.log"]:
     if pathlib.Path(f).exists():
         try:
-            api.upload_file(path_or_fileobj=f, repo_id="gunnybd01/qwen35-kv-mapper-4b-27b",
-                            path_in_repo=f"{pref}/{pathlib.Path(f).name}")
+            api.upload_file(path_or_fileobj=f,
+                            repo_id="gunnybd01/qwen35-kv-mapper-4b-27b",
+                            path_in_repo="evalbig/" + os.path.basename(f))
             print("HF-UP", f)
         except Exception as e:
             print("HF-UP FAIL", f, type(e).__name__, str(e)[:100])
-EOF
+PYEOF
 echo "RUN_BIGMAPPED_EXIT"
