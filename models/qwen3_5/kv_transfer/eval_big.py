@@ -259,6 +259,11 @@ def run_mapped(args):
     a, b = ((int(x) for x in args.slice.split(":")) if args.slice
             else (0, len(items)))
     items = items[a:b]
+    if args.benches:
+        keep = set(args.benches.split(","))
+        n0 = len(items)
+        items = [it for it in items if it["bench"] in keep]
+        print(f"loc bo: {n0} -> {len(items)} mau ({sorted(keep)})", flush=True)
     spill = Path("/content/big_spill")
     spill.mkdir(parents=True, exist_ok=True)
 
@@ -426,6 +431,13 @@ def main():
     ap.add_argument("--lora", default="")
     ap.add_argument("--max-len", type=int, default=6144)
     ap.add_argument("--slice", default="")
+    ap.add_argument("--benches", default="",
+                    help="Chi chay cac bo nay (phay ngan cach). Bo 1875 mau "
+                         "GIU NGUYEN tren dia de con tai lap — loc chi ap luc "
+                         "chay. Giai doan 1 chi do cac ho DA GHI NHAN chay: "
+                         "gsm8k ton 320 token/mau = phan dat nhat ca luot ma "
+                         "mapper moi dat 9%, suite_math tran 1,6% nen khong "
+                         "phan biet duoc mapper tot hay xau.")
     ap.add_argument("--hf-repo", default="gunnybd01/qwen35-kv-mapper-4b-27b")
     ap.add_argument("--hf-prefix", default="evalbig",
                     help="rong = tat noi-lai va upload")
