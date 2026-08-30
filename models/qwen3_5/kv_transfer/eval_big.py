@@ -384,11 +384,15 @@ def run_mapped(args):
     a_t, g_t = e5.split_layers(probe)
     Ht = e5._get(next(iter(g_t.values())).recurrent_states).shape[1]
     import torch as _t
-    _meta = _t.load(args.mapper, map_location="cpu").get("_meta", {})
+    _meta = ({} if args.identity_mapper
+             else _t.load(args.mapper, map_location="cpu").get("_meta", {}))
     mapper = e5.Mapper(len(a_t), len(g_t), Hs, Ht, attn_dim, theta_s, theta_t,
                        attn_rank=_meta.get("attn_rank", 0),
                        gdn_per_head=_meta.get("gdn_per_head", False))
-    mapper.load(args.mapper)
+    if args.identity_mapper:
+        print("COPY NGUYEN: khong nap checkpoint (W=I, A=B=I)", flush=True)
+    else:
+        mapper.load(args.mapper)
     STOPS = e5.stop_ids(tok_t, model_t)
     print(f"mapper {args.mapper} | token dung {sorted(STOPS)}", flush=True)
 
@@ -574,6 +578,14 @@ def main():
     ap.add_argument("--src-model", default="Qwen/Qwen3.5-4B")
     ap.add_argument("--tgt-model", default="Qwen/Qwen3.5-9B")
     ap.add_argument("--mapper", default="")
+    ap.add_argument("--identity-mapper", action="store_true",
+                    help="KHONG nap checkpoint: Mapper khoi tao mac dinh la "
+                         "W=I, A=B=I, alpha=1/Hs -> chinh la COPY NGUYEN cache "
+                         "(co anh xa do sau va gop head). Day la doi chung cot "
+                         "loi: E1 tung ket luan 'be nguyen cache 4B->9B chay, "
+                         "khong can mapper' nhung chi tren 12 mau needle. Neu "
+                         "copy nguyen cung dat ~98% needle o quy mo 1650 thi "
+                         "mapper KHONG can thiet cho phan dang ban duoc.")
     ap.add_argument("--lora", default="")
     ap.add_argument("--max-len", type=int, default=6144)
     ap.add_argument("--slice", default="")
