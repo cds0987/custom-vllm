@@ -225,11 +225,47 @@ def check_overlap(items, others, extra=None, max_drop=0.05):
 
 # ----------------------------------------------------------------- self ----
 
+def self_tag(args):
+    """Ten file theo MODEL (+lora): chay 4B ma ghi de len cot tran cua 9B thi
+    mat luon 12,3 phut da ton, va tro thanh so bao cao sai."""
+    t = args.tgt_model.split("/")[-1].replace(".", "").lower()
+    return t + ("_lora" if args.lora else "")
+
+
 def run_self(args):
     from vllm import LLM, SamplingParams
     items = json.loads(Path(ITEMS_F).read_text())
-    llm = LLM(model=args.tgt_model, quantization="bitsandbytes",
-              max_model_len=args.max_len, gpu_memory_utilization=0.90)
+    if args.benches:
+        keep = set(args.benches.split(","))
+        items = [it for it in items if it["bench"] in keep]
+        print(f"loc bo: con {len(items)} mau", flush=True)
+
+    model_path = args.tgt_model
+    if args.lora:
+        # vLLM khong nap duoc adapter tren duong bnb-4bit mot cach chac chan
+        # -> merge vao ban BF16 roi luu ra dia. 4B bf16 ~8GB, vua.
+        import shutil
+        import torch as _t
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        from peft import PeftModel
+        dst = "/content/_merged_" + self_tag(args)
+        if not Path(dst, "config.json").exists():
+            print(f"merge LoRA vao ban bf16 -> {dst}", flush=True)
+            m = AutoModelForCausalLM.from_pretrained(
+                args.tgt_model, dtype=_t.bfloat16, device_map="cpu")
+            m = PeftModel.from_pretrained(m, args.lora).merge_and_unload()
+            m.save_pretrained(dst)
+            AutoTokenizer.from_pretrained(args.tgt_model).save_pretrained(dst)
+            del m
+            import gc
+            gc.collect()
+        model_path = dst
+
+    kw = dict(model=model_path, max_model_len=args.max_len,
+              gpu_memory_utilization=0.90)
+    if not args.lora:
+        kw["quantization"] = "bitsandbytes"
+    llm = LLM(**kw)
     by = defaultdict(list)
     for it in items:
         by[it["bench"]].append(it)
@@ -244,8 +280,18 @@ def run_self(args):
             hit += h
         print(f"self {bench}: {hit}/{len(grp)} = {100*hit/len(grp):.1f}%",
               flush=True)
-    json.dump(out, open(OUT_DIR / "evalbig_self.json", "w"))
-    print(f"self xong {(time.time()-t0)/60:.1f} phut -> evalbig_self.json")
+    fn = OUT_DIR / f"evalbig_self_{self_tag(args)}.json"
+    json.dump(out, open(fn, "w"))
+    print(f"self xong {(time.time()-t0)/60:.1f} phut -> {fn.name}")
+    if args.hf_prefix and os.environ.get("HF_TOKEN"):
+        try:
+            from huggingface_hub import HfApi
+            HfApi(token=os.environ["HF_TOKEN"]).upload_file(
+                path_or_fileobj=str(fn), repo_id=args.hf_repo,
+                path_in_repo=f"evalbig/{fn.name}")
+            print("HF-UP", fn.name)
+        except Exception as e:
+            print("HF-UP FAIL", type(e).__name__, str(e)[:80])
 
 
 # --------------------------------------------------------------- mapped ----
