@@ -156,12 +156,16 @@ else
 fi
 
 step "5/5 TRAIN joint49v (dung theo val, patience 3)"
+# val-every 250 chu khong 500: Colab dang recycle moi ~1,5 gio, ma checkpoint
+# chi duoc luu (va upload HF) o MOC VAL. Moc cach nhau 25 phut nghia la moi
+# lan mat runtime co the mat gan het cong. 250 buoc ~ 12 phut, va val gio re
+# hon nhieu vi da bo gsm8k (320 token/mau).
 python3 -u e9_joint.py \
   --tgt-model Qwen/Qwen3.5-9B \
   --data-file /content/train_items.json \
   --pseudo-gold /content/pseudo_gold.json \
   --max-ctx 4096 --tbptt 128 --gold-cap 256 --gold-envelope 16384:256 \
-  --steps ${STEPS:-8000} --val-every 500 --val-n 150 --ce-floor 0.05 \
+  --steps ${STEPS:-8000} --val-every ${VALEVERY:-250} --val-n ${VALN:-150} \n  --ce-floor 0.05 \
   --patience ${PAT:-3} --accum ${ACCUM:-1} \n  --drop-kinds "${DROP:-gsm8k,suite_math}" \
   --no-offload --verify-meta 512 \
   --init-mapper "$INIT_M" \
