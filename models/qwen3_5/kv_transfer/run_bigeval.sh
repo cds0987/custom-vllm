@@ -42,6 +42,28 @@ done
 [ -f /tmp/vllm_env.sh ] && . /tmp/vllm_env.sh || true
 python3 -c "import vllm,torch,peft,bitsandbytes;print('vllm',vllm.__version__,'torch',torch.__version__)"
 
+step "0b/5 khoi phuc tu HF (runtime da bi thu hoi 5 lan)"
+# Recycle xoa sach /content. Bo 1875 mau (~15 phut dung) va cot self (~12 phut
+# vLLM) da duoc upload theo quy tac 6d — keo ve re hon nhieu lan lam lai.
+python3 - <<'PYEOF' || true
+import os, pathlib
+from huggingface_hub import hf_hub_download
+REPO = "gunnybd01/qwen35-kv-mapper-4b-27b"
+pathlib.Path("/content/logs").mkdir(parents=True, exist_ok=True)
+for name, dest in [("eval_big_items.json", "/content/eval_big_items.json"),
+                   ("evalbig_self.json", "/content/logs/evalbig_self.json")]:
+    if pathlib.Path(dest).exists():
+        print("da co", dest)
+        continue
+    try:
+        p = hf_hub_download(REPO, f"evalbig/{name}",
+                            token=os.environ.get("HF_TOKEN"))
+        pathlib.Path(dest).write_bytes(pathlib.Path(p).read_bytes())
+        print("KEO VE", dest, pathlib.Path(dest).stat().st_size, "byte")
+    except Exception as e:
+        print("khong keo duoc", name, type(e).__name__, str(e)[:80])
+PYEOF
+
 step "1/5 tap niem phong CU (chi de kiem ro ri)"
 if [ -f /content/ext_bench_items.json ]; then echo "da co, bo qua"; else
   # --n-each 200, KHONG phai mac dinh 500: tap test da BAO CAO la 200/bo
