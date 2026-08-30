@@ -25,12 +25,19 @@ mkdir -p /content/logs
 
 step() { echo; echo "===== [$(date +%H:%M:%S)] $* ====="; }
 
-step "0/5 moi truong"
-if python3 -c "import vllm" 2>/dev/null; then
-  echo "vllm da co: $(python3 -c 'import vllm;print(vllm.__version__)')"
-else
-  bash "$ROOT/loading/setup_env.sh" 2>&1 | tail -6
-fi
+ensure_vllm() {
+  # CHI cai vLLM khi that su can (pha 4). Train KHONG dung vLLM, ma cai mat
+  # ~12 phut — voi nhip Colab recycle ~1,5 gio thi do la 13% thoi gian do
+  # khong cho gi. Kiem theo nhu cau, khong cai mu quang o dau chuoi.
+  if python3 -c "import vllm" 2>/dev/null; then
+    echo "vllm da co: $(python3 -c 'import vllm;print(vllm.__version__)')"
+  else
+    bash "$ROOT/loading/setup_env.sh" 2>&1 | tail -6
+  fi
+  [ -f /tmp/vllm_env.sh ] && . /tmp/vllm_env.sh || true
+}
+
+step "0/5 moi truong (chua cai vLLM — chi cai neu pha 4 can)"
 # CAI TUNG GOI MOT: `pip -q install A B` ma B hong build thi A CUNG khong duoc
 # cai, va -q nuot loi (hoc phi da ghi trong docs/03-bug-va-cach-sua.md).
 for pkg in peft bitsandbytes datasets; do
@@ -40,7 +47,7 @@ done
 # LD_LIBRARY_PATH toi libcudart cu13. Thieu -> vLLM chet luc nap. `|| true`
 # vi da co lan `run.sh serve` chet CAM khi file nay vang (set -e nuot loi).
 [ -f /tmp/vllm_env.sh ] && . /tmp/vllm_env.sh || true
-python3 -c "import vllm,torch,peft,bitsandbytes;print('vllm',vllm.__version__,'torch',torch.__version__)"
+python3 -c "import torch,peft,bitsandbytes;print('torch',torch.__version__)"
 
 step "0b/5 khoi phuc tu HF (runtime da bi thu hoi 5 lan)"
 # Recycle xoa sach /content. Bo 1875 mau (~15 phut dung) va cot self (~12 phut
@@ -76,6 +83,7 @@ elif [ -f /content/ext_bench_items.json ]; then echo "da co, bo qua"; else
   # (bbh 98/182 = 7 hang x 26 tac vu, musr 115/198 = 66 x 3, gsm8k 160/200)
   # va TEST_BBH_PER/TEST_MUSR_PER trong gen_data ghim cung con 200 do. Dung
   # 500 la tu bia ra mot tap niem phong TO HON tap that -> bao ro ri GIA.
+  ensure_vllm
   python3 -u ext_bench.py gen --bench bbh,gsm8k,musr --n-each 200 2>&1 | tail -8
 fi
 
@@ -101,6 +109,7 @@ fi
 
 step "4/5 cot SELF bang vLLM (tran cua 2000 mau)"
 if [ -f /content/logs/evalbig_self.json ]; then echo "da co, bo qua"; else
+  ensure_vllm
   python3 -u eval_big.py self --tgt-model Qwen/Qwen3.5-9B --max-len 6144 || exit 1
 fi
 
