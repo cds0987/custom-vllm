@@ -55,6 +55,7 @@ echo "=== mapped tren $CK ${SL:+(slice $SL)} ==="
 python3 -u eval_big.py mapped \
   --tgt-model Qwen/Qwen3.5-9B --max-len 6144 \
   --mapper "$CK/mapper_best.pt" $LORA ${SL:+--slice $SL} \
+  --decode-batch "${DBATCH:-1}" --verify-batch "${VBATCH:-0}" \
   --benches "${BENCHES:-bbh,bfcl,needle,musr,suite_mid,suite_rag,suite_swe}" \
   --hf-prefix "evalbig_$(basename $CK)" || exit 1
 

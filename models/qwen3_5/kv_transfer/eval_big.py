@@ -399,42 +399,100 @@ def run_mapped(args):
             except Exception as e:
                 print(f"  HF-UP loi: {type(e).__name__}", flush=True)
 
-    t0, n_new = time.time(), 0
-    for i, it in enumerate(items):
-        if it["id"] in out:
-            continue
+    bd = _load("batch_decode")
+
+    def build_one(it):
+        """cache da map + warm token cua MOT mau."""
         ids = tok_t(it["prompt"], return_tensors="pt", truncation=True,
                     max_length=args.max_len)["input_ids"].to("cuda")
         cut, warm = ids[:, :-WARM_P], ids[:, -WARM_P:]
         src = e5.load_cache(spill / (it["id"].replace("/", "_") + ".pt"))
-        with torch.no_grad():
-            tpl = e5.build_template_from_meta(
-                probe_t, meta_for_len(cut.shape[1]))
-            past = e5.build_student_past(tpl, src, mapper)
-            del tpl, src
-            o = model_t(input_ids=warm, past_key_values=past, use_cache=True)
+        tpl = e5.build_template_from_meta(probe_t, meta_for_len(cut.shape[1]))
+        past = e5.build_student_past(tpl, src, mapper)
+        del tpl, src
+        return past, warm
+
+    @torch.no_grad()
+    def run_one(it):
+        past, warm = build_one(it)
+        o = model_t(input_ids=warm, past_key_values=past, use_cache=True)
+        cur = o.past_key_values
+        inp = o.logits[:, -1, :].argmax(-1, keepdim=True)
+        gen = [int(inp)]
+        for _ in range(N_NEW[it["bench"]] - 1):
+            o = model_t(input_ids=inp, past_key_values=cur, use_cache=True)
             cur = o.past_key_values
             inp = o.logits[:, -1, :].argmax(-1, keepdim=True)
-            gen = [int(inp)]
-            for _ in range(N_NEW[it["bench"]] - 1):
-                o = model_t(input_ids=inp, past_key_values=cur, use_cache=True)
-                cur = o.past_key_values
-                inp = o.logits[:, -1, :].argmax(-1, keepdim=True)
-                gen.append(int(inp))
-                if int(inp) in STOPS:
-                    break
-        txt = tok_t.decode(gen, skip_special_tokens=True)
-        out[it["id"]] = {"hit": score(it, txt), "txt": txt[:400],
-                         "n_tok": len(gen)}
+            gen.append(int(inp))
+            if int(inp) in STOPS:
+                break
         del past, cur, o
         torch.cuda.empty_cache()
-        n_new += 1
-        if n_new % 25 == 0:
+        return tok_t.decode(gen, skip_special_tokens=True)
+
+    @torch.no_grad()
+    def run_group(grp):
+        """Ca lo CUNG bench (nen cung n_new)."""
+        if len(grp) == 1:
+            return [run_one(grp[0])]
+        pasts, warms = [], []
+        for it in grp:
+            p_, w_ = build_one(it)
+            pasts.append(p_); warms.append(w_)
+        past, lens, T_max = bd.stack_students(pasts)
+        del pasts
+        gen = bd.greedy_batch(model_t, past, lens, T_max, warms,
+                              N_NEW[grp[0]["bench"]], STOPS)
+        del past
+        torch.cuda.empty_cache()
+        return [tok_t.decode(g, skip_special_tokens=True) for g in gen]
+
+    # ---- CONG KIEM: batch 1 vs batch B tren cung mau ----
+    if args.verify_batch and args.decode_batch > 1:
+        vs = [it for it in items][:args.verify_batch]
+        by = defaultdict(list)
+        for it in vs:
+            by[it["bench"]].append(it)
+        n_ok = n_bad = 0
+        for b, grp in by.items():
+            got_b = run_group(grp)
+            for it, tb in zip(grp, got_b):
+                t1 = run_one(it)
+                if score(it, t1) == score(it, tb):
+                    n_ok += 1
+                else:
+                    n_bad += 1
+                    print(f"  LECH {it['id']}\n    b1={t1[:100]!r}\n"
+                          f"    bB={tb[:100]!r}", flush=True)
+        print(f"cong kiem batch: {n_ok} khop / {n_bad} lech", flush=True)
+        if n_bad:
+            raise SystemExit("GOM LO SAI KET QUA — dung lai, khong dung so nay")
+
+    t0, n_new = time.time(), 0
+    todo = [it for it in items if it["id"] not in out]
+    groups, cur_g = [], []
+    for it in todo:
+        if cur_g and (it["bench"] != cur_g[0]["bench"]
+                      or len(cur_g) >= args.decode_batch):
+            groups.append(cur_g); cur_g = []
+        cur_g.append(it)
+    if cur_g:
+        groups.append(cur_g)
+    i = 0
+    for grp in groups:
+        txts = run_group(grp)
+        for it, txt in zip(grp, txts):
+            out[it["id"]] = {"hit": score(it, txt), "txt": txt[:400],
+                             "n_tok": len(txt.split())}
+        i += len(grp)
+        n_new += len(grp)
+        if n_new % 25 < len(grp):
             h = sum(v["hit"] for v in out.values())
             el = (time.time() - t0) / 60
-            con = len(items) - (i + 1)
-            print(f"mapped {i+1}/{len(items)} dung {h} ({100*h/len(out):.1f}%) "
-                  f"| {el:.0f} phut | con ~{el/n_new*con:.0f} phut", flush=True)
+            con = len(todo) - i
+            print(f"mapped {i}/{len(todo)} dung {h} ({100*h/len(out):.1f}%) "
+                  f"| {el:.0f} phut | con ~{el/max(n_new,1)*con:.0f} phut",
+                  flush=True)
             _flush()          # ghi + len HF moi 25 mau: recycle chi mat <25 mau
     _flush()
     print("MAPPED XONG", flush=True)
@@ -473,6 +531,10 @@ def main():
     ap.add_argument("--lora", default="")
     ap.add_argument("--max-len", type=int, default=6144)
     ap.add_argument("--slice", default="")
+    ap.add_argument("--decode-batch", type=int, default=1,
+                    help="Gom lo o buoc decode. 1 = nhu cu. Nut co chai la batch=1 (moi token doc ~5GB trong so 4-bit tu HBM), khong phai attention (chiem 0,03% phep tinh).")
+    ap.add_argument("--verify-batch", type=int, default=0,
+                    help="Chay N mau dau O CA batch 1 lan batch B roi doi chieu. Bat buoc truoc khi tin so: mot loi mask/vi tri se lam sai TOAN BO ket qua ma khong nem loi nao.")
     ap.add_argument("--benches", default="",
                     help="Chi chay cac bo nay (phay ngan cach). Bo 1875 mau "
                          "GIU NGUYEN tren dia de con tai lap — loc chi ap luc "
