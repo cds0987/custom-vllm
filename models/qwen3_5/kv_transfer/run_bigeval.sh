@@ -10,7 +10,7 @@
 #   3. tai joint49s    — checkpoint score 67 (an toan tren HF)
 #   4. eval_big  self  — cot tran, bang vLLM (dung dung token ket thuc; vong
 #                        greedy tay tung cho 32% thay vi 92% tren cung 40 mau)
-#   5. e9_joint  train — joint49v tu joint49s, DUNG THEO VAL (patience 3)
+#   5. e9_joint  train — ${OUTNAME:-joint49v} tu joint49s, DUNG THEO VAL (patience 3)
 #                        chu KHONG theo so buoc: 3/4 luot truoc bi cat ngang
 #                        vi runtime bi thu hoi hoac vi het so buoc — KHONG
 #                        luot nao dung vi HOI TU (49s van dang len o buoc cuoi).
@@ -121,7 +121,7 @@ if [ -f /content/logs/probe_batch.log ]; then echo "da co, bo qua"; else
       2>&1 | tee /content/logs/probe_batch.log | tail -40
 fi
 
-step "5/5 chuan bi: noi lai joint49v neu da co tien do"
+step "5/5 chuan bi: noi lai ${OUTNAME:-joint49v} neu da co tien do"
 # CONG CHO: khong tu dong train. Cau hinh train (batch that / --accum bao
 # nhieu) PHU THUOC ket qua probe 4b, va do la quyet dinh cua user. Chay lien
 # tay se train sai cau hinh roi phai train lai — dat hon nhieu lan viec cho.
@@ -137,34 +137,36 @@ echo "cau hinh train: accum=${ACCUM:-1} steps=${STEPS:-8000} patience=${PAT:-3}"
 # joint49s. Phai doc TU HF vi recycle xoa /content nhung HF thi con.
 INIT_M=/content/joint49s/mapper_best.pt
 INIT_L=/content/joint49s/lora_best
-if [ ! -f /content/joint49v/mapper_last.pt ]; then
-  python3 - <<'PYEOF' || true
-import os, shutil, pathlib
+NAME="${OUTNAME:-joint49v}"
+if [ ! -f "/content/$NAME/mapper_last.pt" ]; then
+  python3 - "$NAME" <<'PYEOF' || true
+import os, sys, shutil, pathlib
 from huggingface_hub import snapshot_download
+name = sys.argv[1]          # qua argv: heredoc trich dan khong no bien shell
 try:
     p = snapshot_download("gunnybd01/qwen35-kv-mapper-4b-27b",
-                          allow_patterns=["joint49v/*"],
-                          local_dir="/content/_hf49v",
+                          allow_patterns=[f"{name}/*"],
+                          local_dir=f"/content/_hf_{name}",
                           token=os.environ.get("HF_TOKEN"))
-    src = pathlib.Path(p) / "joint49v"
+    src = pathlib.Path(p) / name
     if (src / "mapper_last.pt").exists():
-        shutil.copytree(src, "/content/joint49v", dirs_exist_ok=True)
-        print("NOI LAI tu HF joint49v/")
+        shutil.copytree(src, f"/content/{name}", dirs_exist_ok=True)
+        print(f"NOI LAI tu HF {name}/")
     else:
-        print("HF chua co joint49v/mapper_last.pt -> bat dau tu joint49s")
+        print(f"HF chua co {name}/mapper_last.pt -> bat dau tu joint49s")
 except Exception as e:
-    print("khong lay duoc joint49v tu HF:", type(e).__name__, str(e)[:80])
+    print(f"khong lay duoc {name} tu HF:", type(e).__name__, str(e)[:80])
 PYEOF
 fi
-if [ -f /content/joint49v/mapper_last.pt ]; then
-  INIT_M=/content/joint49v/mapper_last.pt
-  [ -d /content/joint49v/lora_last ] && INIT_L=/content/joint49v/lora_last
+if [ -f /content/${OUTNAME:-joint49v}/mapper_last.pt ]; then
+  INIT_M=/content/${OUTNAME:-joint49v}/mapper_last.pt
+  [ -d /content/${OUTNAME:-joint49v}/lora_last ] && INIT_L=/content/${OUTNAME:-joint49v}/lora_last
   echo "NOI LAI tu: $INIT_M"
 else
   echo "BAT DAU MOI tu joint49s"
 fi
 
-step "5/5 TRAIN joint49v (dung theo val, patience 3)"
+step "5/5 TRAIN ${OUTNAME:-joint49v} (dung theo val, patience 3)"
 # val-every 250 chu khong 500: Colab dang recycle moi ~1,5 gio, ma checkpoint
 # chi duoc luu (va upload HF) o MOC VAL. Moc cach nhau 25 phut nghia la moi
 # lan mat runtime co the mat gan het cong. 250 buoc ~ 12 phut, va val gio re
@@ -179,8 +181,8 @@ python3 -u e9_joint.py \
   --no-offload --verify-meta 512 \
   --init-mapper "$INIT_M" \
   --init-lora   "$INIT_L" \
-  --out /content/joint49v \
-  --hf-repo gunnybd01/qwen35-kv-mapper-4b-27b --hf-prefix joint49v
+  --out /content/${OUTNAME:-joint49v} \
+  --hf-repo gunnybd01/qwen35-kv-mapper-4b-27b --hf-prefix ${OUTNAME:-joint49v}
 
 step "XONG TAT CA"
 echo "RUN_BIGEVAL_EXIT"
