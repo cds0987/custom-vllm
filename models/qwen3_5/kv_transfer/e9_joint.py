@@ -312,6 +312,13 @@ def main():
                     help="hang thap cho ma tran attention cua mapper (0 = "
                          "day du 1024x1024). Attention da thang hang san "
                          "(CCA 0,98) nen khong can day du.")
+    ap.add_argument("--gdn-terms", type=int, default=1,
+                    help="GDN tu MOT so hang song tuyen A.S.B thanh TONG R so "
+                         "hang. R=1 = ban cu. So hang r>0 khoi tao BANG 0 nen "
+                         "tai buoc 0 dau ra giong het checkpoint cu -> "
+                         "warm-start khong tut diem (bai hoc joint49t). Vua "
+                         "tang dung luong VUA mo rong lop ham: mot A.S.B chi "
+                         "doi duoc co so hai phia mot cach co dinh.")
     ap.add_argument("--gdn-per-head", action="store_true",
                     help="moi head GDN mot cap A,B rieng thay vi dung chung. "
                          "Cung voi --attn-rank = DOI NGAN SACH tham so tu "
@@ -418,7 +425,8 @@ def main():
 
     mapper = e5.Mapper(len(a_t), len(g_t), Hs, Ht, attn_dim, theta_s, theta_t,
                        attn_rank=args.attn_rank,
-                       gdn_per_head=args.gdn_per_head)
+                       gdn_per_head=args.gdn_per_head,
+                       gdn_terms=args.gdn_terms)
     mapper.ckpt = True
     if args.init_mapper and Path(args.init_mapper).exists():
         mapper.load(args.init_mapper)

@@ -198,7 +198,7 @@ def rope_apply(x, cos, sin, sign):
 class Mapper:
     def __init__(self, n_attn_tgt, n_gdn_tgt, gdn_heads_s, gdn_heads_t,
                  attn_dim, theta_s, theta_t, device="cuda",
-                 attn_rank=0, gdn_per_head=False):
+                 attn_rank=0, gdn_per_head=False, gdn_terms=1):
         """attn_rank>0 va gdn_per_head=True = DOI NGAN SACH THAM SO
         (user duyet 2026-08-29).
 
@@ -222,6 +222,7 @@ class Mapper:
                             # (autograd map_attn fp32 ~0.5GB@1K, ~1GB@2K ctx)
         self.attn_rank = int(attn_rank)
         self.gdn_per_head = bool(gdn_per_head)
+        self.gdn_terms = max(1, int(gdn_terms))
         self.attn_dim = attn_dim
         self.params = []
         self.WK, self.bK, self.WV, self.bV = [], [], [], []
@@ -246,22 +247,29 @@ class Mapper:
         for _ in range(n_gdn_tgt):
             a = torch.full((gdn_heads_t, gdn_heads_s), 1.0 / gdn_heads_s,
                            device=device).requires_grad_(True)
-            if self.gdn_per_head:
-                eye = torch.eye(128, device=device).float()
-                A = eye.expand(gdn_heads_s, 128, 128).clone().requires_grad_(True)
-                B = eye.expand(gdn_heads_s, 128, 128).clone().requires_grad_(True)
-            else:
-                A = torch.eye(128, device=device).float().requires_grad_(True)
-                B = torch.eye(128, device=device).float().requires_grad_(True)
-            self.alpha.append(a); self.A.append(A); self.B.append(B)
-            self.params += [a, A, B]
+            eye = torch.eye(128, device=device).float()
+            As, Bs = [], []
+            for r in range(self.gdn_terms):
+                if self.gdn_per_head:
+                    base = eye.expand(gdn_heads_s, 128, 128).clone()
+                else:
+                    base = eye.clone()
+                # so hang r=0 = dong nhat (hoac checkpoint cu khi load);
+                # so hang r>0 KHOI TAO BANG 0 -> tong = y het ban R=1.
+                A_r = (base if r == 0 else torch.zeros_like(base)
+                       ).requires_grad_(True)
+                B_r = base.clone().requires_grad_(True)
+                As.append(A_r); Bs.append(B_r)
+                self.params += [A_r, B_r]
+            self.alpha.append(a); self.A.append(As); self.B.append(Bs)
+            self.params.append(a)
         n = sum(p.numel() for p in self.params)
         n_attn = sum(p.numel() for p in
                      (self.WK + self.WV + self.UK + self.VK_ + self.UV
                       + self.VV_ + self.bK + self.bV))
         print(f"Mapper: {n/1e6:.1f}M tham so | attention {n_attn/1e6:.1f}M "
               f"| GDN {(n-n_attn)/1e6:.1f}M "
-              f"(attn_rank={self.attn_rank}, gdn_per_head={self.gdn_per_head})")
+              f"(attn_rank={self.attn_rank}, gdn_per_head={self.gdn_per_head}, gdn_terms={self.gdn_terms})")
 
     def map_attn(self, j, k, v):
         if self.ckpt:
@@ -299,15 +307,20 @@ class Mapper:
         # matmul theo tung head (moi head mot quy tac rieng). Ban cu chi co
         # MOT cap (128,128) broadcast cho ca 32 head -> ep moi head phai bien
         # doi giong het nhau, qua chat cho thu phai chuyen tai la QUAN HE.
-        mapped = torch.einsum("ts,sij->tij", self.alpha[j],
-                              self.A[j] @ Sn @ self.B[j])
+        # tong R so hang song tuyen. R=1 tra ve dung bieu thuc cu.
+        acc = self.A[j][0] @ Sn @ self.B[j][0]
+        for r in range(1, self.gdn_terms):
+            acc = acc + self.A[j][r] @ Sn @ self.B[j][r]
+        mapped = torch.einsum("ts,sij->tij", self.alpha[j], acc)
         return (mapped * rms.mean())[None].to(torch.bfloat16)
 
     def state_dict(self):
         d = {"bK": self.bK, "bV": self.bV, "alpha": self.alpha,
-             "A": self.A, "B": self.B,
+             "A": [[t.detach() for t in terms] for terms in self.A],
+             "B": [[t.detach() for t in terms] for terms in self.B],
              "_meta": {"attn_rank": self.attn_rank,
-                       "gdn_per_head": self.gdn_per_head}}
+                       "gdn_per_head": self.gdn_per_head,
+                       "gdn_terms": self.gdn_terms}}
         if self.attn_rank:
             d.update({"UK": self.UK, "VK": self.VK_,
                       "UV": self.UV, "VV": self.VV_})
@@ -326,7 +339,11 @@ class Mapper:
         Nho vay khong phai train lai tu dau khi doi phan bo tham so.
         """
         import torch
-        sd = torch.load(path, map_location="cuda")
+        # map_location theo THIET BI CUA CHINH MAPPER, khong ghim "cuda":
+        # ghim cung thi khong the kiem tren may CPU, va bai kiem quan trong
+        # nhat (R=4 nap tu R=1 phai giong het) la bai KHONG CAN GPU.
+        dev = self.params[0].device
+        sd = torch.load(path, map_location=dev)
         for name in ("bK", "bV", "alpha"):
             for dst, src in zip(getattr(self, name), sd[name]):
                 dst.data.copy_(src.data)
@@ -355,14 +372,29 @@ class Mapper:
                 for dst, src in zip(getattr(self, name), sd[name]):
                     dst.data.copy_(src.data)
         # ---- GDN ----
+        # sd[name][j] co the la MOT tensor (ban cu, mot so hang) hoac DANH
+        # SACH tensor (ban nhieu so hang). Tensor cu -> so hang 0; cac so hang
+        # con lai giu nguyen khoi tao (A_r = 0) nen tong = dung bieu thuc cu.
+        n_extra = 0
         for name in ("A", "B"):
-            for dst, src in zip(getattr(self, name), sd[name]):
-                if dst.dim() == 3 and src.dim() == 2:
-                    dst.data.copy_(src.data.unsqueeze(0).expand_as(dst))
-                else:
-                    dst.data.copy_(src.data)
-        if self.gdn_per_head and sd["A"][0].dim() == 2:
-            print(f"  GDN: sao chep cap A,B dung chung -> {self.A[0].shape[0]} "
+            for dst_terms, src in zip(getattr(self, name), sd[name]):
+                src_terms = src if isinstance(src, (list, tuple)) else [src]
+                for r, dst in enumerate(dst_terms):
+                    if r >= len(src_terms):
+                        n_extra += 1
+                        continue          # so hang moi: giu khoi tao
+                    sv = src_terms[r].data
+                    if dst.dim() == 3 and sv.dim() == 2:
+                        dst.data.copy_(sv.unsqueeze(0).expand_as(dst))
+                    else:
+                        dst.data.copy_(sv)
+        if n_extra:
+            print(f"  GDN: them {n_extra} so hang moi (A_r=0) -> dau ra tai "
+                  "buoc 0 GIONG HET checkpoint cu")
+        _a0 = sd["A"][0]
+        _a0 = _a0[0] if isinstance(_a0, (list, tuple)) else _a0
+        if self.gdn_per_head and _a0.dim() == 2:
+            print(f"  GDN: sao chep cap A,B dung chung -> {self.A[0][0].shape[0]} "
                   "head rieng (bao toan chinh xac hanh vi cu)")
 
 
