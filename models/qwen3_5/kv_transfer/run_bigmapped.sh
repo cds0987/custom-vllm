@@ -47,10 +47,15 @@ fi
 LORA=""
 [ -d "$CK/lora_best" ] && LORA="--lora $CK/lora_best"
 
+# GIAI DOAN 1 (user chot): chi do cac ho DA GHI NHAN mapper chay. gsm8k va
+# suite_math de sang giai doan 2 — gsm8k ton 320 token/mau (dat nhat ca
+# luot, ~45 phut cho 100 mau) ma mapper moi dat 9%; suite_math tran chi
+# 1,6% nen khong phan biet duoc mapper tot hay xau. Bo mau tren dia GIU NGUYEN.
 echo "=== mapped tren $CK ${SL:+(slice $SL)} ==="
 python3 -u eval_big.py mapped \
   --tgt-model Qwen/Qwen3.5-9B --max-len 6144 \
   --mapper "$CK/mapper_best.pt" $LORA ${SL:+--slice $SL} \
+  --benches "${BENCHES:-bbh,bfcl,needle,musr,suite_mid,suite_rag,suite_swe}" \
   --hf-prefix "evalbig_$(basename $CK)" || exit 1
 
 EVALBIG_PREFIX="evalbig_$(basename $CK)" python3 -u eval_big.py agg \
