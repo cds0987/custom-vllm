@@ -65,7 +65,9 @@ for name, dest in [("eval_big_items.json", "/content/eval_big_items.json"),
 PYEOF
 
 step "1/5 tap niem phong CU (chi de kiem ro ri)"
-if [ -f /content/ext_bench_items.json ]; then echo "da co, bo qua"; else
+if [ -f /content/eval_big_items.json ]; then
+  echo "bo 1875 mau da co -> khong can tap niem phong cu (chi dung de kiem ro ri)"
+elif [ -f /content/ext_bench_items.json ]; then echo "da co, bo qua"; else
   # --n-each 200, KHONG phai mac dinh 500: tap test da BAO CAO la 200/bo
   # (bbh 98/182 = 7 hang x 26 tac vu, musr 115/198 = 66 x 3, gsm8k 160/200)
   # va TEST_BBH_PER/TEST_MUSR_PER trong gen_data ghim cung con 200 do. Dung
