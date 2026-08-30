@@ -50,13 +50,17 @@ import os, pathlib
 from huggingface_hub import hf_hub_download
 REPO = "gunnybd01/qwen35-kv-mapper-4b-27b"
 pathlib.Path("/content/logs").mkdir(parents=True, exist_ok=True)
-for name, dest in [("eval_big_items.json", "/content/eval_big_items.json"),
-                   ("evalbig_self.json", "/content/logs/evalbig_self.json")]:
+# (duong dan tren HF, dich duoi runtime). train_items + pseudo_gold la DAU VAO
+# cua pha train — recycle xoa /content nen phai keo ve, neu khong pha 5 chet.
+for name, dest in [("evalbig/eval_big_items.json", "/content/eval_big_items.json"),
+                   ("evalbig/evalbig_self.json", "/content/logs/evalbig_self.json"),
+                   ("joint_v1/train_items.json", "/content/train_items.json"),
+                   ("joint49/pseudo_gold.json", "/content/pseudo_gold.json")]:
     if pathlib.Path(dest).exists():
         print("da co", dest)
         continue
     try:
-        p = hf_hub_download(REPO, f"evalbig/{name}",
+        p = hf_hub_download(REPO, name,
                             token=os.environ.get("HF_TOKEN"))
         pathlib.Path(dest).write_bytes(pathlib.Path(p).read_bytes())
         print("KEO VE", dest, pathlib.Path(dest).stat().st_size, "byte")
