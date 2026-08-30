@@ -463,6 +463,17 @@ def run_mapped(args):
                        gdn_per_head=_meta.get("gdn_per_head", False))
     if args.identity_mapper:
         print("COPY NGUYEN: khong nap checkpoint (W=I, A=B=I)", flush=True)
+        if args.copy_select:
+            import torch as _t2
+            for a_ in mapper.alpha:
+                Ht_, Hs_ = a_.shape
+                with _t2.no_grad():
+                    a_.zero_()
+                    for t_ in range(Ht_):
+                        a_[t_, (t_ * Hs_) // Ht_] = 1.0
+            print(f"  alpha = ma tran CHON ({mapper.alpha[0].shape[0]} head "
+                  f"dich <- {mapper.alpha[0].shape[1]} head nguon), "
+                  "khong phai trung binh", flush=True)
     else:
         mapper.load(args.mapper)
     STOPS = e5.stop_ids(tok_t, model_t)
@@ -653,6 +664,12 @@ def main():
     ap.add_argument("--engine", default="vllm",
                     choices=["vllm", "hf"],
                     help="hf = transformers (bat buoc khi co --lora: vLLM khong nap duoc checkpoint da merge)")
+    ap.add_argument("--copy-select", action="store_true",
+                    help="Chi co nghia cung --identity-mapper. alpha KHOI TAO "
+                         "la 1/Hs = TRUNG BINH ca 32 head nguon vao moi head "
+                         "dich -> boi nhoe, khong phai copy. Co nay dat alpha "
+                         "thanh ma tran CHON (head dich t <- head nguon "
+                         "t*Hs//Ht) = be nguyen that su.")
     ap.add_argument("--identity-mapper", action="store_true",
                     help="KHONG nap checkpoint: Mapper khoi tao mac dinh la "
                          "W=I, A=B=I, alpha=1/Hs -> chinh la COPY NGUYEN cache "
