@@ -133,8 +133,7 @@ def main():
             past = model_s(input_ids=ids[:, s_:s_ + 1024],
                            past_key_values=past, use_cache=True,
                            logits_to_keep=1).past_key_values
-        tpl = e5.build_template_from_meta(probe, e5.cache_meta(
-            _prefill_shape(model_t, B, T)))
+        tpl = e5.build_template_from_meta(probe, _meta_for(B, T))
         st = e5.build_student_past(tpl, past, mapper)
         o = model_t(input_ids=gold, past_key_values=st, use_cache=True)
         ce = torch.nn.functional.cross_entropy(
@@ -146,12 +145,19 @@ def main():
 
     _shape_cache = {}
 
-    def _prefill_shape(m, B, T):
+    def _meta_for(B, T):
+        """Cache META (dict hinh dang), KHONG cache doi tuong past: giu past
+        qua nhieu buoc lam tensor cua no bi dung lai va vuong do thi autograd
+        -> 'variable needed for gradient has been modified by an inplace
+        operation'. Meta chi la shape/dtype nen vo hai."""
         if (B, T) not in _shape_cache:
             with torch.no_grad():
-                _shape_cache[(B, T)] = m(
-                    input_ids=torch.randint(1000, 5000, (B, T), device="cuda"),
-                    use_cache=True, logits_to_keep=1).past_key_values
+                pz = model_t(input_ids=torch.randint(1000, 5000, (B, T),
+                                                     device="cuda"),
+                             use_cache=True, logits_to_keep=1).past_key_values
+            _shape_cache[(B, T)] = e5.cache_meta(pz)
+            del pz
+            torch.cuda.empty_cache()
         return _shape_cache[(B, T)]
 
     print(f"\n{'ctx':>6}{'batch':>7}{'peak GiB':>10}{'s/lo':>8}{'s/mau':>8}"
