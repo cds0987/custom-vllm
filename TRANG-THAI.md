@@ -206,6 +206,13 @@ Cập nhật: 2026-08-31.
   cấu hình 49w rồi chạy lại tên mới `joint49y`. (2) lệnh dọn tiến trình bằng
   `pkill -f e9_joint.py` khớp luôn dòng lệnh của chính shell gọi nó (bẫy cũ,
   dạng khác) — sửa bằng đọc `/proc/*/cmdline` loại trừ pid của chính mình.
+- **`joint49y` = CHECKPOINT THAM CHIẾU MỚI (thay `joint49w`)**. Điểm tổng có
+  trọng số theo n (1.650 mẫu): 4B một mình 67,0% | 9B một mình 61,0% |
+  `joint49w` 75,5% → **`joint49y` 77,1%**. Tăng thật nhưng khiêm tốn ở mức
+  tổng — vì `bbh` (n=779, gần nửa dữ liệu) gần như đứng yên (−1,0), che khuất
+  mức tăng lớn ở các bộ nhỏ hơn (musr n=56: +16,0; suite_swe n=123: +8,9).
+  Báo cáo HTML đã cập nhật cùng URL cũ:
+  https://claude.ai/code/artifact/b20fe8d6-0e21-44d1-afa8-b1622d62385a
 - **`joint49y` NIÊM PHONG XONG (2026-08-31), 1.650+179 mẫu** — so `joint49w`
   (cột `4B+LoRA+map→9B` cũ):
 
