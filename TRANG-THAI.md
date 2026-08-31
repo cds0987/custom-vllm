@@ -214,6 +214,27 @@ Cập nhật: 2026-08-31.
     phát hiện `lorat_best`. Quên cờ này = đo mapper với người-đọc chưa thích
     nghi, tức đo sai hẳn thứ vừa train.
 
+- **`joint49y` TRAIN XONG (2026-08-31)** — best bước 750/1000, ấm từ `joint49w`
+  đúng cấu hình gốc (max-ctx 4096, batch 2 × accum 2 = 4 mẫu/lần cập nhật, chỉ
+  chừa hai biến: LoRA-9B + gom lô). **score 103, vượt kỷ lục joint49w (100)**:
+  bfcl 15/15 (+1), bbh 48/77 (+1), musr 11/19 (+1), needle/suite_mid/suite_rag
+  bằng, **suite_swe = suite_swe của 49w (4/7)** — không tụt bộ nào. Mốc phân
+  xử `suite_swe >60%` đo trên val chỉ 7 mẫu (57,1%, sai số ±14 điểm/mẫu) —
+  KHÔNG đủ để phân xử; số thật đợi tập niêm phong 123 mẫu.
+  Checkpoint (`mapper_best`/`lora_best`/`lorat_best`) đã lên HF `joint49y/`.
+  **Hai học phí trong đợt phóng**: (1) lần đầu chạy `max-ctx 16384 + accum 1`
+  (khác `joint49w` ở max-ctx VÀ accum cùng lúc, đổi 4 biến chứ không phải 2)
+  → val needle sập 15/15→0/15 KHÔNG quy được cho ai; đã dừng, ghép lại đúng
+  cấu hình 49w rồi chạy lại tên mới `joint49y`. (2) lệnh dọn tiến trình bằng
+  `pkill -f e9_joint.py` khớp luôn dòng lệnh của chính shell gọi nó (bẫy cũ,
+  dạng khác) — sửa bằng đọc `/proc/*/cmdline` loại trừ pid của chính mình.
+- **ĐANG CHẠY (nền) — đo niêm phong `joint49y`**: `run_joint49y_seal.sh` =
+  mapped đầy đủ 7 bộ (1.875 mẫu) + đối chứng ctx-BỎ trên suite_swe+musr (nơi
+  4B/9B gặp nhau về QUAN HỆ). Vài giờ, transformers tuần tự. Chốt chặn đã đặt
+  TRƯỚC: `suite_swe >60%` VÀ ctx-BỎ vẫn sập = LoRA-9B đọc thật; `suite_swe`
+  không vượt = nghi phạm quay về dạng hàm `A·S·B` của mapper; điểm lên mà
+  ctx-BỎ KHÔNG sập = ăn gian, bỏ. Vá kèm: `eval_big --lora-t` nạp LoRA phía
+  đọc (không merge, 9B đang 4-bit); `run_bigmapped.sh` tự phát hiện `lorat_best`.
 - **BƯỚC KẾ (chờ user duyệt)**: (1) ✅ đã làm — gom lô theo độ dài cho train
   (gold có mặt nạ + `verify_meta` cho cặp (T,B)); (2) đọc tay đầu ra 9B trên
   4 tác vụ bị 0/30; (3) thêm NHIỆM VỤ đòi quan hệ vào dữ liệu train — làm ở
