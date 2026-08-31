@@ -192,7 +192,29 @@ Cập nhật: 2026-08-31.
   dạng hoá dữ liệu. Giả thuyết "mapper quá nhỏ" của user bị bác bằng đo.
 - **Train ĐÃ BÃO HOÀ — hai lần độc lập**: `joint49v` 67→66→62, `joint49w`
   100→95. Thêm bước/thêm-bớt dữ liệu đều không lên.
-- **BƯỚC KẾ (chờ user duyệt)**: (1) xây bộ gom lô theo độ dài cho train
+- **ĐANG CHẠY — `joint49x`, đợt GỘP (user duyệt 2026-08-31)**: LoRA trên 9B
+  (phía ĐỌC) + gom lô theo độ dài, ấm từ `joint49w`. Lý do LoRA 9B: kiến trúc
+  BẤT ĐỐI XỨNG — phía mã hoá được thích nghi (LoRA 4B), phía dịch được train
+  (mapper), phía ĐỌC đóng băng. Thêm nữa **LoRA 4B chỉ chạm q/k/v/o_proj = chỉ
+  lớp attention (8/32 lớp), chưa adapter nào chạm GDN** — mà E7 chỉ ra GDN mới
+  là chỗ lệch. Nhắm `q_proj,o_proj,in_proj_qkvz,out_proj` = 5,8M tham số.
+  - **Sanity 40 bước PASS**: `verify-meta` KHỚP ở CẢ (T=512,B=1) và (B=2);
+    89,5% item vào được lô đầy (khớp đúng con số đo trước); peak 18,30 GiB/23.
+  - **Tốc độ — đính chính ước tính của tôi**: 2,82 s/**bước** (không phải ~1,7
+    như tôi ước), nhưng mỗi bước nuốt 2 mẫu → **1,41 s/mẫu, nhanh 2,13×**
+    (probe đoán 1,85-1,97×). Cùng thời gian, 1.000 bước nay thấy **2.000 mẫu**.
+    Đúng đòn bẩy cần: chẩn đoán là QUÁ KHỚP nên xem nhiều dữ liệu hơn/phút mới
+    là thứ giúp được. `backward` 47-49% → LoRA 9B đi nhờ đường đã trả tiền.
+  - **CHỐT CHẶN**: thêm dung lượng phía SINH làm việc "ăn gian" dễ hơn. Mốc
+    phân xử đặt TRƯỚC khi chạy: `suite_swe` **>60% VÀ ctx-BỎ vẫn sập** = thành
+    công; ≤60% = không phải phía đọc, nghi phạm quay về **dạng hàm `A·S·B`**;
+    điểm lên mà ctx-BỎ **không** sập = ăn gian, bỏ.
+  - Vá kèm: `eval_big --lora-t` nạp LoRA phía đọc (KHÔNG merge — 9B đang 4-bit,
+    merge là đường đã làm hỏng checkpoint 4B một lần); `run_bigmapped.sh` tự
+    phát hiện `lorat_best`. Quên cờ này = đo mapper với người-đọc chưa thích
+    nghi, tức đo sai hẳn thứ vừa train.
+
+- **BƯỚC KẾ (chờ user duyệt)**: (1) ✅ đã làm — gom lô theo độ dài cho train
   (gold có mặt nạ + `verify_meta` cho cặp (T,B)); (2) đọc tay đầu ra 9B trên
   4 tác vụ bị 0/30; (3) thêm NHIỆM VỤ đòi quan hệ vào dữ liệu train — làm ở
   tầng nhiệm vụ chứ KHÔNG so khớp tensor (luật error-placement: nMSE
