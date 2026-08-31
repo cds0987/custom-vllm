@@ -30,29 +30,25 @@ LORA=""
 echo "adapter: ${LORA:-khong co}"
 
 echo "=== [1/2] mapped DAY DU (7 bo, niem phong) ==="
-if [ -f /content/logs/evalbig_joint49y_mapped.json ]; then
-  echo "da co, bo qua"
-else
-  python3 -u eval_big.py mapped \
-    --tgt-model Qwen/Qwen3.5-9B --max-len 6144 \
-    --mapper "$CK/mapper_best.pt" $LORA \
-    --decode-batch "${DBATCH:-1}" --verify-batch "${VBATCH:-0}" \
-    --benches "${BENCHES:-bbh,bfcl,needle,musr,suite_mid,suite_rag,suite_swe}" \
-    --hf-prefix "evalbig_$(basename $CK)" || exit 1
-fi
+# KHONG kiem file ton tai o day: file duoc ghi TUNG PHAN (moi 25 mau),
+# nen sau khi ket qua dau tien duoc luu la "if -f" luon dung -> bo qua
+# nham phan con lai (hoc phi dot nay). eval_big.py TU resume theo tung
+# mau (doc file cu, bo qua id da co) nen goi lai la an toan va DUNG.
+python3 -u eval_big.py mapped \
+--tgt-model Qwen/Qwen3.5-9B --max-len 6144 \
+--mapper "$CK/mapper_best.pt" $LORA \
+--decode-batch "${DBATCH:-1}" --verify-batch "${VBATCH:-0}" \
+--benches "${BENCHES:-bbh,bfcl,needle,musr,suite_mid,suite_rag,suite_swe}" \
+--hf-prefix "evalbig_$(basename $CK)" || exit 1
 
 echo "=== [2/2] mapped ctx-BO (chi suite_swe+musr — CHOT CHAN) ==="
-if [ -f /content/logs/evalbig_joint49y_drop_mapped.json ]; then
-  echo "da co, bo qua"
-else
-  python3 -u eval_big.py mapped \
-    --tgt-model Qwen/Qwen3.5-9B --max-len 6144 \
-    --mapper "$CK/mapper_best.pt" $LORA \
-    --no-ctx drop \
-    --decode-batch "${DBATCH:-1}" --verify-batch "${VBATCH:-0}" \
-    --benches suite_swe,musr \
-    --hf-prefix "evalbig_$(basename $CK)_drop" || exit 1
-fi
+python3 -u eval_big.py mapped \
+--tgt-model Qwen/Qwen3.5-9B --max-len 6144 \
+--mapper "$CK/mapper_best.pt" $LORA \
+--no-ctx drop \
+--decode-batch "${DBATCH:-1}" --verify-batch "${VBATCH:-0}" \
+--benches suite_swe,musr \
+--hf-prefix "evalbig_$(basename $CK)_drop" || exit 1
 
 EVALBIG_PREFIX="evalbig_$(basename $CK)" python3 -u eval_big.py agg \
   | tee /content/logs/evalbig_49y_agg.txt
