@@ -318,11 +318,45 @@ def run_self_hf(args, items):
             print("HF-UP FAIL", type(e).__name__)
 
 
+def wreck_ctx(items, mode):
+    """Pha ngu canh de kiem mapper CO THAT SU doc cache khong.
+
+    'drop'    : bo han ngu canh, chi giu doan cuoi (cau hoi/yeu cau). Cat theo
+                DONG cuoi cung co ky tu, giu ~15% cuoi — du de giu dinh dang
+                de bai ma khong con thong tin de tra loi.
+    'shuffle' : giu du chu nhung XAO tron thu tu cau -> pha QUAN HE, giu tu vung.
+                Neu diem chi tut nhe voi 'shuffle' ma tut manh voi 'drop' thi
+                mapper dang dung tu vung chu khong dung cau truc.
+    """
+    if not mode:
+        return items
+    import random as _r
+    rng = _r.Random(0)
+    out = []
+    for it in items:
+        p = it["prompt"]
+        if mode == "drop":
+            # Giu 3 DONG cuoi (phan yeu cau/cau hoi), bo phan than mang
+            # thong tin. Cat theo TY LE lam mat ca cau hoi o prompt ngan.
+            ls = [x for x in p.split(chr(10)) if x.strip()]
+            p2 = chr(10).join(ls[-3:]) if len(ls) > 3 else ls[-1]
+        else:
+            head, sep, tail = p.rpartition("\n\n")
+            parts = [x for x in head.split(". ") if x]
+            rng.shuffle(parts)
+            p2 = ". ".join(parts) + sep + tail
+        out.append({**it, "prompt": p2})
+    print(f"DOI CHUNG PHA HUY --no-ctx={mode}: da doi {len(out)} prompt",
+          flush=True)
+    return out
+
+
 def self_tag(args):
     """Ten file theo MODEL (+lora): chay 4B ma ghi de len cot tran cua 9B thi
     mat luon 12,3 phut da ton, va tro thanh so bao cao sai."""
     t = args.tgt_model.split("/")[-1].replace(".", "").lower()
     return (t + ("_lora" if args.lora else "")
+            + (f"_{args.no_ctx}" if args.no_ctx else "")
             + ("_hf" if args.engine == "hf" else ""))
 
 def run_self(args):
@@ -331,6 +365,7 @@ def run_self(args):
         keep = set(args.benches.split(","))
         items = [it for it in items if it["bench"] in keep]
         print(f"loc bo: con {len(items)} mau", flush=True)
+    items = wreck_ctx(items, args.no_ctx)
 
     # RE NHANH TRUOC KHI import vllm: duong hf khong can vLLM, ma import o dau
     # ham lam ca duong do chet bang ModuleNotFoundError tren runtime chua cai
@@ -404,11 +439,14 @@ def run_mapped(args):
         n0 = len(items)
         items = [it for it in items if it["bench"] in keep]
         print(f"loc bo: {n0} -> {len(items)} mau ({sorted(keep)})", flush=True)
+    items = wreck_ctx(items, args.no_ctx)
     # Spill mang TEN CAU HINH CUA 4B, khong phai ten chung: cache 4B chi phu
     # thuoc (prompt, co-LoRA-hay-khong) — KHONG phu thuoc mapper. Cac luot so
     # sanh bien the mapper co pha A GIONG HET nhau, nen dat ten dung thi lan
     # sau bo qua duoc 5 phut prefill. Truoc day moi luot `rm -rf` roi lam lai.
-    stag = "lora" if args.lora else "base"
+    stag = ("lora" if args.lora else "base")
+    if args.no_ctx:
+        stag += "_" + args.no_ctx
     spill = Path(f"/content/spill_{stag}")
     spill.mkdir(parents=True, exist_ok=True)
     n_have = len(list(spill.glob("*.pt")))
@@ -712,6 +750,15 @@ def main():
                          "dich -> boi nhoe, khong phai copy. Co nay dat alpha "
                          "thanh ma tran CHON (head dich t <- head nguon "
                          "t*Hs//Ht) = be nguyen that su.")
+    ap.add_argument("--no-ctx", default="",
+                    choices=["", "drop", "shuffle"],
+                    help="DOI CHUNG PHA HUY: 'drop' bo han ngu canh (chi giu "
+                         "phan cau hoi o cuoi), 'shuffle' xao tron cau trong "
+                         "ngu canh. Neu diem KHONG tut thi mapper dang doan "
+                         "theo phan phoi dap an chu khong doc cache — va moi "
+                         "con so thang cua no la ao. Day la phep do duy nhat "
+                         "co the XOA BO ket luan chinh, nen phai chay TRUOC "
+                         "khi dau tu mo rong.")
     ap.add_argument("--identity-mapper", action="store_true",
                     help="KHONG nap checkpoint: Mapper khoi tao mac dinh la "
                          "W=I, A=B=I, alpha=1/Hs -> chinh la COPY NGUYEN cache "
