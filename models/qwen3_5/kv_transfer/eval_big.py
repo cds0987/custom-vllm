@@ -307,15 +307,18 @@ def self_tag(args):
             + ("_hf" if args.engine == "hf" else ""))
 
 def run_self(args):
-    from vllm import LLM, SamplingParams
     items = json.loads(Path(ITEMS_F).read_text())
     if args.benches:
         keep = set(args.benches.split(","))
         items = [it for it in items if it["bench"] in keep]
         print(f"loc bo: con {len(items)} mau", flush=True)
 
+    # RE NHANH TRUOC KHI import vllm: duong hf khong can vLLM, ma import o dau
+    # ham lam ca duong do chet bang ModuleNotFoundError tren runtime chua cai
+    # vLLM (da dinh sau recycle lan 9).
     if args.engine == "hf":
         return run_self_hf(args, items)
+    from vllm import LLM, SamplingParams
 
     # vLLM co ho tro LoRA SAN (enable_lora + LoRARequest): nap adapter truc
     # tiep, khong phai merge roi luu ra dia. Duong merge truoc do vua hong vua
