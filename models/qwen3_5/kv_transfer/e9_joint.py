@@ -136,23 +136,24 @@ def gold_cap_for(t, hard_cap, envelope=None):
 
 # ---------------------------------------------------------------- template --
 
-def meta_for_len(base, t_base, t):
-    """Suy 'bo xuong' template cho do dai t tu meta goc do o t_base.
+def meta_for_len(base, t_base, t, bsz=1):
+    """Suy 'bo xuong' template cho do dai t (va batch bsz) tu meta goc o t_base.
 
     Chi co shape cua keys/values (chieu T) va vai truong int bang t_base la
-    phu thuoc do dai; state GDN thi khong. Ham nay PHAI qua verify_meta()
-    truoc khi tin -- neu co truong int nao trung t_base mot cach tinh co thi
-    kiem tra se bat duoc."""
+    phu thuoc do dai; state GDN thi khong — nhung CHIEU DAU (batch) thi moi
+    tensor deu co. Ham nay PHAI qua verify_meta() truoc khi tin -- neu co
+    truong int nao trung t_base mot cach tinh co thi kiem tra se bat duoc."""
     m = copy.deepcopy(base)
     m["cache_ints"] = {k: (t if v == t_base else v)
                        for k, v in m["cache_ints"].items()}
     for lay in m["layers"]:
         lay["ints"] = {k: (t if v == t_base else v)
                        for k, v in lay["ints"].items()}
-        if lay["kind"] == "a":
-            for key in ("k", "v"):
-                sh, dt = lay[key]
-                lay[key] = (tuple(t if d == t_base else d for d in sh), dt)
+        keys = ("k", "v") if lay["kind"] == "a" else ("rec", "conv")
+        for key in keys:
+            sh, dt = lay[key]
+            sh = tuple(t if d == t_base else d for d in sh)
+            lay[key] = ((bsz,) + sh[1:], dt)      # chieu dau = batch
     return m
 
 
@@ -160,15 +161,15 @@ def verify_meta(model_t, base, t_base, lens):
     """Doi chieu meta SUY RA voi meta THAT (chay prefill that o tung do dai).
     Sai mot li = template lech vi tri = cache vo nghia ma khong bao loi."""
     ok = True
-    for t in lens:
-        ids = torch.randint(1000, 5000, (1, t), device="cuda")
+    for t, b in lens:
+        ids = torch.randint(1000, 5000, (b, t), device="cuda")
         with torch.no_grad():
             past = e5.prefill_chunked(model_t, ids)
         real = e5.cache_meta(past)
-        derived = meta_for_len(base, t_base, t)
+        derived = meta_for_len(base, t_base, t, b)
         if real != derived:
             ok = False
-            print(f"  VERIFY-META LECH o T={t}", flush=True)
+            print(f"  VERIFY-META LECH o T={t} B={b}", flush=True)
             for k in real["cache_ints"]:
                 if real["cache_ints"][k] != derived["cache_ints"].get(k):
                     print(f"    cache_ints[{k}]: that={real['cache_ints'][k]} "
@@ -178,7 +179,7 @@ def verify_meta(model_t, base, t_base, lens):
                     print(f"    layer {j}: that={r} suy={d}", flush=True)
                     break
         else:
-            print(f"  verify-meta T={t}: KHOP", flush=True)
+            print(f"  verify-meta T={t} B={b}: KHOP", flush=True)
         del past, ids
         gc.collect()
         torch.cuda.empty_cache()
@@ -312,6 +313,17 @@ def main():
                     help="hang thap cho ma tran attention cua mapper (0 = "
                          "day du 1024x1024). Attention da thang hang san "
                          "(CCA 0,98) nen khong can day du.")
+    ap.add_argument("--lora-t", default="",
+                    help="LoRA tren 9B (phia DOC). Chuoi module phay ngan "
+                         "cach, vd 'q_proj,o_proj,in_proj_qkvz,out_proj'. "
+                         "Rong = tat. Kien truc hien BAT DOI XUNG: phia ma hoa "
+                         "co LoRA, phia dich co mapper, phia DOC bi dong bang.")
+    ap.add_argument("--lora-t-r", type=int, default=16)
+    ap.add_argument("--init-lora-t", default="")
+    ap.add_argument("--batch", type=int, default=1,
+                    help="Gom lo theo DO DAI CHINH XAC (khong dem mot token "
+                         "nao). Do duoc: batch 2 = 1,85-1,97x; batch 4 OOM; "
+                         "89,5%% item gom duoc thanh lo 2.")
     ap.add_argument("--gdn-terms", type=int, default=1,
                     help="GDN tu MOT so hang song tuyen A.S.B thanh TONG R so "
                          "hang. R=1 = ban cu. So hang r>0 khoi tao BANG 0 nen "
@@ -377,7 +389,10 @@ def main():
     del p0, ids
     gc.collect()
     torch.cuda.empty_cache()
-    lens = [int(x) for x in args.verify_meta.split(",") if x]
+    # kiem CA cap (T, B): template lech chieu batch = cache vo nghia ma khong
+    # bao loi, dung loai loi da tung lam mat ca luot train.
+    lens = [(int(x), b) for x in args.verify_meta.split(",") if x
+            for b in ({1, args.batch})]
     if not verify_meta(model_t, base_meta, T_BASE, lens):
         print("META SUY RA KHONG KHOP META THAT -> DUNG (khong doan mo)",
               flush=True)
@@ -423,6 +438,25 @@ def main():
     attn_dim = k0.shape[1] * k0.shape[3]
     del probe_s
 
+    lora_t_params = []
+    if args.lora_t:
+        from peft import LoraConfig as _LC, get_peft_model as _gpm
+        mods = [x for x in args.lora_t.split(",") if x]
+        model_t = _gpm(model_t, _LC(
+            r=args.lora_t_r, lora_alpha=2 * args.lora_t_r, lora_dropout=0.0,
+            bias="none", target_modules=mods, task_type="CAUSAL_LM"))
+        model_t.train()
+        lora_t_params = [p for p in model_t.parameters() if p.requires_grad]
+        if args.init_lora_t and Path(args.init_lora_t).exists():
+            from peft import set_peft_model_state_dict
+            from safetensors.torch import load_file
+            set_peft_model_state_dict(model_t, load_file(
+                str(Path(args.init_lora_t) / "adapter_model.safetensors")))
+            print(f"warm-start LoRA-9B: {args.init_lora_t}", flush=True)
+        print(f"LoRA tren 9B: {mods} | "
+              f"{sum(p.numel() for p in lora_t_params)/1e6:.1f}M param",
+              flush=True)
+
     mapper = e5.Mapper(len(a_t), len(g_t), Hs, Ht, attn_dim, theta_s, theta_t,
                        attn_rank=args.attn_rank,
                        gdn_per_head=args.gdn_per_head,
@@ -433,6 +467,25 @@ def main():
         print(f"warm-start mapper: {args.init_mapper}", flush=True)
 
     data = load_data(args, tok_s)
+
+    def enc_batch(group):
+        """Gop cac item CUNG DO DAI PROMPT thanh mot lo — khong dem token nao.
+
+        Gold co the khac do dai giua cac mau -> dem gold bang -100 va cham CE
+        co MAT NA. Dem o gold thi vo hai (no khong di qua prefill/GDN); dem o
+        PROMPT moi la thu lam hong cache.
+        """
+        encs = [enc(it) for it in group]
+        cut = torch.cat([e[0] for e in encs], 0)
+        warm = torch.cat([e[1] for e in encs], 0)
+        gmax = max(e[2].shape[1] for e in encs)
+        gold = torch.full((len(encs), gmax), -100, dtype=torch.long,
+                          device="cuda")
+        feed = torch.cat([torch.nn.functional.pad(
+            e[3], (0, gmax - e[2].shape[1]), value=0) for e in encs], 0)
+        for i_, e in enumerate(encs):
+            gold[i_, :e[2].shape[1]] = e[2][0]
+        return cut, warm, gold, feed
 
     def enc(it):
         """(cut, warm, gold_ids, feed). Cat TRAI (bay 2)."""
@@ -490,16 +543,19 @@ def main():
         src = prefill_tbptt(cut, args.tbptt)
         with clock("template"):
             tpl = e5.build_template_from_meta(
-                probe_t, meta_for_len(base_meta, T_BASE, cut.shape[1]))
+                probe_t, meta_for_len(base_meta, T_BASE, cut.shape[1],
+                                      cut.shape[0]))
         with clock("mapper"):
             st = e5.build_student_past(tpl, src, mapper)
         del tpl
         return st
 
     import bitsandbytes as bnb
-    opt = bnb.optim.Adam8bit(
-        [{"params": mapper.params, "lr": args.lr},
-         {"params": lora_params, "lr": args.lora_lr}])
+    _groups = [{"params": mapper.params, "lr": args.lr},
+               {"params": lora_params, "lr": args.lora_lr}]
+    if lora_t_params:
+        _groups.append({"params": lora_t_params, "lr": args.lora_lr})
+    opt = bnb.optim.Adam8bit(_groups)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.steps)
 
     results = {"args": vars(args), "val": [], "train_loss": []}
@@ -514,6 +570,11 @@ def main():
         for f in sorted((out / f"lora_{tag}").glob("*")):
             if f.is_file():
                 hf_up(f, f"lora_{tag}/{f.name}")
+        if lora_t_params:      # LoRA phia DOC — mat no la mat mot phan ba he
+            model_t.save_pretrained(str(out / f"lorat_{tag}"))
+            for f in sorted((out / f"lorat_{tag}").glob("*")):
+                if f.is_file():
+                    hf_up(f, f"lorat_{tag}/{f.name}")
 
     _self_cache = {}
     # tra cuu self tu pseudo_gold.json: {id: 1} voi moi mau 9B TU LAM DUNG.
@@ -605,11 +666,40 @@ def main():
     best, n_skip, n_flat, n_acc = -1, 0, 0, 0
     opt.zero_grad(set_to_none=True)
     t_start = time.time()
+    # ---- gom lo theo DO DAI CHINH XAC ----
+    # Khong dem mot token nao o PROMPT: dem trai lam attention keys sai 96% va
+    # GDN xau hon nen 3,7 lan (probe_batch da do). Item le van chay batch 1.
+    def make_batches(items, B):
+        if B <= 1:
+            return [[x] for x in items]
+        by = {}
+        for x in items:
+            n = len(tok_t(x["prompt"], add_special_tokens=False,
+                          truncation=True,
+                          max_length=args.max_ctx)["input_ids"])
+            by.setdefault(n, []).append(x)
+        out_, leftover = [], []
+        for n, xs in by.items():
+            for k in range(0, len(xs) - len(xs) % B, B):
+                out_.append(xs[k:k + B])
+            leftover += xs[len(xs) - len(xs) % B:]
+        out_ += [[x] for x in leftover]
+        random.Random(SEED).shuffle(out_)
+        n_full = sum(len(g) for g in out_ if len(g) == B)
+        print(f"gom lo B={B}: {len(out_)} lo | {n_full}/{len(items)} item "
+              f"({100*n_full/max(len(items),1):.1f}%) vao duoc lo day",
+              flush=True)
+        return out_
+
+    batches = make_batches(data["train"], args.batch)
+
     for step in range(1, args.steps + 1):
-        it = data["train"][(step - 1) % len(data["train"])]
+        grp = batches[(step - 1) % len(batches)]
+        it = grp[0]
         cev, skipped = None, False
         try:
-            cut, warm, gold_ids, feed = enc(it)
+            cut, warm, gold_ids, feed = (enc(it) if len(grp) == 1
+                                         else enc_batch(grp))
             # BUG DA SUA (2026-08-28, dem duoc bang tokenizer): nguong cu la
             # `< 2` -> nem BO moi item co gold DUNG 1 token. Do that tren
             # 6623 item du lieu moi: musr 474/474 = 100% bi bo, bbh 634/2500
@@ -624,9 +714,14 @@ def main():
             with clock("9B-forward"):
                 o = model_t(input_ids=feed, past_key_values=st, use_cache=True)
             logp = torch.log_softmax(o.logits[:, WARM_P - 1:].float(), -1)
-            nll = -logp.gather(2, gold_ids.unsqueeze(-1)).squeeze(-1)
-            wts = torch.ones_like(nll)
-            wts[:, 0] = FIRST_W          # token quyet dinh
+            # gold dem bang -100 (lo co do dai gold khac nhau) -> gather can
+            # chi so hop le, roi ZERO trong so o cho dem. Neu quen buoc nay thi
+            # CE tinh ca token dem va moi so deu sai am tham.
+            valid = gold_ids >= 0
+            g_safe = gold_ids.clamp(min=0)
+            nll = -logp.gather(2, g_safe.unsqueeze(-1)).squeeze(-1)
+            wts = valid.float()
+            wts[:, 0] = FIRST_W * valid[:, 0].float()   # token quyet dinh
             if args.w_entity > 1.0:
                 # (user duyet 2026-08-29) Doc tay 20 dau ra gsm8k hong cho
                 # thay thu bi pha la CON SO va TEN THUC THE: "Kate 29 tuoi"
@@ -635,13 +730,15 @@ def main():
                 # hien chi danh vao token DAU — dung cho bfcl (token dau la
                 # ten ham) nhung vo nghia cho gsm8k. Danh thang vao chu so va
                 # ten rieng = nham dung trieu chung da quan sat.
-                pieces = tok_t.convert_ids_to_tokens(gold_ids[0].tolist())
-                for pi, pc in enumerate(pieces):
-                    if not pc:
-                        continue
-                    txt = pc.lstrip("Ġ▁ ")
-                    if txt and (txt[0].isdigit() or txt[0].isupper()):
-                        wts[0, pi] = max(float(wts[0, pi]), args.w_entity)
+                for bi in range(gold_ids.shape[0]):
+                    pieces = tok_t.convert_ids_to_tokens(
+                        g_safe[bi].tolist())
+                    for pi, pc in enumerate(pieces):
+                        if not pc or not valid[bi, pi]:
+                            continue
+                        txt = pc.lstrip("Ġ▁ ")
+                        if txt and (txt[0].isdigit() or txt[0].isupper()):
+                            wts[bi, pi] = max(float(wts[bi, pi]), args.w_entity)
             ce = (nll * wts).sum() / wts.sum()
             cev = ce.detach().item()
             # chia cho accum de tong gradient = TRUNG BINH, khong phai TONG
@@ -685,7 +782,7 @@ def main():
             share = " ".join(f"{k} {100*v/tot:.0f}%"
                              for k, v in sorted(T_ACC.items(),
                                                 key=lambda x: -x[1]))
-            print(f"buoc {step}/{args.steps} ce={cev:.4f} "
+            print(f"buoc {step}/{args.steps} B={len(grp)} ce={cev:.4f} "
                   f"{(time.time()-t_start)/step:.2f}s/buoc "
                   f"peak={gib():.2f}GiB", flush=True)
             print(f"    thoi gian: {tot/20:.2f}s/buoc do duoc | {share}",
