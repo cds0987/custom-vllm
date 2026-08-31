@@ -192,28 +192,6 @@ Cập nhật: 2026-08-31.
   dạng hoá dữ liệu. Giả thuyết "mapper quá nhỏ" của user bị bác bằng đo.
 - **Train ĐÃ BÃO HOÀ — hai lần độc lập**: `joint49v` 67→66→62, `joint49w`
   100→95. Thêm bước/thêm-bớt dữ liệu đều không lên.
-- **ĐANG CHẠY — `joint49x`, đợt GỘP (user duyệt 2026-08-31)**: LoRA trên 9B
-  (phía ĐỌC) + gom lô theo độ dài, ấm từ `joint49w`. Lý do LoRA 9B: kiến trúc
-  BẤT ĐỐI XỨNG — phía mã hoá được thích nghi (LoRA 4B), phía dịch được train
-  (mapper), phía ĐỌC đóng băng. Thêm nữa **LoRA 4B chỉ chạm q/k/v/o_proj = chỉ
-  lớp attention (8/32 lớp), chưa adapter nào chạm GDN** — mà E7 chỉ ra GDN mới
-  là chỗ lệch. Nhắm `q_proj,o_proj,in_proj_qkvz,out_proj` = 5,8M tham số.
-  - **Sanity 40 bước PASS**: `verify-meta` KHỚP ở CẢ (T=512,B=1) và (B=2);
-    89,5% item vào được lô đầy (khớp đúng con số đo trước); peak 18,30 GiB/23.
-  - **Tốc độ — đính chính ước tính của tôi**: 2,82 s/**bước** (không phải ~1,7
-    như tôi ước), nhưng mỗi bước nuốt 2 mẫu → **1,41 s/mẫu, nhanh 2,13×**
-    (probe đoán 1,85-1,97×). Cùng thời gian, 1.000 bước nay thấy **2.000 mẫu**.
-    Đúng đòn bẩy cần: chẩn đoán là QUÁ KHỚP nên xem nhiều dữ liệu hơn/phút mới
-    là thứ giúp được. `backward` 47-49% → LoRA 9B đi nhờ đường đã trả tiền.
-  - **CHỐT CHẶN**: thêm dung lượng phía SINH làm việc "ăn gian" dễ hơn. Mốc
-    phân xử đặt TRƯỚC khi chạy: `suite_swe` **>60% VÀ ctx-BỎ vẫn sập** = thành
-    công; ≤60% = không phải phía đọc, nghi phạm quay về **dạng hàm `A·S·B`**;
-    điểm lên mà ctx-BỎ **không** sập = ăn gian, bỏ.
-  - Vá kèm: `eval_big --lora-t` nạp LoRA phía đọc (KHÔNG merge — 9B đang 4-bit,
-    merge là đường đã làm hỏng checkpoint 4B một lần); `run_bigmapped.sh` tự
-    phát hiện `lorat_best`. Quên cờ này = đo mapper với người-đọc chưa thích
-    nghi, tức đo sai hẳn thứ vừa train.
-
 - **`joint49y` TRAIN XONG (2026-08-31)** — best bước 750/1000, ấm từ `joint49w`
   đúng cấu hình gốc (max-ctx 4096, batch 2 × accum 2 = 4 mẫu/lần cập nhật, chỉ
   chừa hai biến: LoRA-9B + gom lô). **score 103, vượt kỷ lục joint49w (100)**:
@@ -228,13 +206,44 @@ Cập nhật: 2026-08-31.
   cấu hình 49w rồi chạy lại tên mới `joint49y`. (2) lệnh dọn tiến trình bằng
   `pkill -f e9_joint.py` khớp luôn dòng lệnh của chính shell gọi nó (bẫy cũ,
   dạng khác) — sửa bằng đọc `/proc/*/cmdline` loại trừ pid của chính mình.
-- **ĐANG CHẠY (nền) — đo niêm phong `joint49y`**: `run_joint49y_seal.sh` =
-  mapped đầy đủ 7 bộ (1.875 mẫu) + đối chứng ctx-BỎ trên suite_swe+musr (nơi
-  4B/9B gặp nhau về QUAN HỆ). Vài giờ, transformers tuần tự. Chốt chặn đã đặt
-  TRƯỚC: `suite_swe >60%` VÀ ctx-BỎ vẫn sập = LoRA-9B đọc thật; `suite_swe`
-  không vượt = nghi phạm quay về dạng hàm `A·S·B` của mapper; điểm lên mà
-  ctx-BỎ KHÔNG sập = ăn gian, bỏ. Vá kèm: `eval_big --lora-t` nạp LoRA phía
-  đọc (không merge, 9B đang 4-bit); `run_bigmapped.sh` tự phát hiện `lorat_best`.
+- **`joint49y` NIÊM PHONG XONG (2026-08-31), 1.650+179 mẫu** — so `joint49w`
+  (cột `4B+LoRA+map→9B` cũ):
+
+  | bộ | 49w | **49y** | delta |
+  |---|---|---|---|
+  | bfcl | 88,5% | **94,0%** | +5,5 |
+  | bbh | 66,0% | 65,0% | −1,0 |
+  | needle | 98,3% | 94,6% | −3,7 |
+  | suite_mid | 97,6% | **99,2%** | +1,6 |
+  | suite_rag | 90,5% | **98,4%** | +7,9 |
+  | suite_swe | 47,2% | **56,1%** | **+8,9** |
+  | musr | 42,9% | **58,9%** | **+16,0** |
+
+  **Đối chứng ctx-BỎ (chốt chặn đặt trước train)**: suite_swe đầy đủ 56,1% →
+  ctx-BỎ **0,0%**; musr đầy đủ 58,9% → ctx-BỎ **0,0%**. Sập hoàn toàn ở cả hai
+  → **KHÔNG ăn gian** — LoRA-9B không học tủ đáp án, vẫn phụ thuộc thật vào
+  cache truyền sang.
+
+  **Đọc theo đúng mốc đã đặt**: `suite_swe 56,1% ≤ 60%` → nhánh giữa kích
+  hoạt: KHÔNG phải lỗi phía đọc nữa (LoRA-9B đã giúp thật, +8,9 và +16,0 ở
+  suite_swe/musr, +5,5 ở bfcl) — nghi phạm cho phần còn thiếu quay về **dạng
+  hàm `A·S·B` của mapper**. Không rơi vào nhánh "bỏ": không ăn gian, các bộ
+  khác không tụt (trừ needle −3,7 và bbh −1,0, trong biên nhiễu).
+  **Đáng chú ý**: val 7 mẫu lúc train đoán suite_swe 57,1% — khớp gần đúng số
+  thật trên 123 mẫu niêm phong (56,1%), dù mẫu rất nhỏ.
+  **Checkpoint `joint49y/` đã ở HF** (mapper_best/lora_best/lorat_best).
+  Kế tiếp hợp lý: thử mở rộng `gdn-terms`/`attn-rank` của mapper (đúng nghi
+  phạm dạng hàm) thay vì tiếp tục siết phía LoRA — phía đọc đã chứng minh
+  không phải nút cổ chai chính.
+  **Sự cố vận hành trong đợt eval (đã sửa)**: quên `--decode-batch` khi phóng
+  → chạy đơn từng mẫu >1h chỉ được 625/1650; kill an toàn (eval_big.py tự
+  resume theo id), phóng lại `DBATCH=8` (đã đo 6,7x), công kiểm 25 mẫu
+  batch-8-vs-batch-1 khớp 25/25. Bug thứ hai: `run_joint49y_seal.sh` dùng
+  `if [ -f ket_qua.json ]` để bỏ qua lượt đã xong — nhưng file được ghi TỪNG
+  PHẦN (mỗi 25 mẫu) nên 625 mẫu dở dang cũng khiến nó nghĩ "đã xong" và bỏ
+  qua phần còn lại. Sửa: bỏ hẳn vòng kiểm file, để `eval_big.py` tự resume
+  theo mẫu (nó vốn đã làm đúng việc này).
+
 - **BƯỚC KẾ (chờ user duyệt)**: (1) ✅ đã làm — gom lô theo độ dài cho train
   (gold có mặt nạ + `verify_meta` cho cặp (T,B)); (2) đọc tay đầu ra 9B trên
   4 tác vụ bị 0/30; (3) thêm NHIỆM VỤ đòi quan hệ vào dữ liệu train — làm ở
