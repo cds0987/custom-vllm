@@ -46,6 +46,38 @@ T2 = 32   # 96 OOMed: backward graph through 48 GDN torch-fallback layers ~3.7GB
 CONV_WARM = 4
 
 
+def patch_recurrent_rebind():
+    """GDN cua transformers 5.15 cap nhat recurrent_states bang .copy_() IN-PLACE
+    -> vo autograd ngay khi state mang grad. Phai goi TRUOC khi nap model.
+
+    Da co "hoc phi 3 probe" ghi trong e9_joint, va probe_train_batch thanh probe
+    THU TU dinh dung bay nay (2026-08-31). Dat o day de moi script dung chung
+    thay vi moi script tu nho.
+    """
+    try:
+        from transformers.cache_utils import LinearAttentionLayer
+    except ImportError as e:
+        print("PATCH_IMPORT_FAIL", e, flush=True)
+        return False
+    if getattr(LinearAttentionLayer, "_rebind_patched", False):
+        return True
+    orig = LinearAttentionLayer.update_recurrent_state
+
+    def _urs(self, recurrent_states, state_idx=0, **kw):
+        cur = (self.recurrent_states.get(state_idx)
+               if isinstance(self.recurrent_states, dict) else None)
+        if cur is not None and (cur.requires_grad
+                                or recurrent_states.requires_grad):
+            self.recurrent_states[state_idx] = recurrent_states
+            return recurrent_states
+        return orig(self, recurrent_states, state_idx, **kw)
+
+    LinearAttentionLayer.update_recurrent_state = _urs
+    LinearAttentionLayer._rebind_patched = True
+    print("patched update_recurrent_state (rebind khi co grad)", flush=True)
+    return True
+
+
 def load_4bit(name):
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig

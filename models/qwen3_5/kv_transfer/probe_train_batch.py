@@ -85,6 +85,8 @@ def main():
     import torch
     from transformers import AutoConfig
     e5 = _load("e5_train")
+    # BAT BUOC truoc khi nap model — xem docstring cua ham.
+    e5.patch_recurrent_rebind()
 
     tok_s, model_s = e5.load_4bit(args.src_model)
     from peft import LoraConfig, get_peft_model
