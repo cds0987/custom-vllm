@@ -46,6 +46,10 @@ fi
 [ -f "$CK/mapper_best.pt" ] || { echo "KHONG THAY $CK/mapper_best.pt"; exit 1; }
 LORA=""
 [ -d "$CK/lora_best" ] && LORA="--lora $CK/lora_best"
+# LoRA phia DOC (co tu joint49x tro di). Quen co nay = do mapper voi nguoi doc
+# CHUA thich nghi, tuc do sai han thu vua train -> tu phat hien theo thu muc.
+[ -d "$CK/lorat_best" ] && LORA="$LORA --lora-t $CK/lorat_best"
+echo "adapter: ${LORA:-khong co}"
 
 # GIAI DOAN 1 (user chot): chi do cac ho DA GHI NHAN mapper chay. gsm8k va
 # suite_math de sang giai doan 2 — gsm8k ton 320 token/mau (dat nhat ca

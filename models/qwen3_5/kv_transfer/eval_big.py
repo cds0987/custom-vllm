@@ -515,6 +515,15 @@ def run_mapped(args):
 
     # PHA 2: 9B mot minh -> map + decode
     tok_t, model_t = e5.load_4bit(args.tgt_model)
+    if args.lora_t:
+        # LoRA phia DOC. Phai gan TRUOC probe/template de moi forward trong
+        # luot eval di qua DUNG cai model da duoc train cung mapper. KHONG
+        # merge_and_unload: trong so 9B dang 4-bit, merge la duong da lam hong
+        # checkpoint 4B mot lan (torchao 0.10.0) — giu nguyen bo boc PeftModel.
+        from peft import PeftModel as _PM
+        model_t = _PM.from_pretrained(model_t, args.lora_t)
+        model_t.eval()
+        print(f"da nap LoRA 9B (khong merge): {args.lora_t}", flush=True)
     tok_t.truncation_side = "left"
     theta_t = e5.e1.get_rope_theta(model_t.config.get_text_config())
     with torch.no_grad():
@@ -768,6 +777,10 @@ def main():
                          "copy nguyen cung dat ~98% needle o quy mo 1650 thi "
                          "mapper KHONG can thiet cho phan dang ban duoc.")
     ap.add_argument("--lora", default="")
+    ap.add_argument("--lora-t", default="",
+                    help="LoRA tren 9B (phia DOC), thu mua adapter. Bo qua co "
+                         "nay khi checkpoint CO lorat_ = do mapper voi nguoi "
+                         "doc CHUA thich nghi -> so do sai han thu vua train.")
     ap.add_argument("--max-len", type=int, default=6144)
     ap.add_argument("--slice", default="")
     ap.add_argument("--decode-batch", type=int, default=1,
