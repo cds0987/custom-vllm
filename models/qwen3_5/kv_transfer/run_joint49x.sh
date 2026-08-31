@@ -101,10 +101,18 @@ fi
 MODS="${LORAT_MODS:-q_proj,o_proj,in_proj_qkvz,out_proj}"
 BATCH="${BATCH:-2}"
 
+# GHEP CUNG CAU HINH joint49w — de chi con DUNG HAI bien doi.
+# Hoc phi (dot dau, 2026-08-31): phong voi max-ctx 16384 + accum 1 trong khi
+# joint49w train o 4096 + accum 4, tuc doi BON thu cung luc. Val ra needle
+# 0/15 (49w: 15/15) ma KHONG quy duoc cho ai: needle phu thuoc truc tiep vao
+# do dai ngu canh nen ctx gap 4 lan da doi chinh cac mau val.
+# accum 2 x batch 2 = 4 mau/lan cap nhat = DUNG bang 49w (1 x 4).
+# LUU Y: khong dat dong '#' nao BEN TRONG chuoi COMMON — shell khong coi do la
+# chu thich, no thanh tham so truyen thang cho e9_joint.py.
 COMMON="--tgt-model Qwen/Qwen3.5-9B
   --data-file /content/train_items.json
   --pseudo-gold /content/pseudo_gold.json
-  --max-ctx 16384 --tbptt 128 --gold-cap 256 --gold-envelope 16384:256
+  --max-ctx ${MAXCTX:-4096} --tbptt 128 --gold-cap 256 --gold-envelope 16384:256
   --drop-kinds ${DROP:-gsm8k,suite_math}
   --no-offload
   --batch $BATCH
@@ -118,7 +126,7 @@ if [ "${GO:-0}" != "1" ]; then
   # CE). Lech chieu batch = cache vo nghia ma khong bao loi nao -> phai de
   # verify-meta bat truoc khi phong 1000 buoc.
   python3 -u e9_joint.py $COMMON \
-    --steps 40 --sanity 40 --val-every 100000 \
+    --accum ${ACCUM:-2} --steps 40 --sanity 40 --val-every 100000 \
     --verify-meta 512 \
     --out "/content/${NAME}_sanity" \
     --hf-repo gunnybd01/qwen35-kv-mapper-4b-27b --hf-prefix "${NAME}_sanity"
@@ -133,7 +141,7 @@ step "TRAIN $NAME (${STEPS:-1000} buoc, dung theo val)"
 # thu hoi ~1,5 gio/lan. Moc thua thi moi lan mat runtime chi mat mot mau.
 python3 -u e9_joint.py $COMMON \
   --steps ${STEPS:-1000} --val-every ${VALEVERY:-200} --val-n ${VALN:-150} \
-  --ce-floor 0.05 --patience ${PAT:-3} --accum ${ACCUM:-1} \
+  --ce-floor 0.05 --patience ${PAT:-3} --accum ${ACCUM:-2} \
   --verify-meta 512 \
   --out "/content/$NAME" \
   --hf-repo gunnybd01/qwen35-kv-mapper-4b-27b --hf-prefix "$NAME"
