@@ -314,29 +314,35 @@ class Mapper:
         return self._map_attn_impl(j, k, v)
 
     def _map_attn_impl(self, j, k, v):
-        """k,v: (1, H, T, dh) source tensors on cuda. Returns mapped bf16."""
+        """k,v: (B, H, T, dh) -> (B, H, T, dh) bf16.
+
+        Ban cu ghim cung B=1 (`reshape(T, H*dh)`), tuc BATCH 1 LA GIOI HAN CUA
+        CHINH MAPPER — khong phai cua bo nho hay cua transformers. Gio giu chieu
+        batch xuyen suot; voi B=1 moi phep tinh y het ban cu nen checkpoint va
+        so lieu cu van dung nguyen.
+        """
         import torch
-        _, H, T, dh = k.shape
+        B, H, T, dh = k.shape
         cos_s, sin_s = rope_cs(T, dh, self.theta_s, k.device)
         cos_t, sin_t = rope_cs(T, dh, self.theta_t, k.device)
         k_st = rope_apply(k.float(), cos_s, sin_s, -1)         # strip src rope
-        flat_k = k_st.permute(0, 2, 1, 3).reshape(T, H * dh)   # (T, 1024)
-        flat_v = v.float().permute(0, 2, 1, 3).reshape(T, H * dh)
+        flat_k = k_st.permute(0, 2, 1, 3).reshape(B, T, H * dh)
+        flat_v = v.float().permute(0, 2, 1, 3).reshape(B, T, H * dh)
         if self.attn_rank:      # W = I + U@V  -> x@W = x + (x@U)@V
             ok = flat_k + (flat_k @ self.UK[j]) @ self.VK_[j] + self.bK[j]
             ov = flat_v + (flat_v @ self.UV[j]) @ self.VV_[j] + self.bV[j]
         else:
             ok = flat_k @ self.WK[j] + self.bK[j]
             ov = flat_v @ self.WV[j] + self.bV[j]
-        mk = ok.reshape(1, T, H, dh).permute(0, 2, 1, 3)
-        mv = ov.reshape(1, T, H, dh).permute(0, 2, 1, 3)
+        mk = ok.reshape(B, T, H, dh).permute(0, 2, 1, 3)
+        mv = ov.reshape(B, T, H, dh).permute(0, 2, 1, 3)
         mk = rope_apply(mk, cos_t, sin_t, +1)                  # apply tgt rope
         return mk.to(torch.bfloat16), mv.to(torch.bfloat16)
 
     def map_gdn(self, j, S):
-        """S: (1, Hs, dk, dv) -> (1, Ht, dk, dv)."""
+        """S: (B, Hs, dk, dv) -> (B, Ht, dk, dv). Ban cu chi nhan B=1."""
         import torch
-        S = S[0].float()
+        S = S.float()
         rms = S.pow(2).mean((-2, -1), keepdim=True).sqrt() + 1e-6
         Sn = S / rms                                            # tame sv_max~110
         # gdn_per_head: A,B co dang (Hs,128,128) -> A@Sn@B thanh batched
@@ -347,8 +353,13 @@ class Mapper:
         acc = self.A[j][0] @ Sn @ self.B[j][0]
         for r in range(1, self.gdn_terms):
             acc = acc + self.A[j][r] @ Sn @ self.B[j][r]
-        mapped = torch.einsum("ts,sij->tij", self.alpha[j], acc)
-        return (mapped * rms.mean())[None].to(torch.bfloat16)
+        # "ts,bsij->btij": tron head nguon -> head dich, GIU chieu batch.
+        mapped = torch.einsum("ts,bsij->btij", self.alpha[j], acc)
+        # rms.mean() TREN CA CHIEU BATCH lam moi mau nhan he so khac
+        # voi khi chay rieng (bai kiem batch bat duoc: lech 7,8e-3).
+        # Phai lay trung binh THEO TUNG MAU.
+        return (mapped * rms.mean(dim=(1, 2, 3), keepdim=True)
+                ).to(torch.bfloat16)
 
     def state_dict(self):
         d = {"bK": self.bK, "bV": self.bV, "alpha": self.alpha,

@@ -143,6 +143,29 @@ def main():
         except Exception as e:
             chk(f"R={terms}: dung duoc optimizer", False, str(e)[:60])
 
+    # --- 8. BATCH: chay lo 2 phai giong het chay tung mau rieng le ---
+    # map_attn tung ghim cung B=1 (reshape(T, H*dh)) -> batch 1 la gioi han
+    # cua CHINH MAPPER. Bai kiem nay chan viec sua batch lam lech ket qua.
+    m = mk(1)
+    S2 = torch.randn(2, HS, 128, 128)
+    for j in range(N_GDN):
+        both = m.map_gdn(j, S2).float()
+        a0 = m.map_gdn(j, S2[0:1]).float()
+        a1 = m.map_gdn(j, S2[1:2]).float()
+        chk(f"gdn batch2 == rieng le (lop {j})",
+            torch.allclose(both[0:1], a0, atol=TOL)
+            and torch.allclose(both[1:2], a1, atol=TOL),
+            f"lech {(both[0:1]-a0).abs().max():.2e}")
+    K2 = torch.randn(2, 4, 16, DIM // 4)
+    V2 = torch.randn(2, 4, 16, DIM // 4)
+    for j in range(N_ATTN):
+        bk, bv = m.map_attn(j, K2, V2)
+        s0k, s0v = m.map_attn(j, K2[0:1], V2[0:1])
+        chk(f"attn batch2 == rieng le (lop {j})",
+            torch.allclose(bk[0:1].float(), s0k.float(), atol=TOL)
+            and torch.allclose(bv[0:1].float(), s0v.float(), atol=TOL),
+            f"lech {(bk[0:1].float()-s0k.float()).abs().max():.2e}")
+
     print(f"\n{ok} dat / {fail} hong")
     sys.exit(1 if fail else 0)
 
