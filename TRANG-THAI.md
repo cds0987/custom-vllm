@@ -130,25 +130,12 @@ Cập nhật: 2026-08-31.
 
   **Bỏ chữ "cascade" khỏi mọi bảng (user chốt)** — ghi thẳng thành phần;
   `→ 9B` = 9B sinh câu trả lời từ cache chuyển sang.
-- **ĐỌC KẾT QUẢ**:
-  (a) **Mapper LUÔN tốt hơn phương án thay thế trực tiếp** (bê thẳng cache):
-  bfcl 2,0→88,5 (**+86,5**), suite_rag 42,1→90,5, bbh 35,4→66,0. Mapper
-  không "làm hỏng" gì — nó làm rất tốt việc dịch cache.
-  (b) **Nhưng so với để 4B TỰ trả lời thì thua ở 5/7 bộ**: musr −26,7,
-  suite_swe −25,2, suite_rag −9,5, suite_mid −2,4, needle −1,7. Chỉ bfcl
-  (+27,5) và bbh (+14,7) là có lợi. Lý do: 4B vốn đã 98-100% ở các bài truy hồi.
-  (c) **LoRA và mapper CỘNG HƯỞNG, không cộng dồn** (ma trận 2×2): musr —
-  mapper một mình +1,8, LoRA một mình +10,7, ghép lại +19,7. suite_swe —
-  mapper một mình **−11,4**, ghép lại **+19,6**. Chúng train cùng nhau nên
-  tách ra là ra ngoài phân phối của nhau.
-  (d) **Ranh giới truy-hồi/quan-hệ**, khớp 3 nguồn độc lập: hại nhẹ ở lấy
-  nguyên văn (needle −1,7, suite_mid −2,4), hại nặng ở liên hệ thực thể
-  (suite_swe −25,2, musr −26,7). Khớp probe kể-lại-đề (số giữ 73%, quan hệ
-  giữ 33%) và định luật E7 (attention CCA 0,93-0,98 mang token; GDN
-  CCA 0,23-0,9 mang quan hệ).
-  (e) **E1 kết luận vượt dữ liệu**: "copy nguyên giữ 100% needle" đo trên
-  12 mẫu; trên 240 mẫu với alpha đúng là **61,2%**. Thứ tự thì vẫn đúng
-  (needle 61,2 ≫ musr 21,4 ≫ suite_swe 11,4).
+- **ĐỌC KẾT QUẢ (bản đầy đủ a-e ở STATUS.md)**: mapper luôn tốt hơn bê thẳng
+  cache (bfcl +86,5); nhưng so 4B tự trả lời thì thua 5/7 bộ (musr −26,7,
+  suite_swe −25,2 — **số suite_swe/musr này SAU ĐÓ phát hiện nghi ngờ bởi
+  lỗi chấm điểm, xem mục kiểm log bên dưới**); LoRA+mapper cộng hưởng không
+  cộng dồn; ranh giới truy-hồi/quan-hệ khớp 3 nguồn độc lập; E1 kết luận
+  vượt dữ liệu (61,2% thật trên 240 mẫu, không phải 100% trên 12 mẫu).
 - **CÒN TREO — lớn nhất**: `4B 45,3% > 9B 30,6%` trên bbh, tái lập trên **cả
   hai engine** (vLLM 30,3 / transformers 30,6) nên KHÔNG phải lỗi engine.
   Cộng với 9B được **đúng 0/30** trên movie_recommendation, disambiguation_qa,
@@ -206,6 +193,35 @@ Cập nhật: 2026-08-31.
   cấu hình 49w rồi chạy lại tên mới `joint49y`. (2) lệnh dọn tiến trình bằng
   `pkill -f e9_joint.py` khớp luôn dòng lệnh của chính shell gọi nó (bẫy cũ,
   dạng khác) — sửa bằng đọc `/proc/*/cmdline` loại trừ pid của chính mình.
+- **KIỂM ĐỌC LOG (2026-08-31, lệnh user "check relationship có thực sự cải
+  tiến hay không") — ĐẢO NGƯỢC MỘT NỬA kết luận trên**:
+  - **`suite_swe`: cải tiến +8,9 điểm là GIẢ, do lỗi chấm điểm.** `suite_gen.score`
+    khớp CHUỖI CON (`expect in text`), không khớp trọn từ. Cả 49w lẫn 49y đều
+    sinh số garble/lặp ở đuôi tên hàm (`resolve_shards_30393930936630303036`);
+    điểm "đúng" chỉ vì số garble tình cờ bắt đầu bằng đúng chữ số kỳ vọng.
+    Tính lại theo tiêu chí SẠCH (đáp án phải là token trọn vẹn): 49w
+    **2,4%**, 49y **3,3%** — gần như bằng nhau, KHÔNG có cải tiến thật.
+    Đọc tay 39 mẫu "cả hai đều đúng": không mẫu nào sinh tên hàm sạch.
+  - **`musr`: cải tiến có thật nhưng nhỏ hơn báo cáo.** Chấm bằng regex bắt
+    chữ A-F ĐẦU TIÊN — không dính lỗi khớp chuỗi con nhưng nhạy với việc mô
+    hình liệt kê hết lựa chọn (luôn bắt "A" trước) hay trả lời thẳng. Tín hiệu
+    thật: tỷ lệ đầu ra SUY BIẾN/LẶP TOKEN (dấu hiệu decode hỏng) giảm rõ —
+    49w 24/56 (42,9%) → 49y 12/56 (21,4%), cải tiến chất lượng decode thật.
+    Nhưng 4/9 mẫu sai→đúng vẫn là đầu ra lặp tình cờ bắt đúng chữ cái —
+    mức tăng thật ước ~+8,9 điểm (5/56), không phải +16,0 như báo cáo.
+  - **Kết luận:** LoRA-9B + gom lô KHÔNG chứng minh được cải tiến hiểu quan hệ
+    thực thể như số liệu ban đầu gợi ý. `suite_swe` không cải tiến gì (cả hai
+    ~2-3% "sạch"). `musr` có cải tiến thật nhưng khiêm tốn, và biểu hiện chủ
+    yếu là GIẢM đầu ra suy biến (decode ổn định hơn), không rõ là hiểu quan hệ
+    tốt hơn. Điểm tổng có trọng số 75,5→77,1% cũng cần đọc lại dưới ánh sáng
+    này — phần lớn mức tăng đến từ bfcl/suite_rag (sạch, không bị bug này),
+    KHÔNG đến từ suite_swe/musr như diễn giải trước.
+  - **VIỆC CẦN LÀM TRƯỚC KHI TIN BẤT KỲ SỐ NÀO TIẾP THEO trên suite_swe**: sửa
+    `suite_gen.score` để loại trừ trường hợp số garble trùng tiền tố (ví dụ
+    yêu cầu ký tự ngay sau đáp án không phải chữ số), rồi chấm lại TOÀN BỘ
+    ma trận cũ (có thể nhiều con số suite_swe trong báo cáo trước đó cũng bị
+    lỗi này, không riêng joint49y).
+
 - **`joint49y` = CHECKPOINT THAM CHIẾU MỚI (thay `joint49w`)**. Điểm tổng có
   trọng số theo n (1.650 mẫu): 4B một mình 67,0% | 9B một mình 61,0% |
   `joint49w` 75,5% → **`joint49y` 77,1%**. Tăng thật nhưng khiêm tốn ở mức
