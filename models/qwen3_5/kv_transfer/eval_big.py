@@ -404,8 +404,16 @@ def run_mapped(args):
         n0 = len(items)
         items = [it for it in items if it["bench"] in keep]
         print(f"loc bo: {n0} -> {len(items)} mau ({sorted(keep)})", flush=True)
-    spill = Path("/content/big_spill")
+    # Spill mang TEN CAU HINH CUA 4B, khong phai ten chung: cache 4B chi phu
+    # thuoc (prompt, co-LoRA-hay-khong) — KHONG phu thuoc mapper. Cac luot so
+    # sanh bien the mapper co pha A GIONG HET nhau, nen dat ten dung thi lan
+    # sau bo qua duoc 5 phut prefill. Truoc day moi luot `rm -rf` roi lam lai.
+    stag = "lora" if args.lora else "base"
+    spill = Path(f"/content/spill_{stag}")
     spill.mkdir(parents=True, exist_ok=True)
+    n_have = len(list(spill.glob("*.pt")))
+    if n_have:
+        print(f"dung lai {n_have} cache 4B da co o {spill}", flush=True)
 
     # Doc ket qua da cham TRUOC pha A. Neu khong, sau moi lan recycle pha A se
     # prefill lai ca 1875 mau (~50 phut) du phan lon da co diem.
@@ -587,9 +595,21 @@ def run_mapped(args):
 
     @torch.no_grad()
     def run_group(grp):
-        """Ca lo CUNG bench (nen cung n_new)."""
+        """Ca lo CUNG bench (nen cung n_new). OOM thi TU CHIA DOI lo va thu
+        lai — de --decode-batch dat cao ma khong so chet giua chung."""
         if len(grp) == 1:
             return [run_one(grp[0])]
+        try:
+            return _run_group_impl(grp)
+        except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            h = len(grp) // 2
+            print(f"  OOM o lo {len(grp)} -> chia doi {h}+{len(grp)-h}",
+                  flush=True)
+            return run_group(grp[:h]) + run_group(grp[h:])
+
+    @torch.no_grad()
+    def _run_group_impl(grp):
         pasts, warms = [], []
         for it in grp:
             p_, w_ = build_one(it)
