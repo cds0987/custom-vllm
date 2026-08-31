@@ -193,28 +193,43 @@ Cập nhật: 2026-08-31.
   cấu hình 49w rồi chạy lại tên mới `joint49y`. (2) lệnh dọn tiến trình bằng
   `pkill -f e9_joint.py` khớp luôn dòng lệnh của chính shell gọi nó (bẫy cũ,
   dạng khác) — sửa bằng đọc `/proc/*/cmdline` loại trừ pid của chính mình.
-- **KIỂM ĐỌC LOG (2026-08-31, lệnh user "check relationship có thực sự cải
-  tiến hay không") — điểm THÔ của cả `suite_swe` và `musr` là thang đo tồi,
-  nhưng sau khi tách đúng lớp, quan hệ THẬT SỰ được mang theo tốt hơn:**
-  - **`suite_swe` điểm thô (+8,9) là GIẢ**: `suite_gen.score` khớp CHUỖI CON,
-    và cả 49w/49y đều garble số ID ở đuôi tên hàm (`resolve_shards_3039...`)
-    — trúng chỉ vì số garble tình cờ bắt đúng tiền tố. Đáp án gồm 2 phần:
-    `flush_buffers` (QUAN HỆ hành vi↔hàm — phân biệt được với mồi nhử cùng
-    động từ khác nghĩa `flush_batches`) và `_10` (ID vô nghĩa). Đo riêng
-    verb_noun (bỏ số, kiểm không lỏng: chỉ 3/123 đề có mồi nhử trùng):
-    **49w 73,2% → 49y 82,9% (+9,7, THẬT)**. Số ID garble ở CẢ HAI — khớp
-    "định luật biên mỏng" (decode số gần vực số học), không phải lỗi hiểu.
-  - **`musr` điểm thô (+16,0) là ước THẤP, thật còn cao hơn**: chấm bằng
-    chữ A-F ĐẦU TIÊN, nhạy với đầu ra lặp `A) A) A)...` ăn may trúng "A"
-    (lựa chọn đầu). Lọc "đúng VÀ không suy biến": **49w 12,5% → 49y 41,1%
-    (+28,6)** — đa số điểm cũ của 49w là ăn may lặp chữ A. Đối chứng: đáp
-    án đúng của 49y trải đều A/B/C (9/8/6, khớp tỷ lệ tổng thể 14/20/17),
-    không thiên vị — cải tiến thật.
-  - **Kết luận: LoRA-9B CÓ cải tiến mang quan hệ đi đúng** — cả hành
-    vi↔danh tính lẫn suy luận nhiều bước — mạnh hơn số thô ban đầu, không
-    yếu hơn. Điểm thô (chuỗi con/chữ cái đầu) là thang đo tồi cho hai bộ
-    này, cần vá `suite_gen.score` (đòi ký tự sau đáp án không phải chữ số)
-    và chấm lại toàn ma trận trước khi trích dẫn số `suite_swe` nào khác.
+- **KIỂM ĐỌC LOG (2026-08-31)**: điểm thô `suite_swe`/`musr` là thang đo tồi
+  (khớp chuỗi con trên số garble; chữ A-F đầu tiên nhạy đầu ra lặp). Đo đúng
+  lớp: verb_noun `suite_swe` +9,7 (73,2→82,9%), musr sạch +28,6 (12,5→41,1%)
+  — LoRA-9B cải tiến THẬT, mạnh hơn số thô ban đầu. Chi tiết đầy đủ + rà soát
+  mở rộng ra cả ma trận cũ ở mục ngay dưới.
+
+- **RÀ SOÁT TOÀN BỘ (2026-08-31, lệnh user "cập nhật lại hết, verify lại cái
+  nào sai") — lỗi thang đo LAN RỘNG hơn tưởng, không riêng 49w/49y:**
+  - Tải lại văn bản gốc của 4 cấu hình cascade cũ (bê nguyên+LoRA, mapper-
+    không-LoRA, joint49w, joint49y) — khớp CHÍNH XÁC điểm thô đã công bố ở
+    3/4, xác nhận đáng tin để tính lại verb_noun/sạch. Ma trận 2×2 LoRA×mapper
+    SUITE_SWE giờ đúng theo verb_noun: không-LoRA+mapper=3,3%, LoRA-không-
+    mapper=52,0%, LoRA+mapper=73,2% — **cộng hưởng vẫn đúng** (mapper thêm
+    +21,2 khi có LoRA). MUSR đảo chiều: mapper giờ có vẻ LÀM GIẢM điểm sạch
+    ở cả hai hàng (trước đó tưởng "+1,8/+10,8 cộng hưởng") — cần train/đo
+    lại, chưa chốt.
+  - **Phát hiện khoảng trống dữ liệu mới**: cấu hình "bê nguyên, không LoRA
+    không mapper" (11,4%/21,4% dùng trong nhiều bảng cũ) — file văn bản tải
+    lại KHÔNG khớp con số này (raw 0,0%/1,8% thay vì 11,4%/21,4%, đầu ra là
+    rác thuần `?????`/`1: 1: 1:...`). Khả năng là một lượt chạy "bê nguyên"
+    khác (trước/sau alpha correction). KHÔNG âm thầm ghi đè — gắn cờ "chưa
+    xác minh" trong mọi bảng dùng số này, chờ tìm lại đúng file hoặc chạy lại.
+  - **Bằng chứng cơ chế mạnh nhất, độc lập điểm số**: tỷ lệ đầu ra suy biến/
+    lặp token trên TOÀN BỘ 1.650 mẫu (không riêng 2 bộ) giảm đều theo từng
+    thành phần: LoRA-4B-không-mapper 23,6% → mapper-không-LoRA 16,8% →
+    LoRA+mapper(49w) 16,1% → **+LoRA-9B(49y) 8,4%**. Đo trực tiếp trên văn
+    bản sinh ra, không qua hàm chấm nào — không thể bị lỗi thang đo.
+  - **"Mapper đóng góp bao nhiêu"** (so 4B+LoRA tự trả lời vs qua mapper):
+    phát hiện so sánh KHÔNG cân xứng — vế trái (4B decode cache CỦA CHÍNH
+    NÓ) không có lý do bị nhiễu garble cross-cache, vế phải (qua mapper)
+    thì có. Mức "hại nặng −25,2/−26,7" công bố trước đây phóng đại thiệt
+    hại thật; quy mô đúng chưa đo lại được (thiếu văn bản gốc phía 4B+LoRA
+    tự trả lời để tính verb_noun/sạch tương đương).
+  - Báo cáo HTML đã cập nhật toàn bộ theo phát hiện này (bảng đầy đủ, mapper
+    đóng góp, ranh giới quan hệ, ma trận 2×2, mục mới "LoRA-9B: dạy 9B đọc
+    cache" — cơ chế module + bằng chứng), cùng URL:
+    https://claude.ai/code/artifact/b20fe8d6-0e21-44d1-afa8-b1622d62385a
 
 - **`joint49y` = CHECKPOINT THAM CHIẾU MỚI (thay `joint49w`)**. Điểm tổng có
   trọng số theo n (1.650 mẫu): 4B một mình 67,0% | 9B một mình 61,0% |
