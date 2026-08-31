@@ -128,6 +128,21 @@ def main():
             chk(f"round-trip R=4 (lop {j})", torch.allclose(a, b, atol=TOL),
                 f"lech max {(a - b).abs().max():.2e} (nguong bf16 {TOL})")
 
+    # --- 7. MOI THAM SO PHAI LA TENSOR LA (optimizer tu choi non-leaf) ---
+    # Bug that 2026-08-31: A_r = base.requires_grad_(True) roi B_r =
+    # base.clone() -> ban sao nam trong do thi, khong phai la. Forward van
+    # chay nen EVAL khong lo ra; chi chet luc dung optimizer.
+    for terms in (1, 4):
+        m = mk(terms, per_head=(terms == 4))
+        bad = [j for j, q in enumerate(m.params) if not q.is_leaf]
+        chk(f"R={terms}: moi tham so la tensor LA", not bad,
+            f"{len(bad)} tensor khong phai la")
+        try:
+            torch.optim.SGD(m.params, lr=1e-3)
+            chk(f"R={terms}: dung duoc optimizer", True)
+        except Exception as e:
+            chk(f"R={terms}: dung duoc optimizer", False, str(e)[:60])
+
     print(f"\n{ok} dat / {fail} hong")
     sys.exit(1 if fail else 0)
 

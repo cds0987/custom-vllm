@@ -256,9 +256,13 @@ class Mapper:
                     base = eye.clone()
                 # so hang r=0 = dong nhat (hoac checkpoint cu khi load);
                 # so hang r>0 KHOI TAO BANG 0 -> tong = y het ban R=1.
-                A_r = (base if r == 0 else torch.zeros_like(base)
-                       ).requires_grad_(True)
-                B_r = base.clone().requires_grad_(True)
+                # .detach() BAT BUOC: neu lay `base` (da requires_grad) roi
+                # .clone() thi ban sao la tensor KHONG PHAI LA, va optimizer
+                # nem "can't optimize a non-leaf Tensor" — loi nay khong lo ra
+                # khi chi chay forward (eval), chi chet luc train.
+                A_r = (base.clone() if r == 0 else torch.zeros_like(base)
+                       ).detach().requires_grad_(True)
+                B_r = base.clone().detach().requires_grad_(True)
                 As.append(A_r); Bs.append(B_r)
                 self.params += [A_r, B_r]
             self.alpha.append(a); self.A.append(As); self.B.append(Bs)
