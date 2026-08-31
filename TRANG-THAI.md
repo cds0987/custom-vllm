@@ -4,7 +4,7 @@ File này được CLAUDE.md nạp tự động đầu mỗi phiên. Claude TỰ
 trạng thái thay đổi — KHÔNG cần hỏi user. Giới hạn cứng ≤300 dòng; chi tiết dồn
 sang `STATUS.md`.
 
-Cập nhật: 2026-08-30.
+Cập nhật: 2026-08-31.
 
 ## Trạng thái hiện tại
 
@@ -97,175 +97,109 @@ Cập nhật: 2026-08-30.
   `bench_analyze.py` (soi rác/hallu/cắt/sai-tính) + 2 bộ test không cần
   GPU (14/14, 9/9) — dựng sau khi 3 LẦN suýt báo cáo số liệu sai vì lỗi
   harness (thinking-model, ngân sách token, báo động giả).
-- **MAPPER 4→27B TRAIN @ctx4096 + CROSS: PHÁN QUYẾT (2026-08-28)** —
-  chi tiết STATUS mục "CROSS trên benchmark ngoài: KẾT QUẢ CUỐI".
-  Train: warm-start v34, dừng sớm CE_FLOOR @1075, val 27→29→34→38→39.
-  **Test NIÊM PHONG (miền ĐÃ train) tái lập kỷ lục: bfcl 18/20, needle@2K
-  15/15, no_ctx 0/20.** Nhưng **benchmark NGOÀI sụp đổ**: BBH 6,0% (self
-  53,8%) | GSM8K 0% (self 80%) | MuSR 1,5% (self 58,1%).
-  **ĐỐI CHỨNG 4B-self là chìa khóa**: gsm8k 4B-self **81,5%** — CAO HƠN
-  27B! Thông tin CÓ SẴN trong cache 4B nhưng qua mapper còn 0% → lỗi ở
-  khâu DỊCH, không phải giới hạn model nguồn. Chất lượng sinh: rác
-  0,2%→15,6%, không-ra-đáp-án 6,5%→55,1%. Phân loại 243 ca self-đúng→
-  cross-sai: 22% SINH RÁC, 78% LẠC ĐỀ NHƯNG MẠCH LẠC (nguy hiểm hơn —
-  hỏi boolean trả lời xác suất, hỏi án mạng trả lời về Beatles; hallu
-  tên riêng musr 0,63/mẫu vs self 0,04).
-  **KẾT LUẬN: mapper 35M chỉ học ánh xạ CHO MIỀN CỤ THỂ, KHÔNG học
-  "cách dịch cache" tổng quát** (phán quyết lần 4 về lớp hàm, lần này
-  có đối chứng nên loại trừ được giả thuyết "model nguồn yếu").
-  Hàm ý: cascade 4→27B bán được TRONG miền đã train (fn-calling,
-  retrieval ≤4K) nhưng KHÔNG phải "tăng tốc đa dụng". Muốn tổng quát:
-  đa dạng hóa mạnh miền train, hoặc đổi lớp hàm mapper. HF
-  `extbench_cross/` + `v427_4k/`. Vá 2 bug: dict-wrap 5.15 (e5._get),
-  OOM do nạp 2 model cùng lúc → run_cross HAI PHA.
-- **KIẾN TRÚC 2 LỚP (user chốt 2026-08-28: LoRA gắn vào 4B ép nó "đọc hộ"
-  27B → merge vào 4B → mapper dịch): CỔNG VRAM MỞ, khe hẹp.** 7 lượt probe
-  (`probe_joint_lora.py`, 42 cấu hình). Hai model cùng GPU = 16,16GiB, trống
-  5,54. Thủ phạm: prefill 4B CÓ GRAD (+3,34GiB @T=256). **GC bị loại VỀ
-  NGUYÊN TẮC** (transformers ép `use_cache=False`, mà forward 4B tồn tại
-  chính để sinh cache — cơ chế khác hẳn lần đóng GC cho 27B). **TBPTT mở
-  được cổng**. Bao đo chốt: **gold ≤48 khi ctx ≤1024, gold ≤16 khi ctx
-  1536-2048, w=64**; tường cứng gold=64 với MỌI T (gold = số vị trí feed vào
-  27B, mỗi vị trí giữ state GDN cho backward → đắt hơn ctx nhiều). Giá:
-  TBPTT là xấp xỉ (LoRA chỉ học từ w vị trí cuối), gold gsm8k 150-250 token
-  bị cắt còn 48. Trả lời user "sao hôm trước 8192 mà giờ 2048 OOM": 8192 là
-  trần 1-model-thường-trú (27B một mình 12,81GiB); giờ 4B phải ở lại kèm
-  autograd → 18,11+3,5 = 21,6GiB đã chạm trần trước mọi activation.
-- **USER CHUYỂN HƯỚNG (2026-08-28): "khoan dùng idea mới trên 4-27, dùng
-  cặp 4-9 để đảm bảo chất lượng đã"** — đã dừng job 4→27 (chạy được nhưng
-  phải hy sinh: gold gsm8k 150-250 token bị cắt còn 48). **Đo lại bao cho
-  4→9: rộng hơn hẳn** — nền 2 model chỉ **6,86 GiB** (9B 4-bit ~4,4 vs 27B
-  12,7), trống 14,88 GiB. Với tbptt=128 **MỌI cấu hình chạy**:
-  ctx4096+gold256 = 15,70GiB/13,1s | ctx8192+gold256 = 17,04/15,0 |
-  **ctx16384+gold256 = 19,71/19,1**. (tbptt=0 vẫn OOM ở mọi ctx.)
-  → 4→9 lấy lại được CẢ ctx dài LẪN gold đầy đủ; nhánh 27B mất cả hai.
-- **TRAIN JOINT 4→9 ĐANG CHẠY (2026-08-28)**: `e9_joint.py` + `gen_data.py`
-  (7768 train/330 val: gsm8k 2882 + bbh 2500 + musr 474 + suite 767 + bfcl
-  655 + needle 380 + pbtable 110), ctx 8192, tbptt 128, gold 256,
-  warm-start mapper v49 (92% BFCL/100% needle), 2000 bước, auto-upload HF
-  `joint49/` mỗi mốc val. **Rò rỉ 0/6898** vs 580 mẫu niêm phong (đối chiếu
-  chuỗi, chạy trên chính runtime train). Bước 20: ce 1,475 | **4,79s/bước**
-  | peak 12,05GiB. Vá 2 bug: `ifstruct` không có `gold` (do B0 sinh, joint
-  không có B0), và **cắt TRÁI khi tokenize** (mọi prompt bộ này đặt câu hỏi
-  Ở CUỐI — cắt phải mặc định ăn mất câu hỏi mà KHÔNG báo lỗi).
-- **USER LẬT KẾT LUẬN (2026-08-28): "có train mapper cho math/reasoning
-  không? nếu chỉ train BFCL thì fail task khác là đúng rồi"** — ĐÚNG, đã
-  kiểm code `build_data()`: train ~1330 item = bfcl ~655 + needle 430 +
-  ifstruct 135 + pbtable 110. **Math 0, reasoning nhiều bước 0, QA văn
-  xuôi 0.** Thêm nữa mọi target train đều NGẮN-TRÍCH (bfcl 24 tok,
-  needle 16) trong khi bbh/gsm8k/musr đòi sinh dài suy luận (320 tok).
-  → Thí nghiệm đã chạy KHÔNG tách được 2 giả thuyết: (H1) lớp hàm mapper
-  yếu, (H2) miền train quá hẹp. Câu "phán quyết lần 4 về lớp hàm" là
-  KẾT LUẬN VƯỢT DỮ LIỆU — hạ xuống "chưa xác định". Phép đo phân giải:
-  train lại với data đa dạng (suite_gen.py 4 họ ĐÃ dựng sẵn, chưa dùng
-  cho train + gsm8k/bbh train-split) rồi đo lại đúng benchmark đó.
+- **Nhánh 4→27B ĐÓNG (2026-08-28) — chi tiết STATUS.md**: test niêm phong
+  trong miền tái lập kỷ lục (bfcl 18/20, needle@2K 15/15) nhưng benchmark
+  NGOÀI sụp (BBH 6,0% vs self 53,8%, GSM8K 0% vs 80%). Đối chứng 4B-self
+  gsm8k **81,5% — cao hơn 27B** → thông tin CÓ trong cache, lỗi ở khâu DỊCH.
+  243 ca self-đúng→cross-sai: 22% sinh rác, 78% lạc đề nhưng mạch lạc.
+- **Kiến trúc 2 lớp + chuyển sang cặp 4→9 (2026-08-28, user chốt)** — chi tiết
+  STATUS.md: 4→27B nền 2 model 16,16GiB (trống 5,54), gold ≤48 khi ctx ≤1024,
+  GC bị loại về nguyên tắc (transformers ép `use_cache=False` mà forward 4B
+  tồn tại chính để sinh cache), TBPTT mở được cổng. Cặp **4→9 rộng hơn hẳn**:
+  nền 6,86GiB, ctx16384+gold256 chạy được → lấy lại cả ctx dài lẫn gold đầy đủ.
+- **NGÀY 28-29/08 — joint 4→9 + 4 bug harness (chi tiết STATUS.md)**:
+  pseudo-gold bằng vLLM offline nhanh **49×** (577 vs 11,8 tok/s); 4 bug
+  harness làm mọi số trước đó sai, nặng nhất là **DỪNG SAI TOKEN KẾT THÚC**
+  (tokenizer khai 248046 nhưng model kết thúc bằng 248044 ở 38/40 ca) → 92%
+  tụt còn 32%, vá bằng `e5.stop_ids()`. Hai giả thuyết nghe hợp lý (fp4-vs-nf4,
+  thiếu kernel `fla`) đều bị bác bằng đo. Đọc tay 20 đầu ra gsm8k: 13/17 ca là
+  "văn hoàn hảo, đề bài bị bóp méo" — số sống sót, QUAN HỆ bị đảo lộn.
+  Giả thuyết dung lượng GDN (0,8→25,2M) bị bác ở mốc phân xử đặt trước.
+- **MA TRẬN ĐỐI CHỨNG ĐẦY ĐỦ (2026-08-31) — 1.650 mẫu niêm phong, MỌI cột
+  cùng engine.** Báo cáo: https://claude.ai/code/artifact/b20fe8d6-0e21-44d1-afa8-b1622d62385a
 
-- **NGÀY 28-29/08 — CHIẾN DỊCH JOINT 4→9 + 4 BUG HARNESS** (chi tiết STATUS):
-  - **Pseudo-gold bằng vLLM offline** (gợi ý user): 577 tok/s vs 11,8 của
-    transformers = **nhanh 49×**; 671k token trong 30,7 phút. Thu 3.574/6.098
-    mẫu 9B tự làm đúng → đích học đổi từ đáp án người viết sang **quỹ đạo 9B
-    tự đi** (user: "cần map gần 9B nhất" → đích trùng luôn thước đo).
-  - **BỐN BUG HARNESS** làm mọi số trước đó sai: (1) ngưỡng gold<2 token loại
-    16,7% dữ liệu (musr 100%, bbh 25%); (2) `continue` nuốt mốc val im lặng;
-    (3) val tính lại cột `self` mỗi mốc dù nó không đổi; (4) **DỪNG SAI TOKEN
-    KẾT THÚC** — tokenizer khai 248046 `<|im_end|>` nhưng model kết thúc bằng
-    248044 `<|endoftext|>` (38/40 ca), nên vòng sinh KHÔNG DỪNG, sinh tràn rồi
-    lan man, bộ chấm gsm8k lấy số cuối → **92% tụt còn 32%**. Ảnh hưởng cả
-    `e9_joint` lẫn `ext_bench` → **các baseline 27B-self/4B-self đã báo cáo
-    đều đáng nghi, nhiều khả năng bị ép thấp**. Vá bằng `e5.stop_ids()`.
-    Hai giả thuyết trước đó (fp4-vs-nf4, thiếu kernel `fla`) đều nghe hợp lý,
-    đều có bằng chứng gián tiếp đúng, và đều **bị bác bằng đo**.
-  - **Val 150 mẫu, cột `self` tra cứu từ pseudo-gold** (miễn phí + chuẩn hơn).
-    Lượt `joint49s` score 48→50→61→64→**67**, chưa bão hoà. Mapper **VƯỢT TRẦN**
-    ở bfcl 12/12 (trần 9), musr 12/15 (trần 2), bbh 25/41 (trần 9), suite_mid
-    5/5 (trần 0) — tức nó không chỉ dịch cache mà mang thêm kỹ năng vào.
-    **Nhưng gsm8k đứng im 1-5/53 trong khi trần 44/53.**
-  - **ĐỌC TAY 20 ĐẦU RA gsm8k** (user chỉ đạo "đọc lỗi trước đã"): self 17/20,
-    mapped 0/20; lặp trigram 0,137 và 19/20 đúng định dạng → **KHÔNG** phải
-    rác/định dạng. 13/17 ca là **"văn hoàn hảo, đề bài bị bóp méo"**: con SỐ
-    sống sót, QUAN HỆ và việc gán thuộc tính cho THỰC THỂ bị đảo lộn
-    ("Kate 29 tuổi"→"Tully 29 tuổi"; "già hơn nửa tuổi"→"trẻ hơn 20 năm";
-    bịa ra con dê không có trong đề).
-  - **GIẢ THUYẾT ĐANG KIỂM**: mapper phân bổ tham số **ngược** với nơi thông
-    tin nằm — attention 16,8M (CCA 0,93-0,98, đã thẳng hàng sẵn) vs GDN 0,8M
-    (CCA 0,23-0,9, chỗ quyết định), và A,B còn dùng chung cho cả 32 head.
-    Lượt `joint49u`: GDN 0,8→25,2M (mỗi head một cặp), attention giữ nguyên,
-    warm-start chính xác, + `--w-entity 3.0`. **Val 500: score 52 (vs 48)
-    nhưng gsm8k 3/53 (vs 2/53) — KHÔNG nhích; bfcl tụt 11→5.** Chờ mốc
-    1000-2500. Nếu gsm8k vẫn đứng → bác giả thuyết dung lượng, nghi phạm
-    chuyển sang **dạng hàm** (`A·S·B` không biểu diễn nổi quan hệ).
-  - Bài học thiết kế: lượt `joint49t` hỏng vì tôi cắt attention xuống hạng 64
-    để "giữ tổng tham số" → CE nhảy 0,9→5-12. Giả định "attention thẳng hàng
-    nên chỉ cần chỉnh nhẹ" đúng cho KHỞI TẠO, sai cho ma trận ĐÃ TRAIN 5.000
-    bước (hạng cao).
-  - Công cụ mới: `gen_pseudo_vllm.py`, `inspect_fail.py`, `eval_big.py`
-    (~1.900 mẫu niêm phong từ dải chưa đụng), `e5.stop_ids()`,
-    `Mapper(attn_rank, gdn_per_head)`.
+  | bộ | n | 4B | 4B+LoRA | 9B | 4B→9B | 4B+LoRA→9B | 4B+map→9B | 4B+LoRA+map→9B |
+  |---|---|---|---|---|---|---|---|---|
+  | bfcl | 200 | 58,5 | 61,0 | 63,5 | — | **2,0** | 85,0 | **88,5** |
+  | bbh | 779 | 45,3 | 51,3 | 30,6 | — | 35,4 | 39,3 | **66,0** |
+  | needle | 240 | **100** | **100** | 100 | 61,2 | 75,0 | 89,2 | 98,3 |
+  | suite_mid | 126 | **100** | **100** | 100 | — | 92,9 | 44,4 | 97,6 |
+  | suite_rag | 126 | 98,4 | **100** | 97,6 | — | 42,1 | 23,8 | 90,5 |
+  | suite_swe | 123 | **98,4** | 72,4 | 99,2 | 11,4 | 27,6 | 0,0 | 47,2 |
+  | musr | 56 | 42,9 | **69,6** | 53,6 | 21,4 | 32,1 | 23,2 | 42,9 |
 
-- **KẾT QUẢ CUỐI GIAI ĐOẠN 1 (2026-08-30) — cascade 4B→9B trên 1.650 mẫu
-  NIÊM PHONG** (mapper `joint49w/mapper_best`, HF `evalbig_joint49w/`):
-
-  | bộ | n | mapper | trần 9B | |
-  |---|---|---|---|---|
-  | needle | 240 | 98,3% | 100% | 0,98× |
-  | suite_mid | 126 | 97,6% | 100% | 0,98× |
-  | suite_rag | 126 | 90,5% | 97,6% | 0,93× |
-  | bfcl | 200 | 88,5% | 64,5% | 1,37× |
-  | bbh | 779 | 66,0% | 30,3% | 2,18× |
-  | suite_swe | 123 | 47,2% | 99,2% | **0,48×** |
-  | musr | 56 | 42,9% | 50,0% | 0,86× |
-  | **tổng** | 1.650 | 75,5% | 60,8% | 1,24× |
-
-  **Đọc**: truy hồi giữ gần trọn (0,93-0,98× trần) — phần bán được. bbh/bfcl
-  vượt trần nhưng **so sánh không công bằng**: mapper đã train trên đúng hai họ
-  đó, cột trần là 9B zero-shot. **Nghi phần lớn 2,18× là ĐỊNH DẠNG chứ không
-  phải suy luận**: 9B-self được ĐÚNG 0,0% trên movie_recommendation,
-  disambiguation_qa, geometric_shapes, temporal_sequences (0/30 chằn chặn) —
-  gần như chắc chắn là trả lời sai khuôn chứ không phải không làm được. CHƯA
-  KIỂM (đọc tay đầu ra self). **suite_swe là thất bại thật: 47,2% vs 99,2%** —
-  mapper phá hơn nửa số ca 9B tự làm được; nó lọt vào danh sách "đã ghi nhận
-  chạy" chỉ vì val có 3-7 mẫu.
-- **Train ĐÃ BÃO HOÀ — hai lần độc lập**: `joint49v` (có gsm8k) 67→66→62;
-  `joint49w` (bỏ gsm8k+suite_math) 100→95. Không mốc nào lập kỷ lục sau
-  `joint49s`. Thêm bước/thêm-bớt dữ liệu đều không lên → muốn tiến phải đổi
-  lớp hàm hoặc đa dạng hoá miền, không phải đổi số bước.
-- **GOM LÔ DECODE cho eval: nhanh 6,7 lần** (1.150 mẫu 14 phút vs ~90 phút),
-  cổng kiểm 24 khớp/0 lệch. `batch_decode.py`. **Đảo một kết luận cũ của
-  chính mình**: probe_batch đã bác gom lô vì đệm trái làm attention keys sai
-  96% — nhưng lỗi đó thuộc PREFILL. Ở decode: trạng thái GDN không có chiều
-  thời gian; RoPE đã áp lúc dựng cache nên đệm trái chỉ đổi chỉ số, miễn là
-  truyền `position_ids` riêng từng hàng. Ta tự dựng cache nên đặt được mask/vị
-  trí theo hàng — đúng cái prefill không cho phép.
-- **Vì sao KHÔNG dùng flash-attention** (user hỏi): đo trên chính cấu hình này
-  — decode 1 token trên 9B ctx~500 thì nhân trọng số ~18 GFLOP, attention
-  ~6 MFLOP = **0,03%**. Nút cổ chai là batch=1 (mỗi token đọc ~5GB trọng số
-  4-bit từ HBM; trần L4 ~60 tok/s, đang được 10).
-- **eval_big dùng template-XƯƠNG thay prefill 9B đầy đủ**: `build_student_past`
-  thay sạch mọi tensor của template nên prefill 9B ở đó là tính toán thừa
-  (~40 phút/lượt). Kèm verify-meta ở T=256/1024 đối chiếu prefill thật.
-- **Mapper nhiều số hạng (`--gdn-terms`)**: `S' = Σ A_r·S·B_r` thay một
-  `A·S·B`. Số hạng r>0 khởi tạo BẰNG 0 → bước 0 giống hệt checkpoint cũ, nên
-  warm-start không thể tụt (bài học joint49t: đổi hình dạng làm CE nhảy
-  0,9→5-12). `test_mapper_terms.py` 14/14, không cần GPU. Ngưỡng so sánh đặt
-  theo bf16 (5e-3) vì đo được bước làm tròn bf16 tại biên độ đó là 0,018 —
-  gấp 9 lần độ lệch quan sát.
-- **Bốn bẫy hạ tầng ghi vào docs/03**: (1) `pkill -f`/`ps|grep` khớp chính
-  dòng lệnh của mình, dính cả khi mẫu nằm trong COMMENT → dọn tiến trình bằng
-  Python đọc `/proc` và loại `os.getpid()`; (2) Python in traceback rồi TREO ở
-  join thread nền của `datasets` → `os._exit(0)`; (3) heredoc qua tool ăn mất
-  một lớp backslash → `\n` thành văn bản, argparse báo `unrecognized
-  arguments: n n` SAU khi đã nạp model; nay có test quét mọi `.sh`; (4) file
-  kết quả eval phải mang TÊN CHECKPOINT — chạy joint49w suýt nối lại 800 mẫu
-  của joint49s thành một con số.
-- **Colab recycle ~1,5 giờ/lần (8 lần trong ngày)**: mọi thứ đắt tiền đã lên
-  HF nên không mất gì; val-every hạ 500→250, và vLLM chỉ cài khi pha nào cần
-  (train không dùng) → khởi động lại từ 13 phút xuống 26 giây.
-- **ĐANG CHẠY**: `diag_fit.py` — chấm mapper trên CHÍNH tập train, cùng grader
-  và cùng giao thức WARM_P=5 với val. train≫val = quá khớp (phóng to mapper là
-  sai hướng); train≈val = thiếu dung lượng hoặc sai lớp hàm (phóng to là đúng).
-  Sau đó theo kết quả: `R=4 + per-head` (117,5M, gấp 6,7 lần) hoặc đa dạng hoá
-  dữ liệu.
-
+  **Bỏ chữ "cascade" khỏi mọi bảng (user chốt)** — ghi thẳng thành phần;
+  `→ 9B` = 9B sinh câu trả lời từ cache chuyển sang.
+- **ĐỌC KẾT QUẢ**:
+  (a) **Mapper LUÔN tốt hơn phương án thay thế trực tiếp** (bê thẳng cache):
+  bfcl 2,0→88,5 (**+86,5**), suite_rag 42,1→90,5, bbh 35,4→66,0. Mapper
+  không "làm hỏng" gì — nó làm rất tốt việc dịch cache.
+  (b) **Nhưng so với để 4B TỰ trả lời thì thua ở 5/7 bộ**: musr −26,7,
+  suite_swe −25,2, suite_rag −9,5, suite_mid −2,4, needle −1,7. Chỉ bfcl
+  (+27,5) và bbh (+14,7) là có lợi. Lý do: 4B vốn đã 98-100% ở các bài truy hồi.
+  (c) **LoRA và mapper CỘNG HƯỞNG, không cộng dồn** (ma trận 2×2): musr —
+  mapper một mình +1,8, LoRA một mình +10,7, ghép lại +19,7. suite_swe —
+  mapper một mình **−11,4**, ghép lại **+19,6**. Chúng train cùng nhau nên
+  tách ra là ra ngoài phân phối của nhau.
+  (d) **Ranh giới truy-hồi/quan-hệ**, khớp 3 nguồn độc lập: hại nhẹ ở lấy
+  nguyên văn (needle −1,7, suite_mid −2,4), hại nặng ở liên hệ thực thể
+  (suite_swe −25,2, musr −26,7). Khớp probe kể-lại-đề (số giữ 73%, quan hệ
+  giữ 33%) và định luật E7 (attention CCA 0,93-0,98 mang token; GDN
+  CCA 0,23-0,9 mang quan hệ).
+  (e) **E1 kết luận vượt dữ liệu**: "copy nguyên giữ 100% needle" đo trên
+  12 mẫu; trên 240 mẫu với alpha đúng là **61,2%**. Thứ tự thì vẫn đúng
+  (needle 61,2 ≫ musr 21,4 ≫ suite_swe 11,4).
+- **CÒN TREO — lớn nhất**: `4B 45,3% > 9B 30,6%` trên bbh, tái lập trên **cả
+  hai engine** (vLLM 30,3 / transformers 30,6) nên KHÔNG phải lỗi engine.
+  Cộng với 9B được **đúng 0/30** trên movie_recommendation, disambiguation_qa,
+  geometric_shapes, temporal_sequences → nghi 9B trả lời sai KHUÔN. Nếu đúng,
+  +14,7 điểm của mapper ở bbh cũng phải xem lại. Phải đọc tay đầu ra.
+- **vLLM BỎ QUA LoRA dù log nói có nạp** (`Using default LoRA kernel configs`):
+  suite_swe ra **đúng 120/123 ở cả có lẫn không** adapter, cùng adapter đó
+  trên transformers đổi 26 điểm. → mọi cột `+LoRA` phải đo bằng transformers.
+  Tôi đã nghi đúng, rồi TỰ BÁC nghi ngờ đúng đó bằng một lập luận nghe hợp lý
+  ("LoRA train cho mapper nên không đổi 4B") — bị 2 dòng số bác lại.
+- **TĂNG TỐC (2026-08-31)**:
+  - **eval gom lô decode: 6,7×** (1.150 mẫu 14 phút vs ~90 phút), cổng kiểm
+    24 khớp/0 lệch. AN TOÀN ở decode dù probe đã bác ở prefill: trạng thái GDN
+    không có chiều thời gian, RoPE đã áp lúc dựng cache — chỉ cần truyền
+    `position_ids` riêng từng hàng. `batch_decode.py`.
+  - **template-XƯƠNG thay prefill 9B đầy đủ** trong eval (~40 phút/lượt):
+    `build_student_past` thay sạch mọi tensor nên prefill đó là tính toán thừa.
+  - **dùng lại spill 4B** giữa các lượt (`spill_base`/`spill_lora`): cache 4B
+    không phụ thuộc mapper → so biến thể mapper thì pha A giống hệt.
+  - **KHÔNG dùng flash-attention** (user hỏi): đo được decode 1 token trên 9B
+    ctx~500 thì nhân trọng số ~18 GFLOP, attention ~6 MFLOP = **0,03%**.
+    Nút cổ chai là batch=1 (mỗi token đọc ~5GB trọng số 4-bit từ HBM).
+  - **probe_train_batch: batch 2 cho 1,85-1,97× trên BƯỚC TRAIN THẬT**
+    (mốc đặt trước 1,3×); batch 4 OOM. 89,5% item gom được thành lô 2 với
+    **độ dài trùng khít** (không đệm → đồng nhất toán học). Ước tính
+    3,00 → ~1,7 s/bước, kèm vá `gc.collect` mỗi 20 bước → ~1,5.
+  - **Mapper vốn CHỈ chạy được batch 1** — `map_attn` ghim `reshape(T, H*dh)`,
+    `map_gdn` lấy `S[0]`. Đã sửa giữ chiều batch. Bài kiểm "lô 2 == chạy riêng
+    lẻ" bắt được lỗi thật trong chính bản vá: `rms.mean()` trung bình trên cả
+    chiều batch (lệch 7,8e-3) → sửa thành theo từng mẫu. 23/23.
+- **BUG CHẶN TRAIN đã sửa**: tham số GDN của Mapper không phải tensor LÁ
+  (`A_r = base.requires_grad_(True)` rồi `B_r = base.clone()`), optimizer ném
+  "can't optimize a non-leaf Tensor" — dính cả với `gdn_terms=1` mặc định.
+  Eval không lộ ra vì chỉ chạy forward. Đã thêm bài kiểm dựng optimizer.
+- **`e5.patch_recurrent_rebind()`**: GDN 5.15 cập nhật state bằng `.copy_()`
+  IN-PLACE → vỡ autograd. e9_joint đã có bản vá kèm ghi chú "học phí 3 probe";
+  probe_train_batch thành probe THỨ TƯ dính. Đã đưa ra e5_train dùng chung.
+- **Chẩn đoán QUÁ KHỚP (2026-08-30)**: mapper trên train **86,0%** / val
+  **63,3%** (chênh 22,7 điểm). suite_swe: train 100% / val 28,6% / niêm phong
+  47,2% — thuộc lòng 190 mẫu. → phóng to mapper là SAI HƯỚNG; việc cần là đa
+  dạng hoá dữ liệu. Giả thuyết "mapper quá nhỏ" của user bị bác bằng đo.
+- **Train ĐÃ BÃO HOÀ — hai lần độc lập**: `joint49v` 67→66→62, `joint49w`
+  100→95. Thêm bước/thêm-bớt dữ liệu đều không lên.
+- **BƯỚC KẾ (chờ user duyệt)**: (1) xây bộ gom lô theo độ dài cho train
+  (gold có mặt nạ + `verify_meta` cho cặp (T,B)); (2) đọc tay đầu ra 9B trên
+  4 tác vụ bị 0/30; (3) thêm NHIỆM VỤ đòi quan hệ vào dữ liệu train — làm ở
+  tầng nhiệm vụ chứ KHÔNG so khớp tensor (luật error-placement: nMSE
+  10,5→0,96 mà chức năng vẫn 0/5). Bằng chứng ủng hộ: suite_swe 4B một mình
+  **98,4%** → thông tin quan hệ CÓ trong cache 4B, mapper làm mất chứ không
+  phải nó không tồn tại. Mốc phân xử: suite_swe không vượt 60% và tỷ lệ giữ
+  quan hệ không vượt 45% thì nghi phạm chuyển sang DẠNG HÀM `A·S·B`.
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 

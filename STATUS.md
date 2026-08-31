@@ -2713,3 +2713,102 @@ open-loop mới tìm được điểm gãy.
 - Nhánh unquantized (BF16 GGUF) của plugin hỏng: nạp 0.03 GiB rồi chết ở
   `split(size=(s72, 0))`. Đây là bug thứ 16, chưa sửa.
 - Chưa gửi issue/PR lên vllm và vllm-gguf-plugin.
+
+## 2026-08-31 — Ma trận đối chứng đầy đủ cho cascade 4B→9B
+
+Báo cáo: https://claude.ai/code/artifact/b20fe8d6-0e21-44d1-afa8-b1622d62385a
+
+1.650 mẫu niêm phong, 7 họ đề, 8 cấu hình, **mọi cột so sánh cùng engine**.
+Kết quả trên HF `evalbig/`, `evalbig_joint49w/`, `evalbig_nolora/`,
+`evalbig_copysel/`, `evalbig_copylora/`.
+
+| bộ | n | 4B | 4B+LoRA | 9B | 4B→9B | 4B+LoRA→9B | 4B+map→9B | 4B+LoRA+map→9B |
+|---|---|---|---|---|---|---|---|---|
+| bfcl | 200 | 58,5 | 61,0 | 63,5 | — | 2,0 | 85,0 | **88,5** |
+| bbh | 779 | 45,3 | 51,3 | 30,6 | — | 35,4 | 39,3 | **66,0** |
+| needle | 240 | 100 | 100 | 100 | 61,2 | 75,0 | 89,2 | 98,3 |
+| suite_mid | 126 | 100 | 100 | 100 | — | 92,9 | 44,4 | 97,6 |
+| suite_rag | 126 | 98,4 | 100 | 97,6 | — | 42,1 | 23,8 | 90,5 |
+| suite_swe | 123 | 98,4 | 72,4 | 99,2 | 11,4 | 27,6 | 0,0 | 47,2 |
+| musr | 56 | 42,9 | 69,6 | 53,6 | 21,4 | 32,1 | 23,2 | 42,9 |
+
+Quy ước tên cột (user chốt 2026-08-30): bỏ chữ "cascade", ghi thẳng thành
+phần; `→ 9B` nghĩa là 9B sinh câu trả lời từ cache chuyển sang.
+
+### Đọc kết quả
+
+- **Mapper luôn tốt hơn phương án thay thế trực tiếp** (bê thẳng cache):
+  bfcl 2,0→88,5 (+86,5), suite_rag 42,1→90,5, bbh 35,4→66,0. Mapper làm rất
+  tốt việc dịch cache.
+- **Nhưng so với để 4B tự trả lời thì thua 5/7 bộ**: musr −26,7, suite_swe
+  −25,2, suite_rag −9,5, suite_mid −2,4, needle −1,7. Chỉ bfcl (+27,5) và
+  bbh (+14,7) có lợi — vì 4B vốn đã 98-100% ở các bài truy hồi.
+- **LoRA và mapper cộng hưởng, không cộng dồn.** musr: mapper một mình +1,8,
+  LoRA một mình +10,7, ghép lại +19,7. suite_swe: mapper một mình −11,4,
+  ghép lại +19,6. Train cùng nhau nên tách ra là ra ngoài phân phối của nhau.
+  Ô này chỉ thấy được khi có đủ ma trận 2×2 (user chỉ ra ô còn thiếu).
+- **Ranh giới truy-hồi/quan-hệ**, khớp 3 nguồn độc lập: hại nhẹ ở lấy nguyên
+  văn, hại nặng ở liên hệ thực thể. Khớp probe kể-lại-đề (số 73%, quan hệ
+  33%) và định luật E7 (attention CCA 0,93-0,98 mang token; GDN 0,23-0,9
+  mang quan hệ). Kiến trúc dự đoán đúng ranh giới năng lực.
+- **E1 kết luận vượt dữ liệu**: "copy nguyên giữ 100% needle" đo trên 12 mẫu;
+  trên 240 mẫu với alpha đúng là 61,2%. Thứ tự vẫn đúng (61,2 ≫ 21,4 ≫ 11,4).
+
+### Còn treo
+
+`4B 45,3% > 9B 30,6%` trên bbh, tái lập trên CẢ HAI engine (vLLM 30,3 /
+transformers 30,6) nên không phải lỗi engine. Cộng với 9B được đúng 0/30 trên
+movie_recommendation, disambiguation_qa, geometric_shapes, temporal_sequences
+→ nghi 9B trả lời sai KHUÔN. Nếu đúng, +14,7 của mapper ở bbh cũng phải xem lại.
+
+### Bẫy đo đạc trong đợt này
+
+- **vLLM bỏ qua LoRA** dù log in `Using default LoRA kernel configs`:
+  suite_swe ra đúng 120/123 ở cả có lẫn không adapter; cùng adapter trên
+  transformers đổi 26 điểm. Mọi cột `+LoRA` phải đo bằng transformers.
+- **`_self_lookup` gán trần = 0 cho mọi `suite_*`** vì chúng không có trong
+  pseudo_gold ("không tìm thấy" bị coi là "9B làm sai") → mọi câu "mapper vượt
+  trần ở suite" đều sai; trần thật của suite_mid là 100%.
+- **`alpha` khởi tạo 1/Hs là TRUNG BÌNH 32 head nguồn**, không phải copy →
+  bản "bê nguyên" đầu tiên ra 0% khắp nơi là hệ quả tất yếu, không phải kết
+  luận. Phải dùng ma trận CHỌN (`--copy-select`). 4B và 9B cùng 32 head GDN.
+- **File kết quả eval phải mang TÊN CHECKPOINT** — chạy joint49w suýt nối lại
+  800 mẫu của joint49s thành một con số.
+- **Cổng kiểm phải lấy mẫu RẢI ĐỀU các bộ**, không lấy từ đầu danh sách:
+  16 mẫu đầu toàn là bbh nên cổng chưa bao giờ kiểm musr.
+- **`pkill -f`/`ps|grep` khớp chính dòng lệnh của mình**, dính cả khi mẫu nằm
+  trong COMMENT → dọn tiến trình bằng Python đọc `/proc`, loại `os.getpid()`.
+- **Python in traceback rồi TREO** ở join thread nền của `datasets` →
+  `os._exit(0)`.
+- **Heredoc qua tool ăn một lớp backslash** → `\n` thành văn bản, argparse báo
+  `unrecognized arguments: n n` SAU khi đã nạp model. Đã có test quét mọi `.sh`.
+
+### Tăng tốc
+
+- **eval gom lô decode: 6,7×** (1.150 mẫu 14 phút vs ~90 phút), cổng kiểm
+  24 khớp/0 lệch. An toàn ở decode dù probe đã bác ở prefill: trạng thái GDN
+  không có chiều thời gian; RoPE đã áp lúc dựng cache nên đệm trái chỉ đổi chỉ
+  số, miễn là truyền `position_ids` riêng từng hàng. `batch_decode.py`.
+- **template-xương thay prefill 9B đầy đủ** trong eval (~40 phút/lượt).
+- **dùng lại spill 4B** giữa các lượt (`spill_base`/`spill_lora`).
+- **Không dùng flash-attention**: decode 1 token trên 9B ctx~500 thì nhân
+  trọng số ~18 GFLOP, attention ~6 MFLOP = 0,03%. Nút cổ chai là batch=1.
+- **probe_train_batch: batch 2 cho 1,85-1,97× trên bước train THẬT**
+  (mốc đặt trước 1,3×); batch 4 OOM (17,4GiB ở batch 2). 89,5% item gom được
+  thành lô 2 với độ dài trùng khít (không đệm). Ước tính 3,00 → ~1,7 s/bước.
+- **Mapper vốn chỉ chạy được batch 1** (`map_attn` ghim `reshape(T, H*dh)`).
+  Đã sửa. Bài kiểm "lô 2 == chạy riêng lẻ" bắt được lỗi thật trong chính bản
+  vá: `rms.mean()` trung bình trên cả chiều batch (lệch 7,8e-3).
+- **Bug chặn train**: tham số GDN không phải tensor LÁ → optimizer từ chối;
+  dính cả với `gdn_terms=1`. Eval không lộ ra vì chỉ chạy forward.
+- **`e5.patch_recurrent_rebind()`**: GDN 5.15 cập nhật state bằng `.copy_()`
+  in-place → vỡ autograd. Probe thứ TƯ dính bẫy này; đã đưa ra dùng chung.
+
+### Chẩn đoán quá khớp (2026-08-30)
+
+Mapper trên train **86,0%** / val **63,3%** (chênh 22,7 điểm). suite_swe:
+train 100% / val 28,6% / niêm phong 47,2% — thuộc lòng 190 mẫu train.
+→ phóng to mapper là sai hướng; việc cần làm là đa dạng hoá dữ liệu.
+Giả thuyết "mapper quá nhỏ" bị bác ở mốc phân xử đặt trước.
+
+Train đã bão hoà, hai lần độc lập: `joint49v` 67→66→62, `joint49w` 100→95.
