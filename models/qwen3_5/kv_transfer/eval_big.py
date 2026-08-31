@@ -259,9 +259,15 @@ def run_self_hf(args, items):
         new = o[:, enc["input_ids"].shape[1]:]
         return [tok.decode(r, skip_special_tokens=True) for r in new]
 
+    fn0 = OUT_DIR / f"evalbig_self_{self_tag(args)}.json"
+    done0 = set()
+    if fn0.exists():
+        done0 = set(json.loads(fn0.read_text()))
+        print(f"NOI LAI: da cham {len(done0)} mau", flush=True)
     by = defaultdict(list)
     for it in items:
-        by[it["bench"]].append(it)
+        if it["id"] not in done0:
+            by[it["bench"]].append(it)
     B = max(1, args.decode_batch)
     # cong kiem
     if args.verify_batch and B > 1:
@@ -275,7 +281,8 @@ def run_self_hf(args, items):
         print(f"cong kiem batch (hf): {len(vs)-bad} khop / {bad} lech", flush=True)
         if bad:
             raise SystemExit("GOM LO SAI KET QUA")
-    out, t0 = {}, time.time()
+    out = json.loads(fn0.read_text()) if fn0.exists() else {}
+    t0 = time.time()
     for bench, grp in by.items():
         hit = 0
         for k in range(0, len(grp), B):
@@ -285,6 +292,18 @@ def run_self_hf(args, items):
             torch.cuda.empty_cache()
         print(f"self {bench}: {hit}/{len(grp)} = {100*hit/len(grp):.1f}%",
               flush=True)
+        # GHI + UP SAU MOI BO: Colab dang recycle ~1 gio/lan, luot nao chi ghi
+        # o cuoi la mat trang. Ghi tung bo -> mat nhieu nhat mot bo.
+        fn = OUT_DIR / f"evalbig_self_{self_tag(args)}.json"
+        json.dump(out, open(fn, "w"))
+        if os.environ.get("HF_TOKEN"):
+            try:
+                from huggingface_hub import HfApi
+                HfApi(token=os.environ["HF_TOKEN"]).upload_file(
+                    path_or_fileobj=str(fn), repo_id=args.hf_repo,
+                    path_in_repo=f"evalbig/{fn.name}")
+            except Exception:
+                pass
     fn = OUT_DIR / f"evalbig_self_{self_tag(args)}.json"
     json.dump(out, open(fn, "w"))
     print(f"self xong {(time.time()-t0)/60:.1f} phut -> {fn.name}")
