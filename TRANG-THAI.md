@@ -194,33 +194,27 @@ Cập nhật: 2026-08-31.
   `pkill -f e9_joint.py` khớp luôn dòng lệnh của chính shell gọi nó (bẫy cũ,
   dạng khác) — sửa bằng đọc `/proc/*/cmdline` loại trừ pid của chính mình.
 - **KIỂM ĐỌC LOG (2026-08-31, lệnh user "check relationship có thực sự cải
-  tiến hay không") — ĐẢO NGƯỢC MỘT NỬA kết luận trên**:
-  - **`suite_swe`: cải tiến +8,9 điểm là GIẢ, do lỗi chấm điểm.** `suite_gen.score`
-    khớp CHUỖI CON (`expect in text`), không khớp trọn từ. Cả 49w lẫn 49y đều
-    sinh số garble/lặp ở đuôi tên hàm (`resolve_shards_30393930936630303036`);
-    điểm "đúng" chỉ vì số garble tình cờ bắt đầu bằng đúng chữ số kỳ vọng.
-    Tính lại theo tiêu chí SẠCH (đáp án phải là token trọn vẹn): 49w
-    **2,4%**, 49y **3,3%** — gần như bằng nhau, KHÔNG có cải tiến thật.
-    Đọc tay 39 mẫu "cả hai đều đúng": không mẫu nào sinh tên hàm sạch.
-  - **`musr`: cải tiến có thật nhưng nhỏ hơn báo cáo.** Chấm bằng regex bắt
-    chữ A-F ĐẦU TIÊN — không dính lỗi khớp chuỗi con nhưng nhạy với việc mô
-    hình liệt kê hết lựa chọn (luôn bắt "A" trước) hay trả lời thẳng. Tín hiệu
-    thật: tỷ lệ đầu ra SUY BIẾN/LẶP TOKEN (dấu hiệu decode hỏng) giảm rõ —
-    49w 24/56 (42,9%) → 49y 12/56 (21,4%), cải tiến chất lượng decode thật.
-    Nhưng 4/9 mẫu sai→đúng vẫn là đầu ra lặp tình cờ bắt đúng chữ cái —
-    mức tăng thật ước ~+8,9 điểm (5/56), không phải +16,0 như báo cáo.
-  - **Kết luận:** LoRA-9B + gom lô KHÔNG chứng minh được cải tiến hiểu quan hệ
-    thực thể như số liệu ban đầu gợi ý. `suite_swe` không cải tiến gì (cả hai
-    ~2-3% "sạch"). `musr` có cải tiến thật nhưng khiêm tốn, và biểu hiện chủ
-    yếu là GIẢM đầu ra suy biến (decode ổn định hơn), không rõ là hiểu quan hệ
-    tốt hơn. Điểm tổng có trọng số 75,5→77,1% cũng cần đọc lại dưới ánh sáng
-    này — phần lớn mức tăng đến từ bfcl/suite_rag (sạch, không bị bug này),
-    KHÔNG đến từ suite_swe/musr như diễn giải trước.
-  - **VIỆC CẦN LÀM TRƯỚC KHI TIN BẤT KỲ SỐ NÀO TIẾP THEO trên suite_swe**: sửa
-    `suite_gen.score` để loại trừ trường hợp số garble trùng tiền tố (ví dụ
-    yêu cầu ký tự ngay sau đáp án không phải chữ số), rồi chấm lại TOÀN BỘ
-    ma trận cũ (có thể nhiều con số suite_swe trong báo cáo trước đó cũng bị
-    lỗi này, không riêng joint49y).
+  tiến hay không") — điểm THÔ của cả `suite_swe` và `musr` là thang đo tồi,
+  nhưng sau khi tách đúng lớp, quan hệ THẬT SỰ được mang theo tốt hơn:**
+  - **`suite_swe` điểm thô (+8,9) là GIẢ**: `suite_gen.score` khớp CHUỖI CON,
+    và cả 49w/49y đều garble số ID ở đuôi tên hàm (`resolve_shards_3039...`)
+    — trúng chỉ vì số garble tình cờ bắt đúng tiền tố. Đáp án gồm 2 phần:
+    `flush_buffers` (QUAN HỆ hành vi↔hàm — phân biệt được với mồi nhử cùng
+    động từ khác nghĩa `flush_batches`) và `_10` (ID vô nghĩa). Đo riêng
+    verb_noun (bỏ số, kiểm không lỏng: chỉ 3/123 đề có mồi nhử trùng):
+    **49w 73,2% → 49y 82,9% (+9,7, THẬT)**. Số ID garble ở CẢ HAI — khớp
+    "định luật biên mỏng" (decode số gần vực số học), không phải lỗi hiểu.
+  - **`musr` điểm thô (+16,0) là ước THẤP, thật còn cao hơn**: chấm bằng
+    chữ A-F ĐẦU TIÊN, nhạy với đầu ra lặp `A) A) A)...` ăn may trúng "A"
+    (lựa chọn đầu). Lọc "đúng VÀ không suy biến": **49w 12,5% → 49y 41,1%
+    (+28,6)** — đa số điểm cũ của 49w là ăn may lặp chữ A. Đối chứng: đáp
+    án đúng của 49y trải đều A/B/C (9/8/6, khớp tỷ lệ tổng thể 14/20/17),
+    không thiên vị — cải tiến thật.
+  - **Kết luận: LoRA-9B CÓ cải tiến mang quan hệ đi đúng** — cả hành
+    vi↔danh tính lẫn suy luận nhiều bước — mạnh hơn số thô ban đầu, không
+    yếu hơn. Điểm thô (chuỗi con/chữ cái đầu) là thang đo tồi cho hai bộ
+    này, cần vá `suite_gen.score` (đòi ký tự sau đáp án không phải chữ số)
+    và chấm lại toàn ma trận trước khi trích dẫn số `suite_swe` nào khác.
 
 - **`joint49y` = CHECKPOINT THAM CHIẾU MỚI (thay `joint49w`)**. Điểm tổng có
   trọng số theo n (1.650 mẫu): 4B một mình 67,0% | 9B một mình 61,0% |
