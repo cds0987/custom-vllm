@@ -9,12 +9,13 @@ Cập nhật: 2026-08-31.
 ## Trạng thái hiện tại
 
 - **🎯 MỤC TIÊU HIỆN TẠI (user chốt 2026-09-01): CHỈ `suite_swe` (đầy đủ) +
-  `gsm8k`.** Mọi vòng train/val/sanity kế tiếp phải `--drop-kinds` loại hết
-  các bộ khác (bbh/bfcl/needle/musr/suite_rag/suite_mid/suite_math) —
-  không chạy lại chúng, giữ nguyên số cũ (checkpoint tham chiếu: `joint49z`,
-  KHÔNG phải `joint49aa` — xem bên dưới). Đang chờ duyệt kế hoạch
-  `run_joint49bb.sh` (sửa gold gsm8k cắt đầu+đuôi thay vì chỉ đầu, warm-start
-  từ `joint49z`, sanity 40 bước trước khi phóng thật).
+  `gsm8k`.** `run_joint49bb.sh` đang TRAIN THẬT trên Colab (nền, PID 150192,
+  log `/content/logs/joint49bb_train.log`), warm-start từ `joint49z`,
+  `--drop-kinds` loại hết bbh/bfcl/needle/musr/suite_rag/suite_mid/
+  suite_math/ifstruct/pbtable (train chỉ còn gsm8k 384 + suite_swe 190 mẫu).
+  Sửa lỗi gold gsm8k học phí joint49aa: cắt **đầu+đuôi** (giữ kết luận đáp
+  án) thay vì chỉ cắt đầu. Sanity 40 bước sạch: 3,15s/bước, peak 17,18GiB
+  (thấp hơn joint49z ~19,6GiB), không OOM. 1000 bước, dừng theo val.
 
 - **Báo cáo toàn cục "Prefill bằng model nhỏ" (quy tắc 6c)**:
   https://claude.ai/code/artifact/8e4cccf6-b447-4439-97c2-14e7ca9ffee1
