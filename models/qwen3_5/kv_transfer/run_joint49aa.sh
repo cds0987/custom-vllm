@@ -15,6 +15,12 @@
 set -u
 cd "$(dirname "$0")"
 mkdir -p /content/logs
+# Hoc phi (dot dau, 2026-09-01): sanity do 21,74GiB/23 (sat hon joint49z
+# 19,6GiB vi tron gsm8k dai hon) nhung LUOT TRAIN THAT van OOM ngay o buoc
+# dau — thong bao loi "21,61GiB allocated, 171MiB reserved-but-unallocated"
+# la dau hieu PHAN MANH, khong phai het bo nho that. Bat expandable_segments
+# theo dung goi y trong thong bao loi.
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 step() { echo; echo "===== [$(date +%H:%M:%S)] $* ====="; }
 
