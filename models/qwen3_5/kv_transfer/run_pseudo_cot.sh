@@ -25,10 +25,13 @@ print('OK: suite_gen.score da va')
 "
 
 echo "=== sinh pseudo-gold CoT (musr,suite_rag,suite_mid,suite_swe), split=ca ==="
+# max-len 6144: prompt max do duoc la 4228 token (suite_rag/mid/swe) + 200
+# token gold moi = 4428, can du du cho vLLM khong bao "0 output tokens con
+# lai" (hoc phi: 4096 mac dinh qua nho, crash o suite_rag ngay item dau).
 python3 -u gen_pseudo_vllm.py \
   --data /content/train_items.json \
   --out /content/pseudo_gold_cot.json \
-  --model Qwen/Qwen3.5-9B --quant bnb \
+  --model Qwen/Qwen3.5-9B --quant bnb --max-len 6144 \
   --kinds musr,suite_rag,suite_mid,suite_swe \
   --split ca \
   --hf-prefix joint49_cot || exit 1
