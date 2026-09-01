@@ -199,9 +199,26 @@ def build_suite(n, ctxs, families, out_path, tok, block=BLOCK, seed=0):
 
 
 def score(item, text):
-    """1 neu dap an xuat hien trong text sinh ra."""
+    """1 neu dap an xuat hien trong text sinh ra NHU MOT TOKEN TRON VEN.
+
+    Truoc day khop CHUOI CON tho (`e.lower() in t`): decode tren cache
+    ngoai hay garble/lap so o cuoi dinh danh (vd dap an dung "flush_buffers_10"
+    nhung model sinh "flush_buffers_1012_1012..."), va "flush_buffers_10" VAN
+    la tien to dung cua chuoi garble do -> tinh sai thanh dung. Fix: sau khi
+    tim thay vi tri khop, ky tu NGAY SAU do khong duoc la chu so — neu la thi
+    do la mot con so dai hon tinh co chua dap an lam tien to, khong phai dap
+    an that. Da doi chieu: dieu nay khong doi ket qua o cac truong hop dap an
+    von da la token tron ven (ky tu sau la khoang trang/dau cau/ket thuc)."""
     t = text.lower()
     if item["family"] == "math":
         digits = re.sub(r"[^\d]", " ", text).split()
         return int(any(e in digits for e in item["expect"]))
-    return int(any(e.lower() in t for e in item["expect"]))
+    for e in item["expect"]:
+        el = e.lower()
+        idx = t.find(el)
+        while idx >= 0:
+            nxt = t[idx + len(el):idx + len(el) + 1]
+            if not nxt.isdigit():
+                return 1
+            idx = t.find(el, idx + 1)
+    return 0
