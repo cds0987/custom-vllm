@@ -47,10 +47,15 @@ def _load(name):
 
 gd = _load("gen_data")
 
-N_NEW = {"gsm8k": 320, "bbh": 48, "musr": 24,
-         "suite_rag": 24, "suite_mid": 24, "suite_math": 24, "suite_swe": 24}
-GOLD_CAP = {"gsm8k": 256, "bbh": 48, "musr": 24,
-            "suite_rag": 24, "suite_mid": 24, "suite_math": 24, "suite_swe": 24}
+# (user duyet 2026-09-01) 4 ho QUAN HE mo tu 24 -> 200 token: 24 chi du cho
+# dap an ngan + mao dau suy luan bi CAT CUT, khong phai CoT that. Phia train
+# (e9_joint.py --gold-cap 256) da san sang nhan gold dai toi 256 -> ha tang
+# khong thieu, chi ngan sach SINH du lieu dang bo hep. suite_math/bbh/gsm8k
+# GIU NGUYEN (khong phai muc tieu dot nay).
+N_NEW = {"gsm8k": 320, "bbh": 48, "musr": 200,
+         "suite_rag": 200, "suite_mid": 200, "suite_math": 24, "suite_swe": 200}
+GOLD_CAP = {"gsm8k": 256, "bbh": 48, "musr": 200,
+            "suite_rag": 200, "suite_mid": 200, "suite_math": 24, "suite_swe": 200}
 
 
 def main():
