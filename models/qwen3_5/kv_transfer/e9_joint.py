@@ -672,13 +672,23 @@ def main():
     def make_batches(items, B):
         if B <= 1:
             return [[x] for x in items]
-        by = {}
+        by, oversize = {}, []
         for x in items:
-            n = len(tok_t(x["prompt"], add_special_tokens=False,
-                          truncation=True,
-                          max_length=args.max_ctx)["input_ids"])
-            by.setdefault(n, []).append(x)
-        out_, leftover = [], []
+            ids = tok_t(x["prompt"], add_special_tokens=False,
+                       truncation=True, max_length=args.max_ctx)["input_ids"]
+            n = len(ids)
+            # Hoc phi (2026-09-01, OOM lien tuc voi joint49aa): moi mau BI
+            # CAT ve dung max_ctx roi moi gom nhom theo do dai — nen TAT CA
+            # mau dai hon max_ctx (vd suite_swe toi 4228 token, cat con 4096)
+            # deu roi vao CUNG mot nhom "4096" va bi ghep CAP VOI NHAU, tao
+            # lo 2x4096-token — cap ton bo nho nhat co the, xay ra CHAC CHAN
+            # chu khong phai ngau nhien. Mau bi cat (n == max_ctx, nghia la
+            # do dai tu nhien >= max_ctx) chay DON LE, khong ghep cap.
+            if n >= args.max_ctx:
+                oversize.append(x)
+            else:
+                by.setdefault(n, []).append(x)
+        out_, leftover = [], list(oversize)
         for n, xs in by.items():
             for k in range(0, len(xs) - len(xs) % B, B):
                 out_.append(xs[k:k + B])
@@ -687,8 +697,9 @@ def main():
         random.Random(SEED).shuffle(out_)
         n_full = sum(len(g) for g in out_ if len(g) == B)
         print(f"gom lo B={B}: {len(out_)} lo | {n_full}/{len(items)} item "
-              f"({100*n_full/max(len(items),1):.1f}%) vao duoc lo day",
-              flush=True)
+              f"({100*n_full/max(len(items),1):.1f}%) vao duoc lo day | "
+              f"{len(oversize)} mau bi cat ve max_ctx chay DON LE (tranh "
+              f"ghep cap 2x{args.max_ctx}-token)", flush=True)
         return out_
 
     batches = make_batches(data["train"], args.batch)
