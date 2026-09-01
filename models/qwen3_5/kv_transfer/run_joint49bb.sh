@@ -134,7 +134,7 @@ COMMON="--tgt-model Qwen/Qwen3.5-9B
   --data-file /content/train_items_gsm.json
   --pseudo-gold /content/pseudo_gold_gsm2.json
   --max-ctx ${MAXCTX:-4096} --tbptt 128 --gold-cap 256 --gold-envelope 16384:256
-  --drop-kinds ${DROP:-bbh,bfcl,needle,musr,suite_rag,suite_mid,suite_math}
+  --drop-kinds ${DROP:-bbh,bfcl,needle,musr,suite_rag,suite_mid,suite_math,ifstruct,pbtable}
   --no-offload
   --batch $BATCH
   --lora-t $MODS --lora-t-r ${LORAT_R:-16}
