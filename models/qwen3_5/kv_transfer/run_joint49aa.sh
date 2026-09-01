@@ -50,15 +50,38 @@ for name, dest in [("joint_v1/train_items.json", "/content/train_items.json"),
 PYEOF
 
 step "0c lay tap con gsm8k (${GSM_N:-400} mau, uu tien mau da co CoT dung)"
-if [ -f /content/train_items_gsm.json ]; then
+# Hoc phi (2026-09-01): gsm8k gay OOM/leak tich luy theo SO BUOC bat ke
+# batch/max_ctx — kiem chung bang GSM_N=0 chay sach 300/300 buoc trong khi
+# GSM_N=400 sap o ~180. Nghi pham: CoT gsm8k dai hon han cac ho khac (trung
+# vi 91 tu ~120 token, cap goc 256) so voi musr/suite_* (~200 cap nhung
+# thuc te ngan hon nhieu). Cat gold gsm8k xuong ngang cac ho khac (50 token)
+# TRUOC khi dua vao train — giu duoc phan lon quan he/buoc dau CoT ma khong
+# dung toi phan dai nhat (nghi la nguon leak).
+if [ -f /content/train_items_gsm.json ] && [ -f /content/pseudo_gold_gsm.json ]; then
   echo "da co, bo qua"
 else
   python3 - <<PYEOF
 import json, random, pathlib
+from transformers import AutoTokenizer
 random.seed(42)
+tok = AutoTokenizer.from_pretrained("Qwen/Qwen3.5-9B")
 data = json.loads(pathlib.Path("/content/train_items.json").read_text())
 pg = json.loads(pathlib.Path("/content/pseudo_gold_v2.json").read_text())
 N = ${GSM_N:-400}
+GOLD_CAP_GSM = ${GSM_GOLD_CAP:-50}
+
+# Cat gold cua MOI mau gsm8k trong pg xuong GOLD_CAP_GSM token (giu nguyen
+# cac ho khac) — tao ban rieng, KHONG sua pseudo_gold_v2.json goc.
+pg2 = dict(pg)
+n_cut = 0
+for k, v in pg.items():
+    if v.get("kind") == "gsm8k" and v.get("gold"):
+        ids = tok(v["gold"], add_special_tokens=False)["input_ids"]
+        if len(ids) > GOLD_CAP_GSM:
+            pg2[k] = dict(v, gold=tok.decode(ids[:GOLD_CAP_GSM]))
+            n_cut += 1
+pathlib.Path("/content/pseudo_gold_gsm.json").write_text(json.dumps(pg2, ensure_ascii=False))
+print(f"cat gold gsm8k: {n_cut} mau > {GOLD_CAP_GSM} token da duoc cat")
 
 # ty le train:val ~ 4697:201 (~23,4x) — chia N theo dung ty le do de val
 # khong bi thoi phong bat thuong so voi train.
@@ -67,11 +90,11 @@ TRAIN_LEN = len(data["train"]); VAL_LEN = len(data["val"])
 def subset(split_items, n_this):
     gsm = [it for it in split_items if it["kind"] == "gsm8k"]
     other = [it for it in split_items if it["kind"] != "gsm8k"]
-    have_cot = [it for it in gsm if pg.get(it.get("id",""), {}).get("gold")]
-    no_cot = [it for it in gsm if not pg.get(it.get("id",""), {}).get("gold")]
+    have_cot = [it for it in gsm if pg2.get(it.get("id",""), {}).get("gold")]
+    no_cot = [it for it in gsm if not pg2.get(it.get("id",""), {}).get("gold")]
     random.shuffle(have_cot); random.shuffle(no_cot)
     picked = (have_cot + no_cot)[:n_this]
-    return other + picked, len(picked), sum(1 for p in picked if pg.get(p.get("id",""),{}).get("gold"))
+    return other + picked, len(picked), sum(1 for p in picked if pg2.get(p.get("id",""),{}).get("gold"))
 
 n_tr_target = max(1, round(N * TRAIN_LEN / (TRAIN_LEN + VAL_LEN)))
 n_val_target = max(1, N - n_tr_target)
@@ -85,10 +108,11 @@ PYEOF
 import os
 from huggingface_hub import HfApi
 api = HfApi(token=os.environ.get('HF_TOKEN'))
-api.upload_file(path_or_fileobj='/content/train_items_gsm.json',
-                path_in_repo='joint49_cot/train_items_gsm.json',
-                repo_id='gunnybd01/qwen35-kv-mapper-4b-27b')
-print('HF-UP train_items_gsm.json OK')
+for f, dest in [('/content/train_items_gsm.json', 'joint49_cot/train_items_gsm.json'),
+                ('/content/pseudo_gold_gsm.json', 'joint49_cot/pseudo_gold_gsm.json')]:
+    api.upload_file(path_or_fileobj=f, path_in_repo=dest,
+                    repo_id='gunnybd01/qwen35-kv-mapper-4b-27b')
+    print('HF-UP', f)
 "
 fi
 
@@ -138,7 +162,7 @@ BATCH="${BATCH:-2}"
 # gsm8k khoi danh sach loai). Moi thu khac GIONG HET.
 COMMON="--tgt-model Qwen/Qwen3.5-9B
   --data-file /content/train_items_gsm.json
-  --pseudo-gold /content/pseudo_gold_v2.json
+  --pseudo-gold /content/pseudo_gold_gsm.json
   --max-ctx ${MAXCTX:-4096} --tbptt 128 --gold-cap 256 --gold-envelope 16384:256
   --drop-kinds ${DROP:-suite_math}
   --no-offload
