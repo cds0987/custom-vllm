@@ -34,6 +34,16 @@
     Trong lúc Colab chạy nền thì làm việc local (research, code, docs). Kiểm tra sau
     bằng `bash run.sh status` / tail log. Task nhỏ (<1-2 phút) chạy thẳng được.
 
+## Phạm vi tune-eval
+14. (User chốt 2026-09-01, sau khi bắt lỗi thiếu sót lần 1) Khi user nói "tập trung
+    vào bộ X, Y" (thu hẹp phạm vi cải tiến): PHẢI áp dụng NGAY vào cả train
+    (`--drop-kinds`) LẪN vòng val/sanity — không chỉ ghi nhận rồi qua việc khác mà
+    quên. Ghi rõ "mục tiêu hiện tại" thành một dòng riêng, dễ thấy, ở đầu mục
+    "Trạng thái hiện tại" trong `TRANG-THAI.md` — mỗi khi mục tiêu đổi, sửa dòng đó
+    NGAY LẬP TỨC (cùng lượt), không đợi đến khi tổng kết. Các bộ bị loại khỏi vòng
+    tune-eval vẫn giữ nguyên số liệu cũ (không cần chạy lại) cho tới khi có lượt
+    train mới đụng tới chúng.
+
 ## An toàn
 11. (User sửa 2026-08-25) Token HF là account FREE thí nghiệm, user chấp nhận
     dùng trực tiếp: sống ở `.env` root repo (gitignored) + cell notebook —

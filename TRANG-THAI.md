@@ -8,6 +8,14 @@ Cập nhật: 2026-08-31.
 
 ## Trạng thái hiện tại
 
+- **🎯 MỤC TIÊU HIỆN TẠI (user chốt 2026-09-01): CHỈ `suite_swe` (đầy đủ) +
+  `gsm8k`.** Mọi vòng train/val/sanity kế tiếp phải `--drop-kinds` loại hết
+  các bộ khác (bbh/bfcl/needle/musr/suite_rag/suite_mid/suite_math) —
+  không chạy lại chúng, giữ nguyên số cũ (checkpoint tham chiếu: `joint49z`,
+  KHÔNG phải `joint49aa` — xem bên dưới). Đang chờ duyệt kế hoạch
+  `run_joint49bb.sh` (sửa gold gsm8k cắt đầu+đuôi thay vì chỉ đầu, warm-start
+  từ `joint49z`, sanity 40 bước trước khi phóng thật).
+
 - **Báo cáo toàn cục "Prefill bằng model nhỏ" (quy tắc 6c)**:
   https://claude.ai/code/artifact/8e4cccf6-b447-4439-97c2-14e7ca9ffee1
   (file `prefill-model-nho.html` trong scratchpad). Bao gồm 4 số then chốt,
@@ -232,51 +240,13 @@ Cập nhật: 2026-08-31.
     con nhỏ trước, KHÔNG đổ hết 3.000 mẫu — sẽ làm chậm train và loãng tín
     hiệu musr/suite_swe) vào lượt tiếp theo, ấm từ `joint49z`.
 
-- **`joint49y` = CHECKPOINT THAM CHIẾU CŨ (thay bởi `joint49z` ở trên)**. Điểm tổng
-  75,5→77,1% (cũ, dính bug suite_swe — xem "suite_gen.score ĐÃ VÁ" phía trên
-  để biết số suite_swe đúng). Báo cáo HTML:
+- **`joint49y` = checkpoint tham chiếu CŨ (thay bởi `joint49z`)** — niêm phong
+  1.650+179 mẫu, bfcl 94,0%/bbh 65,0%/needle 94,6%/suite_mid 99,2%/suite_rag
+  98,4%/suite_swe 56,1%(số này SAU đó phát hiện dính bug scorer, xem "suite_gen.score
+  ĐÃ VÁ")/musr 58,9%. ctx-BỎ suite_swe/musr sập 0,0% cả hai — không ăn gian.
+  Chi tiết đầy đủ + 2 sự cố vận hành (thiếu --decode-batch, resume-file sai)
+  đã dồn sang `STATUS.md`. Báo cáo HTML:
   https://claude.ai/code/artifact/b20fe8d6-0e21-44d1-afa8-b1622d62385a
-- **`joint49y` NIÊM PHONG XONG (2026-08-31), 1.650+179 mẫu** — so `joint49w`
-  (cột `4B+LoRA+map→9B` cũ):
-
-  | bộ | 49w | **49y** | delta |
-  |---|---|---|---|
-  | bfcl | 88,5% | **94,0%** | +5,5 |
-  | bbh | 66,0% | 65,0% | −1,0 |
-  | needle | 98,3% | 94,6% | −3,7 |
-  | suite_mid | 97,6% | **99,2%** | +1,6 |
-  | suite_rag | 90,5% | **98,4%** | +7,9 |
-  | suite_swe | 47,2% | **56,1%** | **+8,9** |
-  | musr | 42,9% | **58,9%** | **+16,0** |
-
-  **Đối chứng ctx-BỎ (chốt chặn đặt trước train)**: suite_swe đầy đủ 56,1% →
-  ctx-BỎ **0,0%**; musr đầy đủ 58,9% → ctx-BỎ **0,0%**. Sập hoàn toàn ở cả hai
-  → **KHÔNG ăn gian** — LoRA-9B không học tủ đáp án, vẫn phụ thuộc thật vào
-  cache truyền sang.
-
-  **Đọc theo đúng mốc đã đặt**: `suite_swe 56,1% ≤ 60%` → nhánh giữa kích
-  hoạt: KHÔNG phải lỗi phía đọc nữa (LoRA-9B đã giúp thật, +8,9 và +16,0 ở
-  suite_swe/musr, +5,5 ở bfcl) — nghi phạm cho phần còn thiếu quay về **dạng
-  hàm `A·S·B` của mapper**. Không rơi vào nhánh "bỏ": không ăn gian, các bộ
-  khác không tụt (trừ needle −3,7 và bbh −1,0, trong biên nhiễu).
-  **Đáng chú ý**: val 7 mẫu lúc train đoán suite_swe 57,1% — khớp gần đúng số
-  thật trên 123 mẫu niêm phong (56,1%), dù mẫu rất nhỏ.
-  **Checkpoint `joint49y/` đã ở HF** (mapper_best/lora_best/lorat_best).
-  Kế tiếp hợp lý: thử mở rộng `gdn-terms`/`attn-rank` của mapper (đúng nghi
-  phạm dạng hàm) thay vì tiếp tục siết phía LoRA — phía đọc đã chứng minh
-  không phải nút cổ chai chính.
-  **Sự cố vận hành trong đợt eval (đã sửa)**: quên `--decode-batch` khi phóng
-  → chạy đơn từng mẫu >1h chỉ được 625/1650; kill an toàn (eval_big.py tự
-  resume theo id), phóng lại `DBATCH=8` (đã đo 6,7x), công kiểm 25 mẫu
-  batch-8-vs-batch-1 khớp 25/25. Bug thứ hai: `run_joint49y_seal.sh` dùng
-  `if [ -f ket_qua.json ]` để bỏ qua lượt đã xong — nhưng file được ghi TỪNG
-  PHẦN (mỗi 25 mẫu) nên 625 mẫu dở dang cũng khiến nó nghĩ "đã xong" và bỏ
-  qua phần còn lại. Sửa: bỏ hẳn vòng kiểm file, để `eval_big.py` tự resume
-  theo mẫu (nó vốn đã làm đúng việc này).
-
-- **BƯỚC KẾ (cũ, đã lỗi thời)**: mốc "suite_swe >60%" ở đây bị thay bởi
-  mốc chính xác hơn sau khi vá scorer (xem mục "RÀ SOÁT TOÀN BỘ" +
-  "suite_gen.score ĐÃ VÁ" phía trên) — không dùng lại mốc 60%/45% này.
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
