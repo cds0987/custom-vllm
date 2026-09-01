@@ -209,12 +209,19 @@ Cập nhật: 2026-08-31.
     +21,2 khi có LoRA). MUSR đảo chiều: mapper giờ có vẻ LÀM GIẢM điểm sạch
     ở cả hai hàng (trước đó tưởng "+1,8/+10,8 cộng hưởng") — cần train/đo
     lại, chưa chốt.
-  - **Phát hiện khoảng trống dữ liệu mới**: cấu hình "bê nguyên, không LoRA
-    không mapper" (11,4%/21,4% dùng trong nhiều bảng cũ) — file văn bản tải
-    lại KHÔNG khớp con số này (raw 0,0%/1,8% thay vì 11,4%/21,4%, đầu ra là
-    rác thuần `?????`/`1: 1: 1:...`). Khả năng là một lượt chạy "bê nguyên"
-    khác (trước/sau alpha correction). KHÔNG âm thầm ghi đè — gắn cờ "chưa
-    xác minh" trong mọi bảng dùng số này, chờ tìm lại đúng file hoặc chạy lại.
+  - **`suite_gen.score` ĐÃ VÁ (2026-08-31)**: ký tự ngay sau vị trí khớp
+    không được là chữ số. `test_suite_gen_scoring.py` (15/15) tái hiện đúng
+    4 ca garble thật đọc từ log. Chấm lại bằng hàm CHÍNH THỨC (không phải
+    verb_noun xấp xỉ nữa) trên đáp án ĐẦY ĐỦ (cụm+số): `suite_swe`
+    **49w 3,3% = 49y 3,3%** — xác nhận chắc chắn KHÔNG có cải tiến ở lớp
+    đáp án đầy đủ (khớp phát hiện verb_noun trước đó). `suite_mid`/`suite_rag`
+    hầu như không đổi (lỗi tập trung ở `suite_swe` — số ID ngắn, dễ garble) —
+    NGOẠI TRỪ cấu hình yếu "không-LoRA+mapper" trên suite_mid (44,4%→31,7%
+    sau vá, số 49w/49y không đổi).
+  - **Khoảng trống dữ liệu chưa lấp**: cấu hình "bê nguyên, không LoRA không
+    mapper" (11,4%/21,4% trong nhiều bảng cũ) — file tải lại KHÔNG khớp (raw
+    0,0%/1,8%, đầu ra rác thuần `?????`/`1: 1: 1:...`) — có thể lượt chạy
+    khác (trước/sau alpha correction). Gắn cờ "chưa xác minh", không ghi đè.
   - **Bằng chứng cơ chế mạnh nhất, độc lập điểm số**: tỷ lệ đầu ra suy biến/
     lặp token trên TOÀN BỘ 1.650 mẫu (không riêng 2 bộ) giảm đều theo từng
     thành phần: LoRA-4B-không-mapper 23,6% → mapper-không-LoRA 16,8% →
@@ -231,12 +238,9 @@ Cập nhật: 2026-08-31.
     cache" — cơ chế module + bằng chứng), cùng URL:
     https://claude.ai/code/artifact/b20fe8d6-0e21-44d1-afa8-b1622d62385a
 
-- **`joint49y` = CHECKPOINT THAM CHIẾU MỚI (thay `joint49w`)**. Điểm tổng có
-  trọng số theo n (1.650 mẫu): 4B một mình 67,0% | 9B một mình 61,0% |
-  `joint49w` 75,5% → **`joint49y` 77,1%**. Tăng thật nhưng khiêm tốn ở mức
-  tổng — vì `bbh` (n=779, gần nửa dữ liệu) gần như đứng yên (−1,0), che khuất
-  mức tăng lớn ở các bộ nhỏ hơn (musr n=56: +16,0; suite_swe n=123: +8,9).
-  Báo cáo HTML đã cập nhật cùng URL cũ:
+- **`joint49y` = CHECKPOINT THAM CHIẾU MỚI (thay `joint49w`)**. Điểm tổng
+  75,5→77,1% (cũ, dính bug suite_swe — xem "suite_gen.score ĐÃ VÁ" phía trên
+  để biết số suite_swe đúng). Báo cáo HTML:
   https://claude.ai/code/artifact/b20fe8d6-0e21-44d1-afa8-b1622d62385a
 - **`joint49y` NIÊM PHONG XONG (2026-08-31), 1.650+179 mẫu** — so `joint49w`
   (cột `4B+LoRA+map→9B` cũ):
@@ -276,14 +280,9 @@ Cập nhật: 2026-08-31.
   qua phần còn lại. Sửa: bỏ hẳn vòng kiểm file, để `eval_big.py` tự resume
   theo mẫu (nó vốn đã làm đúng việc này).
 
-- **BƯỚC KẾ (chờ user duyệt)**: (1) ✅ đã làm — gom lô theo độ dài cho train
-  (gold có mặt nạ + `verify_meta` cho cặp (T,B)); (2) đọc tay đầu ra 9B trên
-  4 tác vụ bị 0/30; (3) thêm NHIỆM VỤ đòi quan hệ vào dữ liệu train — làm ở
-  tầng nhiệm vụ chứ KHÔNG so khớp tensor (luật error-placement: nMSE
-  10,5→0,96 mà chức năng vẫn 0/5). Bằng chứng ủng hộ: suite_swe 4B một mình
-  **98,4%** → thông tin quan hệ CÓ trong cache 4B, mapper làm mất chứ không
-  phải nó không tồn tại. Mốc phân xử: suite_swe không vượt 60% và tỷ lệ giữ
-  quan hệ không vượt 45% thì nghi phạm chuyển sang DẠNG HÀM `A·S·B`.
+- **BƯỚC KẾ (cũ, đã lỗi thời)**: mốc "suite_swe >60%" ở đây bị thay bởi
+  mốc chính xác hơn sau khi vá scorer (xem mục "RÀ SOÁT TOÀN BỘ" +
+  "suite_gen.score ĐÃ VÁ" phía trên) — không dùng lại mốc 60%/45% này.
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
