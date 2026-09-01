@@ -193,52 +193,46 @@ Cập nhật: 2026-08-31.
   cấu hình 49w rồi chạy lại tên mới `joint49y`. (2) lệnh dọn tiến trình bằng
   `pkill -f e9_joint.py` khớp luôn dòng lệnh của chính shell gọi nó (bẫy cũ,
   dạng khác) — sửa bằng đọc `/proc/*/cmdline` loại trừ pid của chính mình.
-- **KIỂM ĐỌC LOG (2026-08-31)**: điểm thô `suite_swe`/`musr` là thang đo tồi
-  (khớp chuỗi con trên số garble; chữ A-F đầu tiên nhạy đầu ra lặp). Đo đúng
-  lớp: verb_noun `suite_swe` +9,7 (73,2→82,9%), musr sạch +28,6 (12,5→41,1%)
-  — LoRA-9B cải tiến THẬT, mạnh hơn số thô ban đầu. Chi tiết đầy đủ + rà soát
-  mở rộng ra cả ma trận cũ ở mục ngay dưới.
+- **Đợt sửa thang đo (2026-08-31, chi tiết STATUS.md)**: `suite_gen.score`
+  ĐÃ VÁ (khớp chuỗi con trên số garble — `test_suite_gen_scoring.py` 15/15).
+  Rà soát phát hiện lỗi lan tới 4 cấu hình cascade cũ, không riêng 49w/49y.
+  Sau vá: `suite_swe` đáp án đầy đủ 49w=49y=3,3% (không cải tiến ở lớp này
+  lúc đó); verb_noun (lớp quan hệ) vẫn +9,7 thật. Bằng chứng cơ chế mạnh
+  nhất: tỷ lệ suy biến toàn bộ 1.650 mẫu giảm đều 23,6%→16,8%→16,1%→8,4%
+  qua từng thành phần LoRA-4B/mapper/LoRA-9B — đo trực tiếp, không qua
+  hàm chấm nào. Báo cáo HTML:
+  https://claude.ai/code/artifact/b20fe8d6-0e21-44d1-afa8-b1622d62385a
 
-- **RÀ SOÁT TOÀN BỘ (2026-08-31, lệnh user "cập nhật lại hết, verify lại cái
-  nào sai") — lỗi thang đo LAN RỘNG hơn tưởng, không riêng 49w/49y:**
-  - Tải lại văn bản gốc của 4 cấu hình cascade cũ (bê nguyên+LoRA, mapper-
-    không-LoRA, joint49w, joint49y) — khớp CHÍNH XÁC điểm thô đã công bố ở
-    3/4, xác nhận đáng tin để tính lại verb_noun/sạch. Ma trận 2×2 LoRA×mapper
-    SUITE_SWE giờ đúng theo verb_noun: không-LoRA+mapper=3,3%, LoRA-không-
-    mapper=52,0%, LoRA+mapper=73,2% — **cộng hưởng vẫn đúng** (mapper thêm
-    +21,2 khi có LoRA). MUSR đảo chiều: mapper giờ có vẻ LÀM GIẢM điểm sạch
-    ở cả hai hàng (trước đó tưởng "+1,8/+10,8 cộng hưởng") — cần train/đo
-    lại, chưa chốt.
-  - **`suite_gen.score` ĐÃ VÁ (2026-08-31)**: ký tự ngay sau vị trí khớp
-    không được là chữ số. `test_suite_gen_scoring.py` (15/15) tái hiện đúng
-    4 ca garble thật đọc từ log. Chấm lại bằng hàm CHÍNH THỨC (không phải
-    verb_noun xấp xỉ nữa) trên đáp án ĐẦY ĐỦ (cụm+số): `suite_swe`
-    **49w 3,3% = 49y 3,3%** — xác nhận chắc chắn KHÔNG có cải tiến ở lớp
-    đáp án đầy đủ (khớp phát hiện verb_noun trước đó). `suite_mid`/`suite_rag`
-    hầu như không đổi (lỗi tập trung ở `suite_swe` — số ID ngắn, dễ garble) —
-    NGOẠI TRỪ cấu hình yếu "không-LoRA+mapper" trên suite_mid (44,4%→31,7%
-    sau vá, số 49w/49y không đổi).
-  - **Khoảng trống dữ liệu chưa lấp**: cấu hình "bê nguyên, không LoRA không
-    mapper" (11,4%/21,4% trong nhiều bảng cũ) — file tải lại KHÔNG khớp (raw
-    0,0%/1,8%, đầu ra rác thuần `?????`/`1: 1: 1:...`) — có thể lượt chạy
-    khác (trước/sau alpha correction). Gắn cờ "chưa xác minh", không ghi đè.
-  - **Bằng chứng cơ chế mạnh nhất, độc lập điểm số**: tỷ lệ đầu ra suy biến/
-    lặp token trên TOÀN BỘ 1.650 mẫu (không riêng 2 bộ) giảm đều theo từng
-    thành phần: LoRA-4B-không-mapper 23,6% → mapper-không-LoRA 16,8% →
-    LoRA+mapper(49w) 16,1% → **+LoRA-9B(49y) 8,4%**. Đo trực tiếp trên văn
-    bản sinh ra, không qua hàm chấm nào — không thể bị lỗi thang đo.
-  - **"Mapper đóng góp bao nhiêu"** (so 4B+LoRA tự trả lời vs qua mapper):
-    phát hiện so sánh KHÔNG cân xứng — vế trái (4B decode cache CỦA CHÍNH
-    NÓ) không có lý do bị nhiễu garble cross-cache, vế phải (qua mapper)
-    thì có. Mức "hại nặng −25,2/−26,7" công bố trước đây phóng đại thiệt
-    hại thật; quy mô đúng chưa đo lại được (thiếu văn bản gốc phía 4B+LoRA
-    tự trả lời để tính verb_noun/sạch tương đương).
-  - Báo cáo HTML đã cập nhật toàn bộ theo phát hiện này (bảng đầy đủ, mapper
-    đóng góp, ranh giới quan hệ, ma trận 2×2, mục mới "LoRA-9B: dạy 9B đọc
-    cache" — cơ chế module + bằng chứng), cùng URL:
-    https://claude.ai/code/artifact/b20fe8d6-0e21-44d1-afa8-b1622d62385a
+- **`joint49z` = CHECKPOINT THAM CHIẾU MỚI (thay `joint49y`), 2026-09-01
+  — pseudo-gold CoT thật từ chính 9B (user đề xuất "dùng 9B sinh câu trả lời,
+  train dạng CoT để mapper+LoRA học đúng bước suy luận"):**
+  - Cơ chế: `gen_pseudo_vllm.py` đã sẵn dùng 9B làm giáo viên từ đầu dự án,
+    nhưng ngân sách chỉ 24 token (cắt cụt CoT). Mở lên 200 token cho 4 họ
+    quan hệ (`musr`,`suite_rag/mid/swe`) — hạ tầng train (`--gold-cap 256`)
+    không cần sửa. 9B tự làm đúng: suite_mid 100%, suite_swe 99%, suite_rag
+    97%, musr chỉ 46,4% (khó ngay cả với 9B — giữ gold cũ cho phần sai).
+  - Train tiếp từ `joint49y`, CHỈ đổi `--pseudo-gold` (thí nghiệm một-biến).
+    1000 bước, best đúng ở bước cuối: **val score 103** (bfcl14,needle15,
+    bbh47,suite_swe5/7,musr13/19) — verify-meta khớp, không hồi quy tốc độ
+    (+8% so 49y, VRAM không đổi).
+  - **NIÊM PHONG 1.650 mẫu — kết quả đột phá thật ở lớp đáp án ĐẦY ĐỦ**
+    (không còn chỉ verb_noun xấp xỉ): **`suite_swe` 3,3%→52,8%** (65/123),
+    **`musr` →75,0%** (42/56, dùng scorer đã vá). Đối chứng ctx-BỎ:
+    `suite_swe` sập đúng **0,0%** — sạch. `musr` ctx-BỎ ban đầu đo 25,0%
+    (14/56) — ĐIỀU TRA: cả 14 mẫu "đúng" có VĂN BẢN GIỐNG HỆT NHAU (đoạn
+    rác vô nghĩa về "fascicle"), và đúng bằng số mẫu có đáp án="A" trong
+    tập (14/56) — mô hình sập về MỘT câu cố định chứa "A" ngẫu nhiên khi
+    mất ngữ cảnh, trúng lỗi chấm cũ (bắt chữ A-F đầu tiên). musr ctx-BỎ
+    THẬT = 0/56 — không ăn gian, cả hai bộ đều sạch.
+  - `bbh`/`bfcl` "giữ được" >100% so với self (bbh self 30,3%→mapped 62,8%)
+    — mapped VƯỢT trần self 9B, đáng chú ý nhưng CHƯA điều tra kỹ, có thể
+    liên quan bí ẩn "9B thua 4B" cũ (mapped né được lỗi khuôn của 9B-self?).
+    Cần đọc tay trước khi diễn giải thêm.
+  - Checkpoint đã lưu HF `joint49z/`. Bước kế đã duyệt: thêm `gsm8k` (tập
+    con nhỏ trước, KHÔNG đổ hết 3.000 mẫu — sẽ làm chậm train và loãng tín
+    hiệu musr/suite_swe) vào lượt tiếp theo, ấm từ `joint49z`.
 
-- **`joint49y` = CHECKPOINT THAM CHIẾU MỚI (thay `joint49w`)**. Điểm tổng
+- **`joint49y` = CHECKPOINT THAM CHIẾU CŨ (thay bởi `joint49z` ở trên)**. Điểm tổng
   75,5→77,1% (cũ, dính bug suite_swe — xem "suite_gen.score ĐÃ VÁ" phía trên
   để biết số suite_swe đúng). Báo cáo HTML:
   https://claude.ai/code/artifact/b20fe8d6-0e21-44d1-afa8-b1622d62385a
