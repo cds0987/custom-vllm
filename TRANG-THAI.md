@@ -42,6 +42,25 @@ Cập nhật: 2026-08-31.
   hay công thức train. Hướng còn lại: mở `gdn-terms`/`attn-rank` (đúng nghi
   phạm "dạng hàm A·S·B" đã nêu từ joint49y).
 
+  **PROBE TRÍCH-XUẤT-SỐ (2026-09-02)** — bắt 9B chỉ NHẮC LẠI một con số có sẵn
+  trong đề, không tính toán (`run_49bb_probe_so.sh`, 40 bài × 2 biến thể):
+
+  | biến thể | số đầu model sinh | có mặt trong đầu ra |
+  |---|---|---|
+  | nhắc số ĐẦU của đề | 50,0% | 80,0% |
+  | nhắc số CUỐI của đề | 15,0% | 27,5% |
+
+  **Cả hai đều THẤP → theo mốc đặt trước: thông tin số KHÔNG tới được 9B
+  nguyên vẹn** → `--w-entity` (tăng trọng số CE cho chữ số) sẽ KHÔNG cứu được,
+  vì không thể học cái không có trong cache. Đòn bẩy đúng là **`--gdn-terms`**
+  (mở phần GDN của mapper — hiện chỉ 0,8M/17,6M tham số, MỘT số hạng `A·S·B`).
+  **Bậc thang theo độ sâu rất rõ** (80% → 27,5%): đầu đề còn, cuối đề mất.
+  Đối chiếu `needle` 99,2% (tìm mã 6 số trong ngữ cảnh dài) → vấn đề không phải
+  "truy hồi" mà là **MẬT ĐỘ chi tiết số**: một mã thì giữ được, 4-5 con số gắn
+  với 4-5 thực thể thì không. LƯU Ý CONFOUND: probe có yếu tố "tuân lệnh lạ"
+  (model chưa từng train kiểu "nhắc lại số thứ N"), nên so sánh đầu-vs-cuối
+  (cùng lệnh, cùng bài) là phần đáng tin nhất, không phải con số tuyệt đối.
+
   **Bài học vận hành mới**: gom lô (`--decode-batch`>1) KHÔNG an toàn cho
   bench sinh dài (gsm8k 320 token/mẫu) — công kiểm batch=8 bắt được lệch
   thật (b1≠bB) ở mẫu `big/gsm8k/221`; đã tách batch=1 riêng cho gsm8k trong

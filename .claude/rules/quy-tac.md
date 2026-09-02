@@ -44,6 +44,14 @@
     tune-eval vẫn giữ nguyên số liệu cũ (không cần chạy lại) cho tới khi có lượt
     train mới đụng tới chúng.
 
+15. (Học phí LẦN THỨ BA về thang đo, 2026-09-02) Khi dựng MỘT PHÉP ĐO MỚI
+    (probe, bộ đề mới, hàm chấm mới): PHẢI đọc tay ≥8 mẫu đầu ra kèm điểm số
+    TRƯỚC khi tin/báo cáo con số tổng. Ba lần đã dính: (1) `suite_gen.score`
+    khớp chuỗi con trên số garble, (2) `musr` bắt chữ A-F đầu tiên trúng đầu ra
+    suy biến, (3) probe trích-xuất-số dùng scorer gsm8k lấy SỐ CUỐI trong đầu
+    ra, trong khi câu trả lời đúng nằm ở SỐ ĐẦU (`ra='61. Step 1... Step 2'`
+    → chấm 0 dù đúng). Thang đo mượn từ bộ khác gần như luôn sai giả định.
+
 ## An toàn
 11. (User sửa 2026-08-25) Token HF là account FREE thí nghiệm, user chấp nhận
     dùng trực tiếp: sống ở `.env` root repo (gitignored) + cell notebook —
