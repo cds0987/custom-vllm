@@ -25,12 +25,21 @@ LORA=""
 [ -d "$CK/lorat_best" ] && LORA="$LORA --lora-t $CK/lorat_best"
 echo "adapter: ${LORA:-khong co}"
 
-echo "=== [1/2] mapped DAY DU (suite_swe + gsm8k, niem phong) ==="
+echo "=== [1a/2] mapped DAY DU suite_swe (batch ${DBATCH:-8}, da kiem chung an toan) ==="
 python3 -u eval_big.py mapped \
   --tgt-model Qwen/Qwen3.5-9B --max-len 6144 \
   --mapper "$CK/mapper_best.pt" $LORA \
   --decode-batch "${DBATCH:-8}" --verify-batch "${VBATCH:-25}" \
-  --benches "${BENCHES:-suite_swe,gsm8k}" \
+  --benches suite_swe \
+  --hf-prefix "evalbig_$(basename $CK)" || exit 1
+
+echo "=== [1b/2] mapped DAY DU gsm8k (batch=1 — gen 320 token/mau, cong kiem"
+echo "batch=8 phat hien LECH thuc su o mau big/gsm8k/221, KHONG dung batch>1) ==="
+python3 -u eval_big.py mapped \
+  --tgt-model Qwen/Qwen3.5-9B --max-len 6144 \
+  --mapper "$CK/mapper_best.pt" $LORA \
+  --decode-batch 1 --verify-batch 0 \
+  --benches gsm8k \
   --hf-prefix "evalbig_$(basename $CK)" || exit 1
 
 echo "=== [2/2] mapped ctx-BO (chi suite_swe — gsm8k bo qua, xem ghi chu tren) ==="
