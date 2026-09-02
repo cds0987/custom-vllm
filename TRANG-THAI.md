@@ -1,10 +1,9 @@
 # Trạng thái và hàng đợi việc
 
-File này được CLAUDE.md nạp tự động đầu mỗi phiên. Claude TỰ ĐỘNG cập nhật nó khi
-trạng thái thay đổi — KHÔNG cần hỏi user. Giới hạn cứng ≤300 dòng; chi tiết dồn
-sang `STATUS.md`.
+File này được CLAUDE.md nạp tự động đầu mỗi phiên. Claude TỰ ĐỘNG cập nhật khi
+trạng thái đổi — không hỏi user. Giới hạn cứng ≤300 dòng; chi tiết dồn `STATUS.md`.
 
-Cập nhật: 2026-08-31.
+Cập nhật: 2026-09-02.
 
 ## Trạng thái hiện tại
 
@@ -33,14 +32,10 @@ Cập nhật: 2026-08-31.
   | suite_swe | 93,3% | 77,2% | +16,1 (quá khớp NHẸ, tổng quát hoá thật) |
   | gsm8k | **8,3%** | 8,0% | **+0,3 → KHÔNG hề quá khớp** |
 
-  **gsm8k sai y hệt trên chính dữ liệu đã train 1000 bước** → loại bỏ hoàn toàn
-  giả thuyết "thiếu/kém đa dạng dữ liệu". Đọc tay đầu ra train: mô hình lấy
-  ĐÚNG thực thể nhưng **gán SAI con số** — đề "Kylie dùng 3 khăn" → sinh "Kylie
-  dùng 6 khăn"; "Josh + 7 bạn" → "1+7+8=16"; "hình chữ nhật rộng 4, chu vi 30"
-  → "diện tích A=4". Chữ nghĩa truyền qua cache tốt, **liên kết số-với-thực-thể
-  thì không**. Đây là giới hạn cơ chế/dung lượng mapper, KHÔNG phải lỗi dữ liệu
-  hay công thức train. Hướng còn lại: mở `gdn-terms`/`attn-rank` (đúng nghi
-  phạm "dạng hàm A·S·B" đã nêu từ joint49y).
+  **gsm8k sai y hệt trên chính dữ liệu đã train** → loại giả thuyết "thiếu/
+  kém đa dạng dữ liệu". Đọc tay: mô hình lấy ĐÚNG thực thể nhưng **gán SAI
+  con số** ("Kylie dùng 3 khăn" → sinh "6 khăn"). Chữ nghĩa truyền qua cache
+  tốt, **liên kết số-với-thực-thể thì không** — giới hạn cơ chế mapper.
 
   **PROBE TRÍCH-XUẤT-SỐ (2026-09-02)** — bắt 9B chỉ NHẮC LẠI một con số có sẵn
   trong đề, không tính toán (`run_49bb_probe_so.sh`, 40 bài × 2 biến thể):
@@ -50,14 +45,11 @@ Cập nhật: 2026-08-31.
   | nhắc số ĐẦU của đề | 50,0% | 80,0% |
   | nhắc số CUỐI của đề | 15,0% | 27,5% |
 
-  **Cả hai đều THẤP → theo mốc đặt trước: thông tin số KHÔNG tới được 9B
-  nguyên vẹn** → `--w-entity` (tăng trọng số CE cho chữ số) sẽ KHÔNG cứu được,
-  vì không thể học cái không có trong cache. Đòn bẩy đúng là **`--gdn-terms`**
-  (mở phần GDN của mapper — hiện chỉ 0,8M/17,6M tham số, MỘT số hạng `A·S·B`).
-  **Bậc thang theo độ sâu rất rõ** (80%→27,5%): đầu đề còn, cuối đề mất. Đối
-  chiếu `needle` 99,2% → vấn đề không phải "truy hồi" mà là **MẬT ĐỘ chi
-  tiết số** (một mã giữ được, 4-5 con số gắn 4-5 thực thể thì không). Confound:
-  probe có yếu tố "tuân lệnh lạ" nên so đầu-vs-cuối đáng tin hơn số tuyệt đối.
+  **Cả hai đều THẤP → thông tin số KHÔNG tới được 9B nguyên vẹn** → loại
+  `--w-entity`, đòn bẩy tưởng đúng lúc đó là `--gdn-terms`. Bậc theo độ sâu
+  rõ (80%→27,5%): đầu đề còn, cuối mất. Đối chiếu `needle` 99,2% → vấn đề là
+  MẬT ĐỘ chi tiết số, không phải truy hồi. (Kết luận "gdn-terms là đòn bẩy
+  đúng" SAU ĐÓ bị chính oracle ablation bác — xem mục dưới.)
 
 - **`joint49cc` (mapper `--gdn-terms` 1→4, GDN 0,8M→3,2M) — TRAIN + ĐO XONG
   (2026-09-02)**. Một-biến từ `joint49bb`. Val best score 8 ở bước 1000
@@ -94,6 +86,18 @@ Cập nhật: 2026-08-31.
   có nguy cơ phản tác dụng (quá khớp) chứ không giúp gì.
   **Bài học mẫu-nhỏ (lặp lại)**: val 8 mẫu báo 7/8 vs 4-5/8 nhưng 600 mẫu +
   McNemar cho thấy chênh không chắc chắn — không kết luận từ val 8-16 mẫu.
+
+- **ORACLE ABLATION (2026-09-02, `oracle_ablation.py`, đề xuất user)** — hoán
+  đổi trực tiếp attn/GDN mapped bằng cache 9B THẬT, n=30 gsm8k, không train:
+  self **86,7%** (trần) | mapped 0,0% | attn-thật+GDN-mapper **26,7%** |
+  attn-mapper+GDN-thật 3,3%. **NGƯỢC giả thuyết "GDN là nút thắt duy nhất"**
+  (đúng ra hàng cuối phải gần trần). Đọc tay quyết định: hàng cuối sinh RÁC/
+  SUY BIẾN HOÀN TOÀN (không phải sai số thường), hàng ba sinh văn mạch lạc
+  chỉ sai số liệu. → cắm GDN thật cạnh attn mapped làm 9B suy biến thay vì
+  được cứu — hai nửa cache cần NHẤT QUÁN với nhau; attn mapped (dù CCA E7
+  cao) cũng đóng góp lỗi, không "đã tốt sẵn" như giả định cũ. Lên HF
+  `evalbig/oracle_ablation.json`. Hướng tiếp (đề xuất user): **bridge tokens**
+  (9B tự prefill lại đoạn tóm tắt cực ngắn do 4B xuất ra) thay vì vá mapper.
 
   **Bài học vận hành mới**: gom lô (`--decode-batch`>1) KHÔNG an toàn cho
   bench sinh dài (gsm8k 320 token/mẫu) — công kiểm batch=8 bắt được lệch
@@ -233,13 +237,10 @@ Cập nhật: 2026-08-31.
   bằng, **suite_swe = suite_swe của 49w (4/7)** — không tụt bộ nào. Mốc phân
   xử `suite_swe >60%` đo trên val chỉ 7 mẫu (57,1%, sai số ±14 điểm/mẫu) —
   KHÔNG đủ để phân xử; số thật đợi tập niêm phong 123 mẫu.
-  Checkpoint (`mapper_best`/`lora_best`/`lorat_best`) đã lên HF `joint49y/`.
-  **Hai học phí trong đợt phóng**: (1) lần đầu chạy `max-ctx 16384 + accum 1`
-  (khác `joint49w` ở max-ctx VÀ accum cùng lúc, đổi 4 biến chứ không phải 2)
-  → val needle sập 15/15→0/15 KHÔNG quy được cho ai; đã dừng, ghép lại đúng
-  cấu hình 49w rồi chạy lại tên mới `joint49y`. (2) lệnh dọn tiến trình bằng
-  `pkill -f e9_joint.py` khớp luôn dòng lệnh của chính shell gọi nó (bẫy cũ,
-  dạng khác) — sửa bằng đọc `/proc/*/cmdline` loại trừ pid của chính mình.
+  Checkpoint đã lên HF `joint49y/`. Hai học phí: (1) đổi 4 biến cùng lúc
+  (max-ctx+accum) làm val needle sập không quy được cho ai — ghép lại đúng
+  cấu hình 49w mới sửa; (2) `pkill -f e9_joint.py` khớp luôn shell gọi chính
+  nó — sửa bằng đọc `/proc/*/cmdline` loại trừ pid của mình.
 - **Đợt sửa thang đo (2026-08-31, chi tiết STATUS.md)**: `suite_gen.score`
   ĐÃ VÁ (khớp chuỗi con trên số garble — `test_suite_gen_scoring.py` 15/15).
   Rà soát phát hiện lỗi lan tới 4 cấu hình cascade cũ, không riêng 49w/49y.
@@ -287,14 +288,13 @@ Cập nhật: 2026-08-31.
   đã dồn sang `STATUS.md`. Báo cáo HTML:
   https://claude.ai/code/artifact/b20fe8d6-0e21-44d1-afa8-b1622d62385a
 
-## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
-
+## Hàng đợi (đã duyệt 2026-08-14)
 1. ✅ Spec decoding + ✅ util sweep (mặc định 0.97, đỉnh 12 phiên) — đóng bằng số đo.
-2. (Hoãn, KV-transfer ưu tiên từ 2026-08-14) profile `serve 4b`/`2b`.
-3. Soak test 3-4 giờ chạy nền (rò bộ nhớ? TTFT trôi?) — đặt cuối ngày.
+2. (Hoãn, KV-transfer ưu tiên) profile `serve 4b`/`2b`.
+3. Soak test 3-4 giờ chạy nền — đặt cuối ngày.
 4. Đóng gói `serve 9b-prefill` (fp8 specialist, số đã đo) + cập nhật HTML report.
-5. (Hoãn) P5 ablation nguồn graft; P6 converter toàn-model; sửa harness 3 thang token.
+5. (Hoãn) P5 ablation nguồn graft; P6 converter toàn-model.
 
 ## Nợ dài hạn / quyết định chờ user
-- Chưa đo qua mạng thật (mọi số qua localhost); chưa soak nhiều giờ (mục 3).
-  Nộp `upstream/` ra ngoài? — Revoke HF token sau chiến dịch — Mở B/C khi nào.
+- Chưa đo qua mạng thật; chưa soak nhiều giờ. Nộp `upstream/`? Revoke HF
+  token sau chiến dịch? Mở B/C khi nào?
