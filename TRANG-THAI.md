@@ -9,13 +9,27 @@ Cập nhật: 2026-08-31.
 ## Trạng thái hiện tại
 
 - **🎯 MỤC TIÊU HIỆN TẠI (user chốt 2026-09-01): CHỈ `suite_swe` (đầy đủ) +
-  `gsm8k`.** `run_joint49bb.sh` đang TRAIN THẬT trên Colab (nền, PID 150192,
-  log `/content/logs/joint49bb_train.log`), warm-start từ `joint49z`,
-  `--drop-kinds` loại hết bbh/bfcl/needle/musr/suite_rag/suite_mid/
-  suite_math/ifstruct/pbtable (train chỉ còn gsm8k 384 + suite_swe 190 mẫu).
-  Sửa lỗi gold gsm8k học phí joint49aa: cắt **đầu+đuôi** (giữ kết luận đáp
-  án) thay vì chỉ cắt đầu. Sanity 40 bước sạch: 3,15s/bước, peak 17,18GiB
-  (thấp hơn joint49z ~19,6GiB), không OOM. 1000 bước, dừng theo val.
+  `gsm8k`.** `joint49bb` (warm-start từ `joint49z`, drop hết các bộ khác kể
+  cả ifstruct/pbtable) đã TRAIN XONG 1000 bước + NIÊM PHONG THẬT (123
+  suite_swe + 100 gsm8k). Kết quả:
+
+  | bộ | self 9B | mapped | ctx-BỎ | so joint49z |
+  |---|---|---|---|---|
+  | suite_swe | 99,2% | **77,2%** | 0,0% (sạch) | 56,1% → **77,2% (+21,1)** |
+  | gsm8k | 89,0% | 8,0% | (bỏ qua, ctx=câu hỏi) | lần đầu đo đầy đủ |
+
+  **`suite_swe` là bước nhảy lớn nhất chiến dịch** — thu hẹp phạm vi train
+  (bỏ 7 bộ khác, không loãng tín hiệu) hiệu quả rõ rệt. `gsm8k` vẫn rất yếu
+  (8%) dù đã sửa cắt gold đầu+đuôi (học phí joint49aa: cắt chỉ-đầu làm mất
+  kết luận đáp án) — không còn kẹt cứng 0% nhưng quan hệ toán nhiều-bước
+  có vẻ khó hơn hẳn với mapper hiện tại. Checkpoint `joint49bb/` đã lên HF.
+  **`joint49bb` = checkpoint tham chiếu mới nhất** (thay `joint49z`).
+
+  **Bài học vận hành mới**: gom lô (`--decode-batch`>1) KHÔNG an toàn cho
+  bench sinh dài (gsm8k 320 token/mẫu) — công kiểm batch=8 bắt được lệch
+  thật (b1≠bB) ở mẫu `big/gsm8k/221`; đã tách batch=1 riêng cho gsm8k trong
+  `run_joint49bb_seal.sh`. Batch>1 vẫn an toàn cho bench ngắn (suite_swe 24
+  token, đã kiểm 25/25 khớp).
 
 - **Báo cáo toàn cục "Prefill bằng model nhỏ" (quy tắc 6c)**:
   https://claude.ai/code/artifact/8e4cccf6-b447-4439-97c2-14e7ca9ffee1
