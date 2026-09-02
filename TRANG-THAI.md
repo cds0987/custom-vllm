@@ -174,27 +174,15 @@ Cập nhật: 2026-08-31.
   thiếu kernel `fla`) đều bị bác bằng đo. Đọc tay 20 đầu ra gsm8k: 13/17 ca là
   "văn hoàn hảo, đề bài bị bóp méo" — số sống sót, QUAN HỆ bị đảo lộn.
   Giả thuyết dung lượng GDN (0,8→25,2M) bị bác ở mốc phân xử đặt trước.
-- **MA TRẬN ĐỐI CHỨNG ĐẦY ĐỦ (2026-08-31) — 1.650 mẫu niêm phong, MỌI cột
-  cùng engine.** Báo cáo: https://claude.ai/code/artifact/b20fe8d6-0e21-44d1-afa8-b1622d62385a
-
-  | bộ | n | 4B | 4B+LoRA | 9B | 4B→9B | 4B+LoRA→9B | 4B+map→9B | 4B+LoRA+map→9B |
-  |---|---|---|---|---|---|---|---|---|
-  | bfcl | 200 | 58,5 | 61,0 | 63,5 | — | **2,0** | 85,0 | **88,5** |
-  | bbh | 779 | 45,3 | 51,3 | 30,6 | — | 35,4 | 39,3 | **66,0** |
-  | needle | 240 | **100** | **100** | 100 | 61,2 | 75,0 | 89,2 | 98,3 |
-  | suite_mid | 126 | **100** | **100** | 100 | — | 92,9 | 44,4 | 97,6 |
-  | suite_rag | 126 | 98,4 | **100** | 97,6 | — | 42,1 | 23,8 | 90,5 |
-  | suite_swe | 123 | **98,4** | 72,4 | 99,2 | 11,4 | 27,6 | 0,0 | 47,2 |
-  | musr | 56 | 42,9 | **69,6** | 53,6 | 21,4 | 32,1 | 23,2 | 42,9 |
-
+- **MA TRẬN ĐỐI CHỨNG ĐẦY ĐỦ (2026-08-31, 1.650 mẫu, mọi cột cùng engine)** —
+  bảng đầy đủ 4B/4B+LoRA/9B/các biến thể × 7 bộ nay nằm trong BÁO CÁO HTML
+  (link đầu file) + `STATUS.md`; số `suite_swe`/`musr` trong bảng gốc dính lỗi
+  chấm điểm đã vá, đừng trích lại. Kết luận còn giá trị: mapper luôn tốt hơn bê
+  thẳng cache (bfcl +86,5); LoRA+mapper cộng hưởng chứ không cộng dồn; ranh
+  giới truy-hồi/quan-hệ khớp 3 nguồn độc lập; E1 kết luận vượt dữ liệu (needle
+  bê thẳng 61,2% thật trên 240 mẫu, không phải 100% trên 12 mẫu).
   **Bỏ chữ "cascade" khỏi mọi bảng (user chốt)** — ghi thẳng thành phần;
   `→ 9B` = 9B sinh câu trả lời từ cache chuyển sang.
-- **ĐỌC KẾT QUẢ (bản đầy đủ a-e ở STATUS.md)**: mapper luôn tốt hơn bê thẳng
-  cache (bfcl +86,5); nhưng so 4B tự trả lời thì thua 5/7 bộ (musr −26,7,
-  suite_swe −25,2 — **số suite_swe/musr này SAU ĐÓ phát hiện nghi ngờ bởi
-  lỗi chấm điểm, xem mục kiểm log bên dưới**); LoRA+mapper cộng hưởng không
-  cộng dồn; ranh giới truy-hồi/quan-hệ khớp 3 nguồn độc lập; E1 kết luận
-  vượt dữ liệu (61,2% thật trên 240 mẫu, không phải 100% trên 12 mẫu).
 - **CÒN TREO — lớn nhất**: `4B 45,3% > 9B 30,6%` trên bbh, tái lập trên **cả
   hai engine** (vLLM 30,3 / transformers 30,6) nên KHÔNG phải lỗi engine.
   Cộng với 9B được **đúng 0/30** trên movie_recommendation, disambiguation_qa,
