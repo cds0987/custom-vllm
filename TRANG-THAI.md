@@ -298,4 +298,4 @@ Cập nhật: 2026-08-31.
 ## Nợ dài hạn / quyết định chờ user
 
 - Chưa đo qua mạng thật (mọi số qua localhost); chưa soak nhiều giờ (mục 3).
-- Nộp bản nháp `upstream/` ra ngoài? — Revoke HF token sau chiến dịch — Mở B/C khi nào.
+  Nộp `upstream/` ra ngoài? — Revoke HF token sau chiến dịch — Mở B/C khi nào.
