@@ -72,6 +72,15 @@ def main():
     v = eb.score({"bench": "bfcl", "expect": "f"}, "f(")
     chk("score tra int", isinstance(v, int), True)
 
+    # --- BUG THAT (2026-09-02): dung mapper cham diem PHAI doc gdn_terms tu
+    # _meta checkpoint — thieu no thi Mapper() mac dinh gdn_terms=1, mapper.load()
+    # AM THAM cat cut checkpoint gdn_terms=4 ve con 1 so hang (khong loi, khong
+    # canh bao) -> cham diem tren mo hinh SAI ma khong ai biet. Da xay ra that
+    # voi joint49cc: 600 mau suite_swe + gsm8k train/test deu bi cham sai.
+    src = (_H / "eval_big.py").read_text(encoding="utf-8")
+    chk("Mapper() doc gdn_terms tu _meta",
+        "gdn_terms=_meta.get(\"gdn_terms\"" in src, True)
+
     sh_bad = check_shell_scripts()
     for b in sh_bad:
         fail += 1

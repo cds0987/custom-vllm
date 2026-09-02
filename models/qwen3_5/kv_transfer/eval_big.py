@@ -547,7 +547,8 @@ def run_mapped(args):
              else _t.load(args.mapper, map_location="cpu").get("_meta", {}))
     mapper = e5.Mapper(len(a_t), len(g_t), Hs, Ht, attn_dim, theta_s, theta_t,
                        attn_rank=_meta.get("attn_rank", 0),
-                       gdn_per_head=_meta.get("gdn_per_head", False))
+                       gdn_per_head=_meta.get("gdn_per_head", False),
+                       gdn_terms=_meta.get("gdn_terms", 1))
     if args.identity_mapper:
         print("COPY NGUYEN: khong nap checkpoint (W=I, A=B=I)", flush=True)
         if args.copy_select:
