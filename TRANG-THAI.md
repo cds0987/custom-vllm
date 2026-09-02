@@ -54,35 +54,46 @@ Cập nhật: 2026-08-31.
   nguyên vẹn** → `--w-entity` (tăng trọng số CE cho chữ số) sẽ KHÔNG cứu được,
   vì không thể học cái không có trong cache. Đòn bẩy đúng là **`--gdn-terms`**
   (mở phần GDN của mapper — hiện chỉ 0,8M/17,6M tham số, MỘT số hạng `A·S·B`).
-  **Bậc thang theo độ sâu rất rõ** (80% → 27,5%): đầu đề còn, cuối đề mất.
-  Đối chiếu `needle` 99,2% (tìm mã 6 số trong ngữ cảnh dài) → vấn đề không phải
-  "truy hồi" mà là **MẬT ĐỘ chi tiết số**: một mã thì giữ được, 4-5 con số gắn
-  với 4-5 thực thể thì không. LƯU Ý CONFOUND: probe có yếu tố "tuân lệnh lạ"
-  (model chưa từng train kiểu "nhắc lại số thứ N"), nên so sánh đầu-vs-cuối
-  (cùng lệnh, cùng bài) là phần đáng tin nhất, không phải con số tuyệt đối.
+  **Bậc thang theo độ sâu rất rõ** (80%→27,5%): đầu đề còn, cuối đề mất. Đối
+  chiếu `needle` 99,2% → vấn đề không phải "truy hồi" mà là **MẬT ĐỘ chi
+  tiết số** (một mã giữ được, 4-5 con số gắn 4-5 thực thể thì không). Confound:
+  probe có yếu tố "tuân lệnh lạ" nên so đầu-vs-cuối đáng tin hơn số tuyệt đối.
 
 - **`joint49cc` (mapper `--gdn-terms` 1→4, GDN 0,8M→3,2M) — TRAIN + ĐO XONG
   (2026-09-02)**. Một-biến từ `joint49bb`. Val best score 8 ở bước 1000
   (`suite_swe` 7/8, `gsm8k` 1/16); val leo đều 5→6→6→7/8.
-  **Đo trên bộ `suite_swe` MỚI 600 mẫu** (`run_swe_big.sh`, seed 90210 khác
-  bộ niêm phong 31337, kiểm rò rỉ 0/600 trên 6.172 prompt cũ):
+
+  **⚠️ BUG KÉP đã vá — số 81,7%/78,2%/16,7%/5,0% từng báo cáo là SAI**:
+  (1) `eval_big.py` dựng mapper chấm điểm KHÔNG đọc `gdn_terms` từ `_meta`
+  checkpoint → mặc định về 1 → nạp checkpoint `terms=4` bị **âm thầm cắt cụt**
+  về 1 số hạng, không lỗi không cảnh báo. (2) cơ chế "nối lại" (resume) của
+  `eval_big.py` tải nhầm kết quả ĐÃ SAI đó từ HF khi chạy lại lần đầu — tưởng
+  đã sửa nhưng vẫn đọc cache cũ. Phải xoá cả file HF lẫn local rồi chạy lại
+  LẦN 2 mới ra số đúng (xác nhận bằng log `gdn_terms=4` + "HF chưa có kết quả
+  dở dang" ở mọi lượt). Đã thêm `test_eval_big.py` chống tái phát lỗi (1).
+
+  **Số ĐÚNG — đo trên bộ `suite_swe` MỚI 600 mẫu** (`run_swe_big.sh`, seed
+  90210 khác bộ niêm phong 31337, kiểm rò rỉ 0/600):
 
   | checkpoint | n | suite_swe |
   |---|---|---|
-  | `joint49cc` (terms 4) | 600 | **81,7%** |
+  | `joint49cc` (terms 4, ĐÚNG) | 600 | **81,0%** |
   | `joint49bb` (terms 1) | 600 | 78,2% |
   | `joint49cc` ctx-BỎ | 600 | **0,0%** (sạch) |
 
-  **NHƯNG so sánh THEO CẶP (cùng item) không đạt ý nghĩa thống kê**: 49cc
-  đúng/49bb sai = 74; ngược lại = 53 → McNemar χ²=3,15, **p≈0,076**. Chênh
-  +3,5 điểm CHƯA phân biệt được với nhiễu. Đáng chú ý: **127/600 (21%) mẫu
-  đảo kết quả** giữa hai checkpoint — độ bất ổn theo mẫu rất cao so với chênh
-  trung bình.
-  **`gsm8k` không nhúc nhích** (val 0/16 ở 4/5 mốc, 1/16 ở mốc cuối) → **dung
-  lượng GDN KHÔNG phải nút thắt của gsm8k**, loại thêm một nghi phạm.
-  **Bài học mẫu-nhỏ (lặp lại lần nữa)**: val 8 mẫu báo 7/8 vs 4-5/8 (nghe như
-  cải thiện lớn) nhưng 600 mẫu chỉ ra +3,5 điểm không chắc chắn. Không kết
-  luận từ val 8-16 mẫu nữa.
+  So cặp: 49cc đúng/49bb sai=72, ngược lại=55 → McNemar χ²=2,02, **p≈0,156**
+  — CÀNG không đạt ý nghĩa thống kê so với lần đo sai trước (p=0,076). Kết
+  luận giữ nguyên: **chênh lệch chưa phân biệt được với nhiễu**. 21,2% mẫu
+  đảo kết quả giữa hai checkpoint.
+
+  **`gsm8k` — số ĐÚNG**: TRAIN 8/60=13,3% | NIÊM PHONG 4/100=4,0% (so
+  `joint49bb`: train 8,3%/niêm phong 8,0%, gần bằng nhau). Chênh train>test
+  của `joint49cc` (13,3 vs 4,0) LỚN hơn `joint49bb` — dấu hiệu **quá khớp
+  nhẹ mới xuất hiện** khi mở dung lượng, dù cả hai vẫn rất thấp so với trần
+  89,0%. → **dung lượng GDN KHÔNG phải nút thắt của gsm8k**, và mở thêm còn
+  có nguy cơ phản tác dụng (quá khớp) chứ không giúp gì.
+  **Bài học mẫu-nhỏ (lặp lại)**: val 8 mẫu báo 7/8 vs 4-5/8 nhưng 600 mẫu +
+  McNemar cho thấy chênh không chắc chắn — không kết luận từ val 8-16 mẫu.
 
   **Bài học vận hành mới**: gom lô (`--decode-batch`>1) KHÔNG an toàn cho
   bench sinh dài (gsm8k 320 token/mẫu) — công kiểm batch=8 bắt được lệch
@@ -189,36 +200,19 @@ Cập nhật: 2026-08-31.
   bê thẳng 61,2% thật trên 240 mẫu, không phải 100% trên 12 mẫu). **Bỏ chữ
   "cascade" khỏi mọi bảng (user chốt)**: ghi thẳng thành phần, `→ 9B` = 9B
   sinh câu trả lời từ cache chuyển sang.
-- **CÒN TREO — lớn nhất**: `4B 45,3% > 9B 30,6%` trên bbh, tái lập trên **cả
-  hai engine** (vLLM 30,3 / transformers 30,6) nên KHÔNG phải lỗi engine.
-  Cộng với 9B được **đúng 0/30** trên movie_recommendation, disambiguation_qa,
-  geometric_shapes, temporal_sequences → nghi 9B trả lời sai KHUÔN. Nếu đúng,
-  +14,7 điểm của mapper ở bbh cũng phải xem lại. Phải đọc tay đầu ra.
-- **vLLM BỎ QUA LoRA dù log nói có nạp** (`Using default LoRA kernel configs`):
-  suite_swe ra **đúng 120/123 ở cả có lẫn không** adapter, cùng adapter đó
-  trên transformers đổi 26 điểm. → mọi cột `+LoRA` phải đo bằng transformers.
-  Tôi đã nghi đúng, rồi TỰ BÁC nghi ngờ đúng đó bằng một lập luận nghe hợp lý
-  ("LoRA train cho mapper nên không đổi 4B") — bị 2 dòng số bác lại.
-- **TĂNG TỐC (2026-08-31)**:
-  - **eval gom lô decode: 6,7×** (1.150 mẫu 14 phút vs ~90 phút), cổng kiểm
-    24 khớp/0 lệch. AN TOÀN ở decode dù probe đã bác ở prefill: trạng thái GDN
-    không có chiều thời gian, RoPE đã áp lúc dựng cache — chỉ cần truyền
-    `position_ids` riêng từng hàng. `batch_decode.py`.
-  - **template-XƯƠNG thay prefill 9B đầy đủ** trong eval (~40 phút/lượt):
-    `build_student_past` thay sạch mọi tensor nên prefill đó là tính toán thừa.
-  - **dùng lại spill 4B** giữa các lượt (`spill_base`/`spill_lora`): cache 4B
-    không phụ thuộc mapper → so biến thể mapper thì pha A giống hệt.
-  - **KHÔNG dùng flash-attention** (user hỏi): đo được decode 1 token trên 9B
-    ctx~500 thì nhân trọng số ~18 GFLOP, attention ~6 MFLOP = **0,03%**.
-    Nút cổ chai là batch=1 (mỗi token đọc ~5GB trọng số 4-bit từ HBM).
-  - **probe_train_batch: batch 2 cho 1,85-1,97× trên BƯỚC TRAIN THẬT**
-    (mốc đặt trước 1,3×); batch 4 OOM. 89,5% item gom được thành lô 2 với
-    **độ dài trùng khít** (không đệm → đồng nhất toán học). Ước tính
-    3,00 → ~1,7 s/bước, kèm vá `gc.collect` mỗi 20 bước → ~1,5.
-  - **Mapper vốn CHỈ chạy được batch 1** — `map_attn` ghim `reshape(T, H*dh)`,
-    `map_gdn` lấy `S[0]`. Đã sửa giữ chiều batch. Bài kiểm "lô 2 == chạy riêng
-    lẻ" bắt được lỗi thật trong chính bản vá: `rms.mean()` trung bình trên cả
-    chiều batch (lệch 7,8e-3) → sửa thành theo từng mẫu. 23/23.
+- **CÒN TREO**: `4B 45,3% > 9B 30,6%` trên bbh (cả 2 engine, không phải lỗi
+  engine); 9B **0/30** trên 4 task bbh cụ thể → nghi 9B sai KHUÔN, chưa xác
+  minh. **vLLM BỎ QUA LoRA** dù log báo có nạp — `+LoRA` phải đo bằng
+  transformers (suite_swe 120/123 giống nhau có/không adapter trên vLLM,
+  lệch 26 điểm trên transformers).
+- **TĂNG TỐC (2026-08-31)**: eval gom lô decode **6,7×** (an toàn vì GDN
+  không có chiều thời gian, RoPE áp lúc dựng cache — chỉ cần `position_ids`
+  riêng hàng, `batch_decode.py`); template-XƯƠNG thay prefill 9B thừa; dùng
+  lại spill 4B giữa các lượt mapper; KHÔNG dùng flash-attention (attention
+  chỉ 0,03% phép tính, nút cổ chai là đọc trọng số 4-bit batch=1);
+  `probe_train_batch` batch 2 = 1,85-1,97× bước train thật; mapper vốn chỉ
+  chạy batch 1 (`map_attn`/`map_gdn` ghim chiều) — đã sửa, bài kiểm "lô 2 ==
+  chạy riêng lẻ" 23/23 bắt được lỗi thật trong bản vá (`rms.mean()` sai chiều).
 - **BUG CHẶN TRAIN đã sửa**: tham số GDN của Mapper không phải tensor LÁ
   (`A_r = base.requires_grad_(True)` rồi `B_r = base.clone()`), optimizer ném
   "can't optimize a non-leaf Tensor" — dính cả với `gdn_terms=1` mặc định.
