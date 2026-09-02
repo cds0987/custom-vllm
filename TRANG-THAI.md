@@ -180,9 +180,9 @@ Cập nhật: 2026-08-31.
   chấm điểm đã vá, đừng trích lại. Kết luận còn giá trị: mapper luôn tốt hơn bê
   thẳng cache (bfcl +86,5); LoRA+mapper cộng hưởng chứ không cộng dồn; ranh
   giới truy-hồi/quan-hệ khớp 3 nguồn độc lập; E1 kết luận vượt dữ liệu (needle
-  bê thẳng 61,2% thật trên 240 mẫu, không phải 100% trên 12 mẫu).
-  **Bỏ chữ "cascade" khỏi mọi bảng (user chốt)** — ghi thẳng thành phần;
-  `→ 9B` = 9B sinh câu trả lời từ cache chuyển sang.
+  bê thẳng 61,2% thật trên 240 mẫu, không phải 100% trên 12 mẫu). **Bỏ chữ
+  "cascade" khỏi mọi bảng (user chốt)**: ghi thẳng thành phần, `→ 9B` = 9B
+  sinh câu trả lời từ cache chuyển sang.
 - **CÒN TREO — lớn nhất**: `4B 45,3% > 9B 30,6%` trên bbh, tái lập trên **cả
   hai engine** (vLLM 30,3 / transformers 30,6) nên KHÔNG phải lỗi engine.
   Cộng với 9B được **đúng 0/30** trên movie_recommendation, disambiguation_qa,
@@ -289,9 +289,8 @@ Cập nhật: 2026-08-31.
 
 ## Hàng đợi (đã duyệt chuỗi 1→2→3 ngày 2026-08-14)
 
-1. ✅ Spec decoding — đóng bằng số đo.
-1b. ✅ Util sweep (lệnh user) — mặc định mới 0.97, đỉnh 12 phiên.
-2. (Hoãn, KV-transfer chiếm ưu tiên từ 2026-08-14) profile `serve 4b`/`2b`.
+1. ✅ Spec decoding + ✅ util sweep (mặc định 0.97, đỉnh 12 phiên) — đóng bằng số đo.
+2. (Hoãn, KV-transfer ưu tiên từ 2026-08-14) profile `serve 4b`/`2b`.
 3. Soak test 3-4 giờ chạy nền (rò bộ nhớ? TTFT trôi?) — đặt cuối ngày.
 4. Đóng gói `serve 9b-prefill` (fp8 specialist, số đã đo) + cập nhật HTML report.
 5. (Hoãn) P5 ablation nguồn graft; P6 converter toàn-model; sửa harness 3 thang token.
