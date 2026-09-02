@@ -33,7 +33,11 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 _H = Path(__file__).parent
-ITEMS_F = "/content/eval_big_items.json"
+# Mac dinh la tap NIEM PHONG. Ghi de bang EVALBIG_ITEMS de cham tren tap khac
+# (vi du tap TRAIN — dung phan biet "hoc khong noi" voi "hoc thuoc long":
+# neu diem tren train cung thap = mo hinh khong hoc duoc; neu train cao ma
+# niem phong thap = qua khop).
+ITEMS_F = os.environ.get("EVALBIG_ITEMS", "/content/eval_big_items.json")
 OUT_DIR = Path("/content/logs")
 
 
