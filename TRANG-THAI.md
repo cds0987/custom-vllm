@@ -25,6 +25,23 @@ Cập nhật: 2026-08-31.
   có vẻ khó hơn hẳn với mapper hiện tại. Checkpoint `joint49bb/` đã lên HF.
   **`joint49bb` = checkpoint tham chiếu mới nhất** (thay `joint49z`).
 
+  **PHÂN XỬ "học không nổi" vs "quá khớp" (2026-09-02)** — chấm `joint49bb`
+  trên CHÍNH TẬP TRAIN (60 mẫu/bộ, `EVALBIG_ITEMS` mới thêm vào eval_big.py):
+
+  | bộ | train | niêm phong | chênh |
+  |---|---|---|---|
+  | suite_swe | 93,3% | 77,2% | +16,1 (quá khớp NHẸ, tổng quát hoá thật) |
+  | gsm8k | **8,3%** | 8,0% | **+0,3 → KHÔNG hề quá khớp** |
+
+  **gsm8k sai y hệt trên chính dữ liệu đã train 1000 bước** → loại bỏ hoàn toàn
+  giả thuyết "thiếu/kém đa dạng dữ liệu". Đọc tay đầu ra train: mô hình lấy
+  ĐÚNG thực thể nhưng **gán SAI con số** — đề "Kylie dùng 3 khăn" → sinh "Kylie
+  dùng 6 khăn"; "Josh + 7 bạn" → "1+7+8=16"; "hình chữ nhật rộng 4, chu vi 30"
+  → "diện tích A=4". Chữ nghĩa truyền qua cache tốt, **liên kết số-với-thực-thể
+  thì không**. Đây là giới hạn cơ chế/dung lượng mapper, KHÔNG phải lỗi dữ liệu
+  hay công thức train. Hướng còn lại: mở `gdn-terms`/`attn-rank` (đúng nghi
+  phạm "dạng hàm A·S·B" đã nêu từ joint49y).
+
   **Bài học vận hành mới**: gom lô (`--decode-batch`>1) KHÔNG an toàn cho
   bench sinh dài (gsm8k 320 token/mẫu) — công kiểm batch=8 bắt được lệch
   thật (b1≠bB) ở mẫu `big/gsm8k/221`; đã tách batch=1 riêng cho gsm8k trong
