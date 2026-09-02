@@ -61,6 +61,29 @@ Cập nhật: 2026-08-31.
   (model chưa từng train kiểu "nhắc lại số thứ N"), nên so sánh đầu-vs-cuối
   (cùng lệnh, cùng bài) là phần đáng tin nhất, không phải con số tuyệt đối.
 
+- **`joint49cc` (mapper `--gdn-terms` 1→4, GDN 0,8M→3,2M) — TRAIN + ĐO XONG
+  (2026-09-02)**. Một-biến từ `joint49bb`. Val best score 8 ở bước 1000
+  (`suite_swe` 7/8, `gsm8k` 1/16); val leo đều 5→6→6→7/8.
+  **Đo trên bộ `suite_swe` MỚI 600 mẫu** (`run_swe_big.sh`, seed 90210 khác
+  bộ niêm phong 31337, kiểm rò rỉ 0/600 trên 6.172 prompt cũ):
+
+  | checkpoint | n | suite_swe |
+  |---|---|---|
+  | `joint49cc` (terms 4) | 600 | **81,7%** |
+  | `joint49bb` (terms 1) | 600 | 78,2% |
+  | `joint49cc` ctx-BỎ | 600 | **0,0%** (sạch) |
+
+  **NHƯNG so sánh THEO CẶP (cùng item) không đạt ý nghĩa thống kê**: 49cc
+  đúng/49bb sai = 74; ngược lại = 53 → McNemar χ²=3,15, **p≈0,076**. Chênh
+  +3,5 điểm CHƯA phân biệt được với nhiễu. Đáng chú ý: **127/600 (21%) mẫu
+  đảo kết quả** giữa hai checkpoint — độ bất ổn theo mẫu rất cao so với chênh
+  trung bình.
+  **`gsm8k` không nhúc nhích** (val 0/16 ở 4/5 mốc, 1/16 ở mốc cuối) → **dung
+  lượng GDN KHÔNG phải nút thắt của gsm8k**, loại thêm một nghi phạm.
+  **Bài học mẫu-nhỏ (lặp lại lần nữa)**: val 8 mẫu báo 7/8 vs 4-5/8 (nghe như
+  cải thiện lớn) nhưng 600 mẫu chỉ ra +3,5 điểm không chắc chắn. Không kết
+  luận từ val 8-16 mẫu nữa.
+
   **Bài học vận hành mới**: gom lô (`--decode-batch`>1) KHÔNG an toàn cho
   bench sinh dài (gsm8k 320 token/mẫu) — công kiểm batch=8 bắt được lệch
   thật (b1≠bB) ở mẫu `big/gsm8k/221`; đã tách batch=1 riêng cho gsm8k trong
@@ -106,24 +129,18 @@ Cập nhật: 2026-08-31.
   nhỏ không sửa được bằng adapter nhẹ (3 đòn LoRA/loss đều 0/5 dù gate thông
   tin sáng 5/5). Scope copy an toàn: chat/QA/RAG; function-calling hụt biên
   mỏng (E6c: bnb gánh nửa vết nứt, nửa còn lại là bottleneck thật).
-- **E6 v3.1→v3.5 (2026-08-24→25) — mapper 4→27B, chi tiết STATUS.md**:
-  v3.0 chết vì CONV_WARM bỏ token gold đầu khỏi loss; fix (cache cắt T-5 +
-  warm 5 token cuối + CE trọn gold) → **v3.4 chốt 18/20 BFCL + needle niêm
-  phong 15/15**, ladder trần L4 4096, template-XƯƠNG thay teacher prefill
-  (~1,4 s/bước). v3.2 vách đá needle@2K là artifact phân phối train, đã sụp ở
-  v3.3 bằng needle curriculum. **v3.5: ifstruct/pbtable là nợ của ĐỀ** —
-  27B-self cũng chỉ 1/15 cùng giao thức → loại khỏi thang chính thức.
-  **Học phí lần 2**: runtime recycle nuốt mapper_v33 (kỷ lục) + v3.2 →
-  từ đó KHÔNG phóng train dài khi chưa có đường upload sống.
+- **E6 v3.1→v3.5 (2026-08-24→25) — mapper 4→27B, chi tiết STATUS.md**: fix
+  CONV_WARM (cache cắt T-5 + warm 5 token cuối + CE trọn gold) → **v3.4 chốt
+  18/20 BFCL + needle 15/15**, trần ctx L4 4096, template-XƯƠNG thay teacher
+  prefill. **v3.5: ifstruct/pbtable là nợ của ĐỀ** (27B-self cũng 1/15) → loại
+  khỏi thang. **Học phí lần 2**: recycle nuốt mapper_v33 → KHÔNG phóng train
+  dài khi chưa có đường upload sống.
 - **PHASE C (KVConnector vLLM thật, 2026-08-25→26) — chi tiết STATUS.md**:
-  C2a 3/3 tiền đề PASS (block size 9B = 4B = 1056; LMCACHE_EXT_OK 0.5.4).
-  **Cơ chế vận chuyển HOÀN CHỈNH: vá 1 dòng key lmcache → TTFT 30K 11-24s
-  → ~1s (×12-16)**, kho GDN giao đủ 76/76. Nhưng exact-retrieval **cross
-  57,1% (N=240 @8K, CI 51-63) vs self 100%**; scope ngữ nghĩa C2c cũng
-  **self 90% | cross 55%**. Mọi giả thuyết "một con bug" đều bị bác (W4A16,
-  bf16-consumer, trang-GDN-rơi) → **ĐỊNH LUẬT BIÊN MỎNG**: decode đầu trên
-  cache ngoại sát mép vực số học. Hybrid thử-cross-fail-thì-cold đã lời TTFT
-  ngay; polisher cần kéo 57→95%+.
+  3/3 tiền đề PASS; **vá 1 dòng key lmcache → TTFT 30K 11-24s → ~1s (×12-16)**,
+  kho GDN giao đủ 76/76. Nhưng exact-retrieval **cross 57,1% (N=240) vs self
+  100%**; ngữ nghĩa **self 90% | cross 55%**. Mọi giả thuyết "một con bug" đều
+  bị bác → **ĐỊNH LUẬT BIÊN MỎNG**: decode đầu trên cache ngoại sát mép vực số
+  học. Hybrid thử-cross-fail-thì-cold đã lời TTFT ngay.
 - **Hạ tầng vá cùng đợt**: ghim `vllm==0.27.1`; `run.sh serve` chết câm khi
   thiếu `/tmp/vllm_env.sh` → vá `|| true`; HF_TOKEN đọc từ file + assert.
 - **User chốt hướng (2026-08-26)**: copy-nguyên 4→9 "hên xui" → train
@@ -137,25 +154,15 @@ Cập nhật: 2026-08-31.
   **CPU-offload thủ công THẮNG**: steady 12,81GiB (−4,85GiB), T=8192 OK
   peak 18,11GiB t=1,4s, 2 lần gọi liên tiếp OK; T=16384 vẫn OOM.
   `load_4bit_cpu_offload_io` (né accelerate dispatch). Chi tiết STATUS.
-- **MAPPER 4B→9B TRAIN THẬT XONG (2026-08-27, max-ctx=16384)**: dừng
-  sớm đúng CE_FLOOR ở bước 984/2600 — **BEST: BFCL 23/25 (92%) |
-  needle 29/29 (100%) | score 54**. Nhỉnh hơn mapper 4→27B (BFCL
-  18/20, needle 15/15) mà đạt trực tiếp ở ctx 16384 (27B chỉ tới
-  4096 trên L4) — xác nhận đúng E7 (cặp 4→9 dễ hơn 4→27). ifstruct/
-  pbtable vẫn ~0 (nợ của ĐỀ, không phải mapper — khớp phán quyết
-  v3.5 cũ). Checkpoint + data trên HF `v49/`. Bước kế chờ chọn: (a)
-  tích hợp vLLM serving Phase C3, (b) đo trên `suite_gen.py`
-  (rag/mid/math/swe), (c) đóng gói kiểu cascade_427 cho 4→9.
-- **BENCHMARK NGOÀI — baseline 27B THUẦN XONG (2026-08-27)**: bộ đề user
-  chốt (bỏ CUDA/AIME/MATH-500, giữ math+reasoning): **BBH 98/182=53,8% |
-  GSM8K 160/200=80% | MuSR 115/198=58,1%** (toàn bộ 756: 53,6%).
-  **Chất lượng sinh: rác 0,0% cả 3 bộ, hallu ~0** — mốc đối chứng then
-  chốt: khi chạy cross, mọi tỷ lệ rác > 0 đều quy được cho mapper. Sai
-  chủ yếu là "sai nhưng sạch" (suy luận đúng dạng, chọn nhầm đáp án).
-  Kết quả + phân tích trên HF `extbench_self/`. Code: `ext_bench.py`,
-  `bench_analyze.py` (soi rác/hallu/cắt/sai-tính) + 2 bộ test không cần
-  GPU (14/14, 9/9) — dựng sau khi 3 LẦN suýt báo cáo số liệu sai vì lỗi
-  harness (thinking-model, ngân sách token, báo động giả).
+- **MAPPER 4B→9B TRAIN THẬT XONG (2026-08-27, max-ctx=16384)**: dừng sớm ở
+  bước 984/2600 — **BFCL 23/25 | needle 29/29 | score 54**, nhỉnh hơn mapper
+  4→27B mà đạt trực tiếp ctx 16384 (27B chỉ tới 4096 trên L4) — xác nhận E7
+  (cặp 4→9 dễ hơn 4→27). Checkpoint + data trên HF `v49/`.
+- **BENCHMARK NGOÀI — baseline 27B THUẦN (2026-08-27)**: **BBH 53,8% | GSM8K
+  80% | MuSR 58,1%** (756 mẫu: 53,6%). **Rác 0,0% cả 3 bộ, hallu ~0** — mốc
+  đối chứng: khi chạy cross, mọi tỷ lệ rác > 0 đều quy được cho mapper. Kết
+  quả trên HF `extbench_self/`; code `ext_bench.py`/`bench_analyze.py` + 2 bộ
+  test không cần GPU (14/14, 9/9) — dựng sau khi 3 LẦN suýt báo số liệu sai.
 - **Nhánh 4→27B ĐÓNG (2026-08-28) — chi tiết STATUS.md**: test niêm phong
   trong miền tái lập kỷ lục (bfcl 18/20, needle@2K 15/15) nhưng benchmark
   NGOÀI sụp (BBH 6,0% vs self 53,8%, GSM8K 0% vs 80%). Đối chứng 4B-self
@@ -167,13 +174,12 @@ Cập nhật: 2026-08-31.
   tồn tại chính để sinh cache), TBPTT mở được cổng. Cặp **4→9 rộng hơn hẳn**:
   nền 6,86GiB, ctx16384+gold256 chạy được → lấy lại cả ctx dài lẫn gold đầy đủ.
 - **NGÀY 28-29/08 — joint 4→9 + 4 bug harness (chi tiết STATUS.md)**:
-  pseudo-gold bằng vLLM offline nhanh **49×** (577 vs 11,8 tok/s); 4 bug
-  harness làm mọi số trước đó sai, nặng nhất là **DỪNG SAI TOKEN KẾT THÚC**
-  (tokenizer khai 248046 nhưng model kết thúc bằng 248044 ở 38/40 ca) → 92%
-  tụt còn 32%, vá bằng `e5.stop_ids()`. Hai giả thuyết nghe hợp lý (fp4-vs-nf4,
-  thiếu kernel `fla`) đều bị bác bằng đo. Đọc tay 20 đầu ra gsm8k: 13/17 ca là
-  "văn hoàn hảo, đề bài bị bóp méo" — số sống sót, QUAN HỆ bị đảo lộn.
-  Giả thuyết dung lượng GDN (0,8→25,2M) bị bác ở mốc phân xử đặt trước.
+  pseudo-gold bằng vLLM offline nhanh **49×**; 4 bug harness làm mọi số trước
+  đó sai, nặng nhất là **DỪNG SAI TOKEN KẾT THÚC** (tokenizer khai 248046
+  nhưng model kết thúc bằng 248044) → 92% tụt còn 32%, vá bằng `e5.stop_ids()`.
+  Đọc tay 20 đầu ra gsm8k: 13/17 ca "văn hoàn hảo, đề bài bị bóp méo" — số
+  sống sót, QUAN HỆ bị đảo lộn. Giả thuyết dung lượng GDN bị bác lần đầu ở đây
+  (và bác lại lần hai ở `joint49cc`, xem trên).
 - **MA TRẬN ĐỐI CHỨNG ĐẦY ĐỦ (2026-08-31, 1.650 mẫu, mọi cột cùng engine)** —
   bảng đầy đủ 4B/4B+LoRA/9B/các biến thể × 7 bộ nay nằm trong BÁO CÁO HTML
   (link đầu file) + `STATUS.md`; số `suite_swe`/`musr` trong bảng gốc dính lỗi
