@@ -64,6 +64,12 @@ def score(it, txt):
 
 N_NEW = {"gsm8k": 320, "bbh": 48, "musr": 24, "bfcl": 24, "needle": 16,
          "suite_rag": 24, "suite_mid": 24, "suite_math": 24, "suite_swe": 24}
+# Ghi de ngan sach sinh cho tung bo: EVALBIG_GEN_LEN="gsm8k:32,musr:16".
+# Dung cho PROBE (vd chi bao model NHAC LAI mot con so — khong can 320 token).
+for _kv in os.environ.get("EVALBIG_GEN_LEN", "").split(","):
+    if ":" in _kv:
+        _b, _n = _kv.split(":", 1)
+        N_NEW[_b.strip()] = int(_n)
 WARM_P = 5
 
 # ranh gioi dai da dung o noi khac (PHAI khop ext_bench/gen_data)
