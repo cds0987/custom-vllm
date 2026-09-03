@@ -96,8 +96,26 @@ Cập nhật: 2026-09-02.
   chỉ sai số liệu. → cắm GDN thật cạnh attn mapped làm 9B suy biến thay vì
   được cứu — hai nửa cache cần NHẤT QUÁN với nhau; attn mapped (dù CCA E7
   cao) cũng đóng góp lỗi, không "đã tốt sẵn" như giả định cũ. Lên HF
-  `evalbig/oracle_ablation.json`. Hướng tiếp (đề xuất user): **bridge tokens**
-  (9B tự prefill lại đoạn tóm tắt cực ngắn do 4B xuất ra) thay vì vá mapper.
+  `evalbig/oracle_ablation.json`.
+
+- **BRIDGE ORACLE (2026-09-02, `bridge_oracle.py`, giai đoạn 3 đề xuất user)
+  — XÁC NHẬN TÍCH CỰC, n=30 gsm8k.** Giữ nguyên cache mapped cho toàn ngữ
+  cảnh, CHÈN THÊM một đoạn prefill THẬT (không qua mapper) ngay trước sinh:
+
+  | biến thể | tỷ lệ | độ dài bridge |
+  |---|---|---|
+  | mapped (không bridge) | 0,0% | — |
+  | bridge_full (nguyên đề bài) | **23,3%** | 67 token |
+  | bridge_nums (chỉ câu có số) | **16,7%** | 51 token |
+
+  Đọc tay xác nhận đúng cơ chế: bridge sửa được CHÍNH LOẠI LỖI đã chẩn đoán —
+  mapped bịa "20% raise" (đề thật 5%) → bridge dùng đúng 5%; mapped bịa điểm
+  số "78" → bridge dùng đúng "100"; mapped bỏ hệ số "5 liters/pail" → bridge
+  tính đúng "5×5=25". Phần còn sai chủ yếu là LỖI SUY LUẬN NHIỀU BƯỚC BÌNH
+  THƯỜNG, không còn "bịa số từ hư không". → **Hướng bridge tokens hợp lý,
+  đáng làm tiếp**: bản tóm tắt NGẮN (51 token) gần bằng bản đầy đủ (67 token)
+  — không cần bridge dài. Bước kế: dựng pipeline THẬT (4B tự sinh bridge,
+  không trích oracle từ đề gốc). Lên HF `evalbig/bridge_full30.json`.
 
   **Bài học vận hành mới**: gom lô (`--decode-batch`>1) KHÔNG an toàn cho
   bench sinh dài (gsm8k 320 token/mẫu) — công kiểm batch=8 bắt được lệch
@@ -120,15 +138,10 @@ Cập nhật: 2026-09-02.
   Đã kiểm sống trên Colab: fresh 370s / ấm 140s, smoke đúng.
 - **Vận hành**: chỉ notebook A (server `colab-mcp`); B/C chờ lệnh đích danh;
   không subagent trừ khi user cho phép.
-- **Config production 9B** (đo 2026-08-14): mml 65536, mnbt 1088,
-  **gpu_util 0.97** (KV 560.380 = +38,5% vs 0.85), điểm vận hành **12 phiên**
-  (358,1 tasks/hr warm / 308,4 cold; 16 phiên 330,7). 1.0 chết khi khởi động.
-- **Config production 27B**: mml 8192, mnbt 512, seqs 8, graphs [1,2,4,8],
-  util 0.97 — decode 15,8 tok/s, ppl 4,1484 (hơn 9B champion 12,3%), 1-2 user.
-- **Spec decoding ngram: OFF mặc định trên L4** (đo 2 model × 2 mức tải:
-  9B −36% tasks/hr @8 phiên; 27B KV −28%, prefix hit sập). Profile `-spec`
-  vẫn còn trong run.sh cho GPU lớn.
-- Chiến dịch 9B ĐÓNG SẠCH (Q2c/Q3/Q4/R2b/P7/cổng đồng thời — chi tiết STATUS.md).
+- **Config production** (chi tiết STATUS.md): 9B mml 65536/mnbt 1088/util
+  0.97 (12 phiên, 358,1 tasks/hr warm); 27B mml 8192/mnbt 512/util 0.97
+  (decode 15,8 tok/s). Spec decoding ngram OFF mặc định trên L4 (đo −36%/
+  −28% tasks/hr). Chiến dịch 9B ĐÓNG SẠCH.
 
 ## Nghiên cứu KV-transfer (lệnh user 2026-08-14, đang chạy)
 
@@ -136,14 +149,11 @@ Cập nhật: 2026-09-02.
   chính thức). **E0 phán quyết: context sống ở CẢ GDN state lẫn KV** (needle
   10/10 → 0/10 khi xóa một trong hai) → Phase B GDN-mapping bắt buộc.
 - **E1→E8 (2026-08-15) — TÓM TẮT, chi tiết STATUS.md**: copy nguyên cache
-  4B→9B giữ 100% needle tới 30K, decode parity, TTFT 30K ×1,66 (2 GPU) /
-  ×1,15-1,2 (đồng trú E3C: util 0,35 + --kv-cache-memory-bytes + eager; naive
-  E3B bất khả thi). **Định luật ghép đôi E7**: attention thẳng hàng toàn họ
-  (CCA 0,93-0,98); số phận cặp nằm 100% ở GDN — ≥0,9 bê được, ~0,8 học được
-  (4→27B), ~0,23 tường ({0.8B,2B} lạc hệ). **E8 đóng**: phương ngữ GDN nhóm
-  nhỏ không sửa được bằng adapter nhẹ (3 đòn LoRA/loss đều 0/5 dù gate thông
-  tin sáng 5/5). Scope copy an toàn: chat/QA/RAG; function-calling hụt biên
-  mỏng (E6c: bnb gánh nửa vết nứt, nửa còn lại là bottleneck thật).
+  4B→9B giữ 100% needle tới 30K, TTFT 30K ×1,66 (2 GPU)/×1,15-1,2 (đồng trú).
+  **Định luật ghép đôi E7**: attention thẳng hàng toàn họ (CCA 0,93-0,98);
+  số phận cặp nằm ở GDN — ≥0,9 bê được, ~0,8 học được (4→27B), ~0,23 tường
+  ({0.8B,2B} lạc hệ). **E8 đóng**: phương ngữ GDN nhóm nhỏ không sửa được
+  bằng adapter nhẹ. Scope copy an toàn: chat/QA/RAG; function-calling hụt.
 - **E6 v3.1→v3.5 (2026-08-24→25) — mapper 4→27B, chi tiết STATUS.md**: fix
   CONV_WARM (cache cắt T-5 + warm 5 token cuối + CE trọn gold) → **v3.4 chốt
   18/20 BFCL + needle 15/15**, trần ctx L4 4096, template-XƯƠNG thay teacher
@@ -195,41 +205,30 @@ Cập nhật: 2026-09-02.
   Đọc tay 20 đầu ra gsm8k: 13/17 ca "văn hoàn hảo, đề bài bị bóp méo" — số
   sống sót, QUAN HỆ bị đảo lộn. Giả thuyết dung lượng GDN bị bác lần đầu ở đây
   (và bác lại lần hai ở `joint49cc`, xem trên).
-- **MA TRẬN ĐỐI CHỨNG ĐẦY ĐỦ (2026-08-31, 1.650 mẫu, mọi cột cùng engine)** —
-  bảng đầy đủ 4B/4B+LoRA/9B/các biến thể × 7 bộ nay nằm trong BÁO CÁO HTML
-  (link đầu file) + `STATUS.md`; số `suite_swe`/`musr` trong bảng gốc dính lỗi
-  chấm điểm đã vá, đừng trích lại. Kết luận còn giá trị: mapper luôn tốt hơn bê
-  thẳng cache (bfcl +86,5); LoRA+mapper cộng hưởng chứ không cộng dồn; ranh
-  giới truy-hồi/quan-hệ khớp 3 nguồn độc lập; E1 kết luận vượt dữ liệu (needle
-  bê thẳng 61,2% thật trên 240 mẫu, không phải 100% trên 12 mẫu). **Bỏ chữ
-  "cascade" khỏi mọi bảng (user chốt)**: ghi thẳng thành phần, `→ 9B` = 9B
-  sinh câu trả lời từ cache chuyển sang.
-- **CÒN TREO**: `4B 45,3% > 9B 30,6%` trên bbh (cả 2 engine, không phải lỗi
-  engine); 9B **0/30** trên 4 task bbh cụ thể → nghi 9B sai KHUÔN, chưa xác
-  minh. **vLLM BỎ QUA LoRA** dù log báo có nạp — `+LoRA` phải đo bằng
-  transformers (suite_swe 120/123 giống nhau có/không adapter trên vLLM,
-  lệch 26 điểm trên transformers).
-- **TĂNG TỐC (2026-08-31)**: eval gom lô decode **6,7×** (an toàn vì GDN
-  không có chiều thời gian, RoPE áp lúc dựng cache — chỉ cần `position_ids`
-  riêng hàng, `batch_decode.py`); template-XƯƠNG thay prefill 9B thừa; dùng
-  lại spill 4B giữa các lượt mapper; KHÔNG dùng flash-attention (attention
-  chỉ 0,03% phép tính, nút cổ chai là đọc trọng số 4-bit batch=1);
-  `probe_train_batch` batch 2 = 1,85-1,97× bước train thật; mapper vốn chỉ
-  chạy batch 1 (`map_attn`/`map_gdn` ghim chiều) — đã sửa, bài kiểm "lô 2 ==
-  chạy riêng lẻ" 23/23 bắt được lỗi thật trong bản vá (`rms.mean()` sai chiều).
-- **BUG CHẶN TRAIN đã sửa**: tham số GDN của Mapper không phải tensor LÁ
-  (`A_r = base.requires_grad_(True)` rồi `B_r = base.clone()`), optimizer ném
-  "can't optimize a non-leaf Tensor" — dính cả với `gdn_terms=1` mặc định.
-  Eval không lộ ra vì chỉ chạy forward. Đã thêm bài kiểm dựng optimizer.
+- **MA TRẬN ĐỐI CHỨNG ĐẦY ĐỦ (2026-08-31, 1.650 mẫu)** — bảng đầy đủ nằm
+  trong BÁO CÁO HTML (link đầu file) + `STATUS.md`; số `suite_swe`/`musr`
+  bản gốc dính lỗi chấm điểm đã vá, đừng trích lại. Kết luận còn giá trị:
+  mapper luôn tốt hơn bê thẳng cache; LoRA+mapper cộng hưởng chứ không cộng
+  dồn; ranh giới truy-hồi/quan-hệ khớp 3 nguồn độc lập. Bỏ chữ "cascade"
+  khỏi mọi bảng (user chốt): ghi thẳng thành phần.
+- **CÒN TREO**: `4B 45,3% > 9B 30,6%` trên bbh (cả 2 engine); 9B 0/30 trên
+  4 task bbh cụ thể → nghi 9B sai KHUÔN, chưa xác minh. **vLLM BỎ QUA LoRA**
+  dù log báo có nạp — `+LoRA` phải đo bằng transformers.
+- **TĂNG TỐC (2026-08-31)**: eval gom lô decode 6,7× (`batch_decode.py`);
+  template-XƯƠNG thay prefill 9B thừa; dùng lại spill 4B giữa các lượt;
+  KHÔNG flash-attention (attention chỉ 0,03% phép tính); `probe_train_batch`
+  batch 2 = 1,85-1,97× bước train thật; mapper vốn chỉ chạy batch 1 — đã sửa
+  (`map_attn`/`map_gdn`), bài kiểm 23/23.
+- **BUG CHẶN TRAIN đã sửa**: tham số GDN của Mapper không phải tensor LÁ —
+  optimizer ném "can't optimize a non-leaf Tensor". Đã thêm bài kiểm.
 - **`e5.patch_recurrent_rebind()`**: GDN 5.15 cập nhật state bằng `.copy_()`
   IN-PLACE → vỡ autograd. e9_joint đã có bản vá kèm ghi chú "học phí 3 probe";
   probe_train_batch thành probe THỨ TƯ dính. Đã đưa ra e5_train dùng chung.
-- **Chẩn đoán QUÁ KHỚP (2026-08-30)**: mapper trên train **86,0%** / val
-  **63,3%** (chênh 22,7 điểm). suite_swe: train 100% / val 28,6% / niêm phong
-  47,2% — thuộc lòng 190 mẫu. → phóng to mapper là SAI HƯỚNG; việc cần là đa
-  dạng hoá dữ liệu. Giả thuyết "mapper quá nhỏ" của user bị bác bằng đo.
-- **Train ĐÃ BÃO HOÀ — hai lần độc lập**: `joint49v` 67→66→62, `joint49w`
-  100→95. Thêm bước/thêm-bớt dữ liệu đều không lên.
+- **Chẩn đoán QUÁ KHỚP (2026-08-30)**: mapper train 86,0%/val 63,3% (chênh
+  22,7); suite_swe train 100%/val 28,6%/niêm phong 47,2% — thuộc lòng 190
+  mẫu. → phóng to mapper SAI HƯỚNG; giả thuyết "mapper quá nhỏ" bị bác.
+- **Train ĐÃ BÃO HOÀ hai lần độc lập**: `joint49v` 67→66→62, `joint49w`
+  100→95 — thêm bước/dữ liệu đều không lên.
 - **`joint49y` TRAIN XONG (2026-08-31)** — best bước 750/1000, ấm từ `joint49w`
   đúng cấu hình gốc (max-ctx 4096, batch 2 × accum 2 = 4 mẫu/lần cập nhật, chỉ
   chừa hai biến: LoRA-9B + gom lô). **score 103, vượt kỷ lục joint49w (100)**:
