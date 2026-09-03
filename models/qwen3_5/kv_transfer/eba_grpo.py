@@ -184,7 +184,10 @@ def sample_rollout_batch(model, tok, past_k, warm, n_new, temperature, stops, k)
 def teacher_force_logp(model, past, warm, gen_ids, device):
     """Forward CO GRAD, ep dung theo chuoi gen_ids (da sample o pha 1), tra ve
     tong log-prob (scalar co grad) -- dung CHINH quy uoc chi so cua e9_joint
-    (logits[:, WARM_P-1:] du bao dung gen_ids[0..])."""
+    (logits[:, WARM_P-1:] du bao dung gen_ids[0..]). CHI con dung cho K=1/debug
+    -- duong chinh la teacher_force_logp_batch (do 2026-09-03: pha nay van
+    lap K=6 forward rieng, chiem 18-19%/buoc, gop lo cung theo huong da
+    lam voi pha 1)."""
     gen_t = torch.tensor([gen_ids], device=device)
     feed = (torch.cat([warm, gen_t[:, :-1]], 1) if gen_t.shape[1] > 1
             else warm)
@@ -192,6 +195,53 @@ def teacher_force_logp(model, past, warm, gen_ids, device):
     logp = torch.log_softmax(o.logits[:, WARM_P - 1:].float(), -1)
     lp = logp.gather(2, gen_t.unsqueeze(-1)).squeeze(-1)
     return lp.sum()
+
+
+def clone_cache_repeat_grad(past, k):
+    """Nhu clone_cache_repeat NHUNG GIU GRAPH (khong .detach()) -- dung cho
+    pha 2 (teacher-force CO grad): .repeat() la phep toan kha vi, nen K nhanh
+    van noi nguoc ve DUNG MOT lan build st0 (mapper+4B) -- gradient tu ca K
+    nhanh CONG DON dung vao cung tham so, khong phai tinh rieng tung nhanh."""
+    new = e5.clone_cache_struct(past)
+    attn_n, gdn_n = e5.split_layers(new)
+    for l in attn_n.values():
+        l.keys = l.keys.repeat(k, *([1] * (l.keys.dim() - 1)))
+        l.values = l.values.repeat(k, *([1] * (l.values.dim() - 1)))
+    for l in gdn_n.values():
+        r, c = e5._get(l.recurrent_states), e5._get(l.conv_states)
+        e5._set_like(l, "recurrent_states",
+                     r.repeat(k, *([1] * (r.dim() - 1))))
+        e5._set_like(l, "conv_states",
+                     c.repeat(k, *([1] * (c.dim() - 1))))
+    return new
+
+
+def teacher_force_logp_batch(model, past_k, warm, gens, device):
+    """Gop K nhanh teacher-force THANH MOT forward co grad (thay vi K lan
+    rieng). Feed = warm + gen_ids[:-1], PAD PHAI ve do dai lon nhat trong
+    nhom, dem bang -100 khi tinh logp -- dung Y HET quy uoc enc_batch cua
+    e9_joint.py: causal attention/GDN CHI phu thuoc vi tri TRUOC, nen dem SAU
+    (token gia o cuoi hang ngan) khong lam sai logit o cac vi tri THAT truoc
+    do -- da duoc dung that trong e9_joint (khong phai gia dinh moi)."""
+    k = len(gens)
+    gmax = max(len(g) for g in gens)
+    gold = torch.full((k, gmax), -100, dtype=torch.long, device=device)
+    for i, g in enumerate(gens):
+        gold[i, :len(g)] = torch.tensor(g, device=device)
+    warm_b = warm.repeat(k, 1)
+    if gmax > 1:
+        feed_pad = torch.zeros(k, gmax - 1, dtype=torch.long, device=device)
+        for i, g in enumerate(gens):
+            if len(g) > 1:
+                feed_pad[i, :len(g) - 1] = torch.tensor(g[:-1], device=device)
+        feed = torch.cat([warm_b, feed_pad], 1)
+    else:
+        feed = warm_b
+    o = model(input_ids=feed, past_key_values=past_k, use_cache=True)
+    logp = torch.log_softmax(o.logits[:, WARM_P - 1:WARM_P - 1 + gmax].float(), -1)
+    valid = (gold >= 0).float()
+    lp = logp.gather(2, gold.clamp(min=0).unsqueeze(-1)).squeeze(-1) * valid
+    return lp.sum(dim=1)   # (k,) -- tong logp moi nhanh, co grad
 
 
 def group_advantage(rewards, eps=1e-4):
@@ -522,15 +572,14 @@ def main():
                       f"bo qua (khong co gradient)", flush=True)
             continue
 
-        # pha 2: K nhanh teacher-force CO grad + 1 nhanh anchor CE(gold)
+        # pha 2: K nhanh teacher-force CO grad GOP LO (1 forward batch=K,
+        # thay vi K forward rieng -- cung ky thuat da dung o pha 1)
         with clock("teacher_force(pha2)"):
-            pg_loss = 0.0
-            for gen_ids, a in zip(gens, adv):
-                branch = deep_clone_cache(st0)
-                logp = teacher_force_logp(model_t, branch, warm, gen_ids, "cuda")
-                pg_loss = pg_loss + (-a * logp)
-                del branch
-            pg_loss = pg_loss / args.k
+            branch_k = clone_cache_repeat_grad(st0, args.k)
+            lp_k = teacher_force_logp_batch(model_t, branch_k, warm, gens, "cuda")
+            adv_t = torch.tensor(adv, device="cuda")
+            pg_loss = -(adv_t * lp_k).mean()
+            del branch_k
 
         anchor_ce = torch.tensor(0.0, device="cuda")
         with clock("anchor_ce"):
