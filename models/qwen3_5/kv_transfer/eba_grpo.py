@@ -569,43 +569,52 @@ def main():
                 rewards.append(r)
                 sub.append(s)
 
+        # BUG DA SUA (2026-09-03): `continue` o day truoc kia nhay qua LUON
+        # ca khoi val/checkpoint ben duoi -- neu mot buoc == boi so val_every
+        # (vd 50,100,150...) VUA VAN roi dung vao nhom reward dong nhat (rat
+        # hay xay ra khi policy da tot len, K mau deu giong diem), thi CA
+        # MOC VAL DO BIEN MAT, khong ghi checkpoint. Da bat qua thuc te (v2b
+        # resume: tu buoc 200 chay ~500 buoc lien tuc khong lan nao dung moc
+        # val/checkpoint nao ca, vi toan trung vao buoc bi bo qua). Sua bang
+        # cach: KHONG continue, chi bo qua backward, van roi xuong duoi.
         adv = group_advantage(rewards)
-        if adv is None:
-            del st0
-            torch.cuda.empty_cache()
+        skipped = adv is None
+        pg_loss = torch.tensor(0.0)
+        anchor_ce = torch.tensor(0.0)
+        if skipped:
             if step % 20 == 0:
                 print(f"buoc {step}: reward dong nhat ({rewards[0]:.2f}) -> "
-                      f"bo qua (khong co gradient)", flush=True)
-            continue
+                      f"bo qua gradient (VAN cham val/checkpoint neu dung moc)",
+                      flush=True)
+        else:
+            # pha 2: K nhanh teacher-force CO grad GOP LO (1 forward batch=K,
+            # thay vi K forward rieng -- cung ky thuat da dung o pha 1)
+            with clock("teacher_force(pha2)"):
+                branch_k = clone_cache_repeat_grad(st0, args.k)
+                lp_k = teacher_force_logp_batch(model_t, branch_k, warm, gens, "cuda")
+                adv_t = torch.tensor(adv, device="cuda")
+                pg_loss = -(adv_t * lp_k).mean()
+                del branch_k
 
-        # pha 2: K nhanh teacher-force CO grad GOP LO (1 forward batch=K,
-        # thay vi K forward rieng -- cung ky thuat da dung o pha 1)
-        with clock("teacher_force(pha2)"):
-            branch_k = clone_cache_repeat_grad(st0, args.k)
-            lp_k = teacher_force_logp_batch(model_t, branch_k, warm, gens, "cuda")
-            adv_t = torch.tensor(adv, device="cuda")
-            pg_loss = -(adv_t * lp_k).mean()
-            del branch_k
+            anchor_ce = torch.tensor(0.0, device="cuda")
+            with clock("anchor_ce"):
+                if args.anchor_w > 0 and gold_ids.shape[1] >= 1:
+                    branch = deep_clone_cache(st0)
+                    gold_list = gold_ids[0].tolist()
+                    feed = torch.cat([warm, gold_ids[:, :-1]], 1) \
+                        if gold_ids.shape[1] > 1 else warm
+                    o = model_t(input_ids=feed, past_key_values=branch, use_cache=True)
+                    logp_g = torch.log_softmax(o.logits[:, WARM_P - 1:].float(), -1)
+                    nll = -logp_g.gather(
+                        2, gold_ids.clamp(min=0).unsqueeze(-1)).squeeze(-1)
+                    anchor_ce = nll.mean()
+                    del branch, o, logp_g
 
-        anchor_ce = torch.tensor(0.0, device="cuda")
-        with clock("anchor_ce"):
-            if args.anchor_w > 0 and gold_ids.shape[1] >= 1:
-                branch = deep_clone_cache(st0)
-                gold_list = gold_ids[0].tolist()
-                feed = torch.cat([warm, gold_ids[:, :-1]], 1) \
-                    if gold_ids.shape[1] > 1 else warm
-                o = model_t(input_ids=feed, past_key_values=branch, use_cache=True)
-                logp_g = torch.log_softmax(o.logits[:, WARM_P - 1:].float(), -1)
-                nll = -logp_g.gather(
-                    2, gold_ids.clamp(min=0).unsqueeze(-1)).squeeze(-1)
-                anchor_ce = nll.mean()
-                del branch, o, logp_g
-
-        with clock("backward"):
-            loss = pg_loss + args.anchor_w * anchor_ce
-            opt.zero_grad(set_to_none=True)
-            loss.backward()
-            opt.step()
+            with clock("backward"):
+                loss = pg_loss + args.anchor_w * anchor_ce
+                opt.zero_grad(set_to_none=True)
+                loss.backward()
+                opt.step()
 
         del st0
         gc.collect()
@@ -613,7 +622,7 @@ def main():
 
         mean_r = sum(rewards) / len(rewards)
         mean_c = sum(x["C"] for x in sub) / len(sub)
-        if step % 10 == 0:
+        if step % 10 == 0 and not skipped:
             results["train"].append([step, round(mean_r, 3), round(mean_c, 3)])
             tot = sum(T_ACC.values()) or 1.0
             share = " ".join(f"{k} {100*v/tot:.0f}%"
