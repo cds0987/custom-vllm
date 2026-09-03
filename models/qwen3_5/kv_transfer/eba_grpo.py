@@ -297,6 +297,12 @@ def main():
     ap.add_argument("--steps", type=int, default=300)
     ap.add_argument("--val-every", type=int, default=50)
     ap.add_argument("--val-n", type=int, default=30)
+    ap.add_argument("--snapshot-every", type=int, default=0,
+                    help="luu them checkpoint step{N} (khong ghi de best/last) "
+                         "moi N buoc -- 0=tat. Can de soi CA DUONG CONG sau "
+                         "nay (McNemar tren nhieu diem), khong chi best/last "
+                         "-- lan truoc 2 diem cho thay khong don dieu, phai "
+                         "nhin ca duong moi ket luan duoc.")
     ap.add_argument("--out", default="/content/eba_grpo_v1")
     ap.add_argument("--hf-repo", default="gunnybd01/qwen35-kv-mapper-4b-27b")
     ap.add_argument("--hf-prefix", default="eba_grpo_v1")
@@ -639,6 +645,8 @@ def main():
                 best = score
                 save_ckpt("best")
                 print(f"    ky luc moi C_tb={best:.3f}", flush=True)
+            if args.snapshot_every and step % args.snapshot_every == 0:
+                save_ckpt(f"step{step}")
 
     if args.steps % args.val_every != 0:
         vs = run_val(args.val_n)

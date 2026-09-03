@@ -48,6 +48,10 @@ step "2 chay eba_grpo.py"
 SANITY="${SANITY:-5}"
 STEPS="${STEPS:-300}"
 K="${K:-6}"
+N_ITEMS="${N_ITEMS:-400}"
+DIFF_MAX="${DIFF_MAX:-1}"
+SNAPSHOT="${SNAPSHOT:-0}"
+OUT="${OUT:-eba_grpo_v1}"
 if [ "${GO:-0}" = "1" ]; then
   ARGS="--steps $STEPS --sanity 0"
 else
@@ -57,22 +61,24 @@ python3 -u eba_grpo.py \
   --init-mapper "/content/$CK/mapper_best.pt" \
   --init-lora "/content/$CK/lora_best" \
   --init-lora-t "/content/$CK/lorat_best" \
-  --k "$K" \
-  --out "/content/eba_grpo_v1" \
-  --hf-prefix "eba_grpo_v1" \
-  $ARGS 2>&1 | tee /content/logs/eba_grpo.log
+  --k "$K" --n-items "$N_ITEMS" --difficulty-max "$DIFF_MAX" \
+  --snapshot-every "$SNAPSHOT" \
+  --out "/content/$OUT" \
+  --hf-prefix "$OUT" \
+  $ARGS 2>&1 | tee "/content/logs/${OUT}.log"
 STATUS=${PIPESTATUS[0]}
 
-python3 - <<'PYEOF' || true
-import os, pathlib
+python3 - "$OUT" <<'PYEOF' || true
+import os, pathlib, sys
 from huggingface_hub import HfApi
+out = sys.argv[1]
 api = HfApi(token=os.environ.get("HF_TOKEN"))
-p = pathlib.Path("/content/logs/eba_grpo.log")
+p = pathlib.Path(f"/content/logs/{out}.log")
 if p.exists():
     try:
         api.upload_file(path_or_fileobj=str(p), repo_id="gunnybd01/qwen35-kv-mapper-4b-27b",
-                        path_in_repo="eba_grpo_v1/eba_grpo.log")
-        print("HF-UP eba_grpo.log")
+                        path_in_repo=f"{out}/{out}.log")
+        print("HF-UP", f"{out}.log")
     except Exception as e:
         print("HF-UP FAIL", type(e).__name__, str(e)[:80])
 PYEOF
