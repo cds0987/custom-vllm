@@ -467,27 +467,51 @@ def main():
                 if f.is_file():
                     hf_up(f, f"{sub}/{f.name}")
 
+    # Dong ho tung chang (y het e9_joint.py: PHAI synchronize truoc khi doc
+    # dong ho, CUDA chay bat dong bo). Them SAU khi do duoc gop lo giam
+    # 38-40s/buoc -> 15,2s/buoc: ty trong chi phi da DOI, khong con chac
+    # chan sampling van la phan lon nhat -- do tiep truoc khi doan tiep
+    # (bai hoc flash-attn: da tung toi uu SAI cho, attention chi 0,03%).
+    T_ACC = {}
+
+    class clock:
+        def __init__(self, k):
+            self.k = k
+
+        def __enter__(self):
+            torch.cuda.synchronize()
+            self.t = time.time()
+            return self
+
+        def __exit__(self, *a):
+            torch.cuda.synchronize()
+            T_ACC[self.k] = T_ACC.get(self.k, 0.0) + time.time() - self.t
+            return False
+
     best = -1e9
     t_start = time.time()
     for step in range(1, args.steps + 1):
         it = train_items[(step - 1) % len(train_items)]
         cut, warm, gold_ids = enc(it)
 
-        st0 = student_past_grad(cut)
+        with clock("student_past_grad"):
+            st0 = student_past_grad(cut)
 
         # pha 1: K nhanh sampling GOP LO (1 vong decode batch=K thay vi K
         # vong rieng le -- fix goc bottleneck 11,8 tok/s, xem docstring
         # sample_rollout_batch)
-        branch_k = clone_cache_repeat(st0, args.k)
-        gens, texts = sample_rollout_batch(
-            model_t, tok_t, branch_k, warm, args.gen_len,
-            args.temperature, STOPS, args.k)
-        del branch_k
-        rewards, sub = [], []
-        for txt in texts:
-            r, s = reward_of(it, txt, w)
-            rewards.append(r)
-            sub.append(s)
+        with clock("sampling(pha1)"):
+            branch_k = clone_cache_repeat(st0, args.k)
+            gens, texts = sample_rollout_batch(
+                model_t, tok_t, branch_k, warm, args.gen_len,
+                args.temperature, STOPS, args.k)
+            del branch_k
+        with clock("reward"):
+            rewards, sub = [], []
+            for txt in texts:
+                r, s = reward_of(it, txt, w)
+                rewards.append(r)
+                sub.append(s)
 
         adv = group_advantage(rewards)
         if adv is None:
@@ -499,31 +523,34 @@ def main():
             continue
 
         # pha 2: K nhanh teacher-force CO grad + 1 nhanh anchor CE(gold)
-        pg_loss = 0.0
-        for gen_ids, a in zip(gens, adv):
-            branch = deep_clone_cache(st0)
-            logp = teacher_force_logp(model_t, branch, warm, gen_ids, "cuda")
-            pg_loss = pg_loss + (-a * logp)
-            del branch
-        pg_loss = pg_loss / args.k
+        with clock("teacher_force(pha2)"):
+            pg_loss = 0.0
+            for gen_ids, a in zip(gens, adv):
+                branch = deep_clone_cache(st0)
+                logp = teacher_force_logp(model_t, branch, warm, gen_ids, "cuda")
+                pg_loss = pg_loss + (-a * logp)
+                del branch
+            pg_loss = pg_loss / args.k
 
         anchor_ce = torch.tensor(0.0, device="cuda")
-        if args.anchor_w > 0 and gold_ids.shape[1] >= 1:
-            branch = deep_clone_cache(st0)
-            gold_list = gold_ids[0].tolist()
-            feed = torch.cat([warm, gold_ids[:, :-1]], 1) \
-                if gold_ids.shape[1] > 1 else warm
-            o = model_t(input_ids=feed, past_key_values=branch, use_cache=True)
-            logp_g = torch.log_softmax(o.logits[:, WARM_P - 1:].float(), -1)
-            nll = -logp_g.gather(
-                2, gold_ids.clamp(min=0).unsqueeze(-1)).squeeze(-1)
-            anchor_ce = nll.mean()
-            del branch, o, logp_g
+        with clock("anchor_ce"):
+            if args.anchor_w > 0 and gold_ids.shape[1] >= 1:
+                branch = deep_clone_cache(st0)
+                gold_list = gold_ids[0].tolist()
+                feed = torch.cat([warm, gold_ids[:, :-1]], 1) \
+                    if gold_ids.shape[1] > 1 else warm
+                o = model_t(input_ids=feed, past_key_values=branch, use_cache=True)
+                logp_g = torch.log_softmax(o.logits[:, WARM_P - 1:].float(), -1)
+                nll = -logp_g.gather(
+                    2, gold_ids.clamp(min=0).unsqueeze(-1)).squeeze(-1)
+                anchor_ce = nll.mean()
+                del branch, o, logp_g
 
-        loss = pg_loss + args.anchor_w * anchor_ce
-        opt.zero_grad(set_to_none=True)
-        loss.backward()
-        opt.step()
+        with clock("backward"):
+            loss = pg_loss + args.anchor_w * anchor_ce
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            opt.step()
 
         del st0
         gc.collect()
@@ -533,10 +560,17 @@ def main():
         mean_c = sum(x["C"] for x in sub) / len(sub)
         if step % 10 == 0:
             results["train"].append([step, round(mean_r, 3), round(mean_c, 3)])
+            tot = sum(T_ACC.values()) or 1.0
+            share = " ".join(f"{k} {100*v/tot:.0f}%"
+                             for k, v in sorted(T_ACC.items(),
+                                                key=lambda x: -x[1]))
             print(f"buoc {step}/{args.steps} pg={pg_loss.item():.4f} "
                   f"anchor_ce={anchor_ce.item():.4f} reward_tb={mean_r:.3f} "
                   f"C_tb={mean_c:.3f} {(time.time()-t_start)/step:.2f}s/buoc "
                   f"peak={gib():.2f}GiB", flush=True)
+            print(f"    thoi gian: {tot/10:.2f}s/buoc do duoc | {share}",
+                  flush=True)
+            T_ACC.clear()
 
         if args.sanity and step >= args.sanity:
             print(f"SANITY xong {step} buoc, peak={gib():.2f}GiB, "
