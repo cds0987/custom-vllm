@@ -112,10 +112,27 @@ Cập nhật: 2026-09-02.
   mapped bịa "20% raise" (đề thật 5%) → bridge dùng đúng 5%; mapped bịa điểm
   số "78" → bridge dùng đúng "100"; mapped bỏ hệ số "5 liters/pail" → bridge
   tính đúng "5×5=25". Phần còn sai chủ yếu là LỖI SUY LUẬN NHIỀU BƯỚC BÌNH
-  THƯỜNG, không còn "bịa số từ hư không". → **Hướng bridge tokens hợp lý,
-  đáng làm tiếp**: bản tóm tắt NGẮN (51 token) gần bằng bản đầy đủ (67 token)
-  — không cần bridge dài. Bước kế: dựng pipeline THẬT (4B tự sinh bridge,
-  không trích oracle từ đề gốc). Lên HF `evalbig/bridge_full30.json`.
+  THƯỜNG, không còn "bịa số từ hư không". → bản tóm tắt NGẮN (51 token) gần
+  bằng bản đầy đủ (67 token). Lên HF `evalbig/bridge_full30.json`.
+
+- **PIPELINE THẬT (2026-09-02, `real_bridge_4b.py`) — 4B TỰ SINH bridge**
+  (không trích oracle từ đề gốc), n=30 gsm8k, cùng bộ mẫu:
+
+  | biến thể | tỷ lệ | so oracle |
+  |---|---|---|
+  | mapped | 0,0% | (như trên) |
+  | **bridge_4b** (4B tự tóm tắt) | **13,3%** | oracle full 23,3% / nums 16,7% |
+
+  Vẫn cải thiện rõ so mapped, nhưng THẤP HƠN oracle. Đọc tay 2 nguyên nhân
+  cụ thể: (1) 4B đôi khi TỰ GIẢI SAI ngay trong lúc tóm tắt dù bị cấm rõ
+  ("Do NOT solve") và chèn "Final Answer" sai vào bridge — gây nhiễu ngược;
+  (2) 4B đôi khi dùng ký hiệu ẩn danh (X=5,Y=25,Z=4...) thay vì tên thực thể
+  → 9B mất neo ngữ nghĩa, không dùng lại được. Mẫu dùng TÊN THẬT ("22 green
+  pens") theo tốt hơn ký hiệu ẩn danh dù vẫn có thể sai bước tính sau.
+  **Kết luận**: cơ chế bridge tokens hoạt động thật (không phải chỉ là ảo
+  ảnh của oracle), nhưng cần tinh chỉnh cách ra lệnh cho 4B (cấm tự giải rõ
+  hơn, ép dùng tên thực thể) trước khi coi là giải pháp sản phẩm hoàn chỉnh.
+  Lên HF `evalbig/real_bridge_30.json`.
 
   **Bài học vận hành mới**: gom lô (`--decode-batch`>1) KHÔNG an toàn cho
   bench sinh dài (gsm8k 320 token/mẫu) — công kiểm batch=8 bắt được lệch
@@ -154,50 +171,33 @@ Cập nhật: 2026-09-02.
   số phận cặp nằm ở GDN — ≥0,9 bê được, ~0,8 học được (4→27B), ~0,23 tường
   ({0.8B,2B} lạc hệ). **E8 đóng**: phương ngữ GDN nhóm nhỏ không sửa được
   bằng adapter nhẹ. Scope copy an toàn: chat/QA/RAG; function-calling hụt.
-- **E6 v3.1→v3.5 (2026-08-24→25) — mapper 4→27B, chi tiết STATUS.md**: fix
-  CONV_WARM (cache cắt T-5 + warm 5 token cuối + CE trọn gold) → **v3.4 chốt
-  18/20 BFCL + needle 15/15**, trần ctx L4 4096, template-XƯƠNG thay teacher
-  prefill. **v3.5: ifstruct/pbtable là nợ của ĐỀ** (27B-self cũng 1/15) → loại
-  khỏi thang. **Học phí lần 2**: recycle nuốt mapper_v33 → KHÔNG phóng train
-  dài khi chưa có đường upload sống.
-- **PHASE C (KVConnector vLLM thật, 2026-08-25→26) — chi tiết STATUS.md**:
-  3/3 tiền đề PASS; **vá 1 dòng key lmcache → TTFT 30K 11-24s → ~1s (×12-16)**,
-  kho GDN giao đủ 76/76. Nhưng exact-retrieval **cross 57,1% (N=240) vs self
-  100%**; ngữ nghĩa **self 90% | cross 55%**. Mọi giả thuyết "một con bug" đều
-  bị bác → **ĐỊNH LUẬT BIÊN MỎNG**: decode đầu trên cache ngoại sát mép vực số
-  học. Hybrid thử-cross-fail-thì-cold đã lời TTFT ngay.
-- **Hạ tầng vá cùng đợt**: ghim `vllm==0.27.1`; `run.sh serve` chết câm khi
-  thiếu `/tmp/vllm_env.sh` → vá `|| true`; HF_TOKEN đọc từ file + assert.
+- **E6 v3.1→v3.5 (2026-08-24→25, mapper 4→27B, chi tiết STATUS.md)**: fix
+  CONV_WARM → v3.4 chốt 18/20 BFCL + needle 15/15. v3.5: ifstruct/pbtable là
+  nợ của ĐỀ (loại khỏi thang). Học phí: recycle nuốt mapper_v33.
+- **PHASE C (KVConnector vLLM thật, 2026-08-25→26, chi tiết STATUS.md)**:
+  vá 1 dòng key lmcache → TTFT 30K 11-24s→~1s (×12-16). Nhưng exact-retrieval
+  cross 57,1% vs self 100% → **ĐỊNH LUẬT BIÊN MỎNG**: decode đầu trên cache
+  ngoại sát mép vực số học, mọi giả thuyết "một con bug" bị bác.
 - **User chốt hướng (2026-08-26)**: copy-nguyên 4→9 "hên xui" → train
   mapper functional-loss cho 4→9; dựng `suite_gen.py` (4 họ đề) + `c2suite.sh`.
-- **Giai đoạn A + ladder 4→9 XONG (2026-08-27)**: sanity chạy trọn không
-  sửa code, ~1,7-1,8 s/bước, peak 8,76GiB; ladder 4096/8192/16384 đều
-  KHÔNG OOM (9,1/10,0/11,9GiB) → chốt max-ctx 16384. Vá `hf_up()` ghim
-  cứng `"v34/"` → thêm `--hf-prefix` (né đè mapper 4→27B).
-- **Mở context 27B (2026-08-27)**: gradient checkpointing ĐÓNG hẳn (peak
-  y hệt baseline — OOM do 1 lớp `repeat_kv`, không phải tích lũy).
-  **CPU-offload thủ công THẮNG**: steady 12,81GiB (−4,85GiB), T=8192 OK
-  peak 18,11GiB t=1,4s, 2 lần gọi liên tiếp OK; T=16384 vẫn OOM.
-  `load_4bit_cpu_offload_io` (né accelerate dispatch). Chi tiết STATUS.
+- **Giai đoạn A + ladder 4→9 XONG (2026-08-27)**: ladder 4096/8192/16384
+  KHÔNG OOM → chốt max-ctx 16384.
+- **Mở context 27B (2026-08-27, chi tiết STATUS.md)**: gradient checkpointing
+  đóng hẳn (OOM do 1 lớp `repeat_kv`); CPU-offload thủ công THẮNG (steady
+  12,81GiB, T=8192 OK, T=16384 vẫn OOM) — `load_4bit_cpu_offload_io`.
 - **MAPPER 4B→9B TRAIN THẬT XONG (2026-08-27, max-ctx=16384)**: dừng sớm ở
   bước 984/2600 — **BFCL 23/25 | needle 29/29 | score 54**, nhỉnh hơn mapper
   4→27B mà đạt trực tiếp ctx 16384 (27B chỉ tới 4096 trên L4) — xác nhận E7
   (cặp 4→9 dễ hơn 4→27). Checkpoint + data trên HF `v49/`.
-- **BENCHMARK NGOÀI — baseline 27B THUẦN (2026-08-27)**: **BBH 53,8% | GSM8K
-  80% | MuSR 58,1%** (756 mẫu: 53,6%). **Rác 0,0% cả 3 bộ, hallu ~0** — mốc
-  đối chứng: khi chạy cross, mọi tỷ lệ rác > 0 đều quy được cho mapper. Kết
-  quả trên HF `extbench_self/`; code `ext_bench.py`/`bench_analyze.py` + 2 bộ
-  test không cần GPU (14/14, 9/9) — dựng sau khi 3 LẦN suýt báo số liệu sai.
-- **Nhánh 4→27B ĐÓNG (2026-08-28) — chi tiết STATUS.md**: test niêm phong
-  trong miền tái lập kỷ lục (bfcl 18/20, needle@2K 15/15) nhưng benchmark
-  NGOÀI sụp (BBH 6,0% vs self 53,8%, GSM8K 0% vs 80%). Đối chứng 4B-self
-  gsm8k **81,5% — cao hơn 27B** → thông tin CÓ trong cache, lỗi ở khâu DỊCH.
-  243 ca self-đúng→cross-sai: 22% sinh rác, 78% lạc đề nhưng mạch lạc.
-- **Kiến trúc 2 lớp + chuyển sang cặp 4→9 (2026-08-28, user chốt)** — chi tiết
-  STATUS.md: 4→27B nền 2 model 16,16GiB (trống 5,54), gold ≤48 khi ctx ≤1024,
-  GC bị loại về nguyên tắc (transformers ép `use_cache=False` mà forward 4B
-  tồn tại chính để sinh cache), TBPTT mở được cổng. Cặp **4→9 rộng hơn hẳn**:
-  nền 6,86GiB, ctx16384+gold256 chạy được → lấy lại cả ctx dài lẫn gold đầy đủ.
+- **BENCHMARK NGOÀI — baseline 27B THUẦN (2026-08-27)**: BBH 53,8% | GSM8K
+  80% | MuSR 58,1% (756 mẫu: 53,6%). Rác 0,0% cả 3 bộ — mốc đối chứng: khi
+  chạy cross, mọi tỷ lệ rác > 0 đều quy được cho mapper. HF `extbench_self/`.
+- **Nhánh 4→27B ĐÓNG (2026-08-28)**: test nội bộ kỷ lục (bfcl 18/20) nhưng
+  benchmark NGOÀI sụp (BBH 6,0% vs self 53,8%, GSM8K 0% vs 80%). 4B-self
+  gsm8k 81,5% cao hơn 27B → thông tin CÓ trong cache, lỗi ở khâu DỊCH.
+- **Kiến trúc 2 lớp + chuyển sang cặp 4→9 (2026-08-28, user chốt, chi tiết
+  STATUS.md)**: 4→27B nền 2 model 16,16GiB (trống 5,54), gold ≤48 khi ctx≤1024.
+  Cặp **4→9 rộng hơn hẳn**: nền 6,86GiB, ctx16384+gold256 chạy được.
 - **NGÀY 28-29/08 — joint 4→9 + 4 bug harness (chi tiết STATUS.md)**:
   pseudo-gold bằng vLLM offline nhanh **49×**; 4 bug harness làm mọi số trước
   đó sai, nặng nhất là **DỪNG SAI TOKEN KẾT THÚC** (tokenizer khai 248046
