@@ -100,7 +100,10 @@ def detach_cache(past):
 @torch.no_grad()
 def sample_rollout(model, tok, past, warm, n_new, temperature, stops):
     """Sinh CO NHIET DO (khong greedy -- can da dang trong nhom de co advantage
-    khac 0). Tra ve (list[int] token id, text)."""
+    khac 0). Tra ve (list[int] token id, text). CHI con dung cho K=1 / debug --
+    duong chinh la sample_rollout_batch (xem docstring ham do: goc cham 40s/
+    buoc la vong nay lap K=6 LAN RIENG LE, tuong duong 6xgen_len forward don-
+    token TUAN TU, khop dung so do bnb-4bit 11,8 tok/s trong gen_pseudo_vllm.py)."""
     o = model(input_ids=warm, past_key_values=past, use_cache=True)
     cur = o.past_key_values
     probs = torch.softmax(o.logits[:, -1, :].float() / temperature, -1)
@@ -116,6 +119,66 @@ def sample_rollout(model, tok, past, warm, n_new, temperature, stops):
             break
     del cur, o
     return gen, tok.decode(gen, skip_special_tokens=True)
+
+
+def clone_cache_repeat(past, k):
+    """Nhu deep_clone_cache nhung MO RONG batch-dim tu 1 thanh k (repeat doc
+    theo chieu 0) -- gop K nhanh sampling THANH MOT cache batch=K, thay vi K
+    cache batch=1 rieng le. Day la fix goc cho bottleneck 11,8 tok/s: chuyen
+    K*n_new lan forward DON-TOKEN tuan tu thanh n_new lan forward BATCH=K --
+    dung ky thuat da do trong batch_decode.py (batch 2 = 1,85-1,97x thong
+    luong, khong phai 2x thoi gian). .repeat() luon CAT DUT graph (khong
+    goi tren tensor con requires_grad o day) -- dung cho nhanh SAMPLING vi no
+    da la @torch.no_grad(), khac han deep_clone_cache (giu graph cho nhanh
+    teacher-force)."""
+    new = e5.clone_cache_struct(past)
+    attn_n, gdn_n = e5.split_layers(new)
+    for l in attn_n.values():
+        l.keys = l.keys.detach().repeat(k, *([1] * (l.keys.dim() - 1)))
+        l.values = l.values.detach().repeat(k, *([1] * (l.values.dim() - 1)))
+    for l in gdn_n.values():
+        r, c = e5._get(l.recurrent_states), e5._get(l.conv_states)
+        e5._set_like(l, "recurrent_states",
+                     r.detach().repeat(k, *([1] * (r.dim() - 1))))
+        e5._set_like(l, "conv_states",
+                     c.detach().repeat(k, *([1] * (c.dim() - 1))))
+    return new
+
+
+@torch.no_grad()
+def sample_rollout_batch(model, tok, past_k, warm, n_new, temperature, stops, k):
+    """past_k: cache DA O BATCH=K (clone_cache_repeat). Decode CA K nhanh
+    CUNG LUC moi buoc thay vi K vong rieng -- day la duong chinh, thay cho
+    K lan goi sample_rollout(). KHONG dung som theo tung hang rieng (phuc
+    tap hoa vong lap) -- decode DU n_new buoc cho ca K roi CAT SAU tai vi
+    tri stop dau tien cua tung hang (bai hoc: don gian hoa dung muc, gen_len
+    da ngan (~30-50) nen phan tinh du thua khong dang ke so voi loi ich gop
+    lo)."""
+    warm_b = warm.repeat(k, 1)
+    o = model(input_ids=warm_b, past_key_values=past_k, use_cache=True)
+    cur = o.past_key_values
+    probs = torch.softmax(o.logits[:, -1, :].float() / temperature, -1)
+    inp = torch.multinomial(probs, 1)
+    gens = [[int(inp[i, 0])] for i in range(k)]
+    for _ in range(n_new - 1):
+        o = model(input_ids=inp, past_key_values=cur, use_cache=True)
+        cur = o.past_key_values
+        probs = torch.softmax(o.logits[:, -1, :].float() / temperature, -1)
+        inp = torch.multinomial(probs, 1)
+        for i in range(k):
+            gens[i].append(int(inp[i, 0]))
+    del cur, o
+    trimmed, texts = [], []
+    for g in gens:
+        cut = len(g)
+        for j, t in enumerate(g):
+            if t in stops:
+                cut = j + 1
+                break
+        g2 = g[:cut]
+        trimmed.append(g2)
+        texts.append(tok.decode(g2, skip_special_tokens=True))
+    return trimmed, texts
 
 
 def teacher_force_logp(model, past, warm, gen_ids, device):
@@ -412,19 +475,19 @@ def main():
 
         st0 = student_past_grad(cut)
 
-        # pha 1: K nhanh sampling, KHONG grad
-        gens, rewards, sub = [], [], []
-        for _ in range(args.k):
-            branch = detach_cache(deep_clone_cache(st0))
-            with torch.no_grad():
-                gen_ids, txt = sample_rollout(
-                    model_t, tok_t, branch, warm, args.gen_len,
-                    args.temperature, STOPS)
+        # pha 1: K nhanh sampling GOP LO (1 vong decode batch=K thay vi K
+        # vong rieng le -- fix goc bottleneck 11,8 tok/s, xem docstring
+        # sample_rollout_batch)
+        branch_k = clone_cache_repeat(st0, args.k)
+        gens, texts = sample_rollout_batch(
+            model_t, tok_t, branch_k, warm, args.gen_len,
+            args.temperature, STOPS, args.k)
+        del branch_k
+        rewards, sub = [], []
+        for txt in texts:
             r, s = reward_of(it, txt, w)
-            gens.append(gen_ids)
             rewards.append(r)
             sub.append(s)
-            del branch
 
         adv = group_advantage(rewards)
         if adv is None:
