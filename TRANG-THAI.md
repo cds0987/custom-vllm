@@ -254,8 +254,8 @@ Cập nhật: 2026-09-04.
   + `STATUS.md`; số `suite_swe`/`musr` bản gốc dính lỗi chấm đã vá, đừng trích
   lại. Kết luận còn giá trị: mapper luôn tốt hơn bê thẳng cache; LoRA+mapper
   cộng hưởng chứ không cộng dồn.
-- **CÒN TREO**: `4B 45,3% > 9B 30,6%` trên bbh — nghi 9B sai KHUÔN, chưa
-  xác minh. **vLLM BỎ QUA LoRA** dù log báo có nạp — đo `+LoRA` bằng transformers.
+- **CÒN TREO**: `4B 45,3% > 9B 30,6%` trên bbh — nghi 9B sai KHUÔN. **vLLM BỎ
+  QUA LoRA** dù log báo nạp — đo `+LoRA` phải bằng transformers.
 - **TĂNG TỐC (2026-08-31)**: eval gom lô decode 6,7× (`batch_decode.py`);
   KHÔNG flash-attention (attention chỉ 0,03% phép tính); mapper vốn chỉ
   chạy batch 1 — đã sửa (`map_attn`/`map_gdn`), bài kiểm 23/23.
