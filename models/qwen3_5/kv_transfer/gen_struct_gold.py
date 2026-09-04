@@ -18,6 +18,7 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 import time
 from pathlib import Path
 
@@ -70,6 +71,21 @@ def build_prompt(problem_text):
             "\n\n<think>\n")   # ep model bat dau ngay bang phan tich
 
 
+_FA = re.compile(r"Final Answer:[^\n]*")
+
+
+def cut_after_answer(text):
+    """CAT bo moi thu sau dong 'Final Answer: X'.
+
+    Doc tay 200 mau dau (rule 15) bat duoc: 9B hay noi them sau khi da tra loi
+    xong -- 'Now solve this problem.' / 'Wait, I need to check the format
+    strictly. The example shows: ENTITIES: ...'. Neu de nguyen lam gold thi
+    dang DAY model thoi lam nham sau dap an, va lam hong luon phep cham (khoi
+    ENTITIES gia o duoi se bi parse nham)."""
+    m = _FA.search(text)
+    return text[:m.end()].rstrip() if m else text.strip()
+
+
 def extract_problem(prompt):
     """Lay lai de bai tu prompt goc (giua 'Problem:' va '<think>')."""
     i = prompt.find("Problem:")
@@ -94,7 +110,9 @@ def main():
     ap.add_argument("--max-len", type=int, default=4096)
     ap.add_argument("--util", type=float, default=0.90)
     ap.add_argument("--n", type=int, default=0, help="0 = tat ca")
-    ap.add_argument("--max-tokens", type=int, default=384)
+    ap.add_argument("--max-tokens", type=int, default=512,
+                    help="384 lam cat cut mau co khoi <think> dai (doc tay lan "
+                         "thu 200 thay day la mot phan cua 32% parse hong)")
     ap.add_argument("--hf-repo", default="gunnybd01/qwen35-kv-mapper-4b-27b")
     ap.add_argument("--hf-prefix", default="struct_gold")
     args = ap.parse_args()
@@ -127,6 +145,7 @@ def main():
     out, n_parse, n_ans = {}, 0, 0
     for it, r in zip(pool, res):
         txt = "<think>\n" + r.outputs[0].text        # bu lai phan bi cat o prompt
+        txt = cut_after_answer(txt)                  # bo rac duoi (xem docstring)
         p = gs.parse(txt)
         if not p["ok"]:
             continue
