@@ -83,8 +83,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data-file", default="/content/train_items.json")
     ap.add_argument("--out", default="/content/struct_gold_gsm.json")
-    ap.add_argument("--model", default="Qwen/Qwen3.5-9B")
-    ap.add_argument("--quant", default="bnb", choices=["bnb", "bf16"])
+    ap.add_argument("--model", default="gunnybd01/qwen35-9b-champion",
+                    help="MAC DINH champion W4A16 (compressed-tensors) -- vLLM "
+                         "0.28 DA BO ho tro 'bitsandbytes' (danh sach quant moi "
+                         "khong con no), nen duong bnb cu cua gen_pseudo_vllm.py "
+                         "khong chay duoc nua. Champion la ban 4-bit cua CHINH "
+                         "9B, ppl 4,7637 (bf16: 5,13) -- da do trong du an.")
+    ap.add_argument("--quant", default="auto", choices=["auto", "bnb", "bf16"],
+                    help="auto = de vLLM tu doc tu config (compressed-tensors)")
     ap.add_argument("--max-len", type=int, default=4096)
     ap.add_argument("--util", type=float, default=0.90)
     ap.add_argument("--n", type=int, default=0, help="0 = tat ca")
@@ -106,6 +112,7 @@ def main():
               gpu_memory_utilization=args.util, enforce_eager=False)
     if args.quant == "bnb":
         kw["quantization"] = "bitsandbytes"
+    # quant == "auto"/"bf16": khong truyen co -> vLLM doc tu config cua model
     t0 = time.time()
     llm = LLM(**kw)
     print(f"vLLM nap xong {time.time()-t0:.0f}s (quant={args.quant})", flush=True)
