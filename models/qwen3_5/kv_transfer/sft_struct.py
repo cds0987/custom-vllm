@@ -57,6 +57,11 @@ def main():
     ap.add_argument("--steps", type=int, default=0, help="0 = tinh tu epochs")
     ap.add_argument("--batch", type=int, default=4)
     ap.add_argument("--accum", type=int, default=4)
+    ap.add_argument("--mapper-ckpt", type=int, default=1,
+                    help="1 = bat co ckpt san co cua Mapper: tinh lai map_attn "
+                         "trong backward thay vi giu activation fp32 (~0,5GB "
+                         "@1K ctx moi lop). Doi CHUT toc do lay CHO de tang "
+                         "batch -- B=2 OOM khi tat co nay.")
     ap.add_argument("--max-ctx", type=int, default=1024)
     ap.add_argument("--n-eval", type=int, default=48)
     ap.add_argument("--eval-every", type=int, default=150)
@@ -156,7 +161,8 @@ def main():
     if mp.exists():
         mapper.load(str(mp))
         print(f"warm-start mapper tu {mp}", flush=True)
-    print(f"nap xong {time.time()-t0:.0f}s", flush=True)
+    mapper.ckpt = bool(args.mapper_ckpt)
+    print(f"nap xong {time.time()-t0:.0f}s | mapper.ckpt={mapper.ckpt}", flush=True)
 
     T_BASE = 512
     with torch.no_grad():
