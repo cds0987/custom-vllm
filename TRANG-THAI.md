@@ -250,19 +250,15 @@ Cập nhật: 2026-09-04.
   KẾT THÚC** (tokenizer khai 248046, model kết thúc 248044) → 92% tụt 32%, vá
   bằng `e5.stop_ids()`. Đọc tay 20 đầu ra gsm8k: 13/17 ca "văn hoàn hảo, đề
   bài bị bóp méo" — số sống sót, QUAN HỆ bị đảo lộn.
-- **MA TRẬN ĐỐI CHỨNG ĐẦY ĐỦ (2026-08-31, 1.650 mẫu)** — bảng đầy đủ nằm
-  trong BÁO CÁO HTML (link đầu file) + `STATUS.md`; số `suite_swe`/`musr`
-  bản gốc dính lỗi chấm điểm đã vá, đừng trích lại. Kết luận còn giá trị:
-  mapper luôn tốt hơn bê thẳng cache; LoRA+mapper cộng hưởng chứ không cộng
-  dồn; ranh giới truy-hồi/quan-hệ khớp 3 nguồn độc lập. Bỏ chữ "cascade"
-  khỏi mọi bảng (user chốt): ghi thẳng thành phần.
+- **MA TRẬN ĐỐI CHỨNG (2026-08-31, 1.650 mẫu)** — bảng đầy đủ ở BÁO CÁO HTML
+  + `STATUS.md`; số `suite_swe`/`musr` bản gốc dính lỗi chấm đã vá, đừng trích
+  lại. Kết luận còn giá trị: mapper luôn tốt hơn bê thẳng cache; LoRA+mapper
+  cộng hưởng chứ không cộng dồn.
 - **CÒN TREO**: `4B 45,3% > 9B 30,6%` trên bbh — nghi 9B sai KHUÔN, chưa
   xác minh. **vLLM BỎ QUA LoRA** dù log báo có nạp — đo `+LoRA` bằng transformers.
 - **TĂNG TỐC (2026-08-31)**: eval gom lô decode 6,7× (`batch_decode.py`);
   KHÔNG flash-attention (attention chỉ 0,03% phép tính); mapper vốn chỉ
   chạy batch 1 — đã sửa (`map_attn`/`map_gdn`), bài kiểm 23/23.
-- **BUG CHẶN TRAIN đã sửa**: tham số GDN của Mapper không phải tensor LÁ —
-  optimizer ném "can't optimize a non-leaf Tensor". Đã thêm bài kiểm.
 - **`e5.patch_recurrent_rebind()`**: GDN 5.15 cập nhật state bằng `.copy_()`
   IN-PLACE → vỡ autograd. e9_joint đã có bản vá kèm ghi chú "học phí 3 probe";
   probe_train_batch thành probe THỨ TƯ dính. Đã đưa ra e5_train dùng chung.
