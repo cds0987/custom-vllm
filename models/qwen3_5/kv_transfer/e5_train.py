@@ -230,7 +230,8 @@ def rope_apply(x, cos, sin, sign):
 class Mapper:
     def __init__(self, n_attn_tgt, n_gdn_tgt, gdn_heads_s, gdn_heads_t,
                  attn_dim, theta_s, theta_t, device="cuda",
-                 attn_rank=0, gdn_per_head=False, gdn_terms=1):
+                 attn_rank=0, gdn_per_head=False, gdn_terms=1,
+                 tok_rank=0, d_model=0):
         """attn_rank>0 va gdn_per_head=True = DOI NGAN SACH THAM SO
         (user duyet 2026-08-29).
 
@@ -257,6 +258,36 @@ class Mapper:
         self.gdn_terms = max(1, int(gdn_terms))
         self.attn_dim = attn_dim
         self.params = []
+        # ---- KENH DANH TINH TOKEN (y tuong EAGLE, 2026-09-04) ----------------
+        # EAGLE: du doan feature ke tiep VON mo ho neu khong biet token nao that
+        # su duoc chon -> no dua them "chuoi token dich mot buoc" vao de KHU BAT
+        # DINH. O day bat dinh con lo hon: mapper phai tai tao cache 9B CHI tu
+        # cache 4B, trong khi ta BIET CHINH XAC token ID moi vi tri (de bai nam
+        # ngay trong tay) va bang embedding cua 9B da nap san.
+        #
+        # Kenh nay dua embed_9B(token[i]) vao map_attn theo TUNG VI TRI:
+        #   K' = (bien doi cu) + (emb @ TU_K) @ TV_K
+        # Chi phi = TRA BANG embedding, KHONG phai attention/GDN -> khong dung
+        # toi ngan sach prefill cua 9B (khac han bridge-token phai prefill that).
+        #
+        # TV KHOI TAO ZERO -> luc bat dau kenh la NO-OP, mapper y HET ban cu:
+        # checkpoint cu nap vao chay giong het, va so sanh mot-bien sach tuyet
+        # doi (moi chenh lech sau do deu quy duoc cho kenh nay).
+        # Chia se cho MOI LOP (tiet kiem tham so); rank 64 ~ 0,66M tham so.
+        self.tok_rank = int(tok_rank)
+        self.d_model = int(d_model)
+        self.TU_K = self.TV_K = self.TU_V = self.TV_V = None
+        if self.tok_rank and self.d_model:
+            r = self.tok_rank
+            mk = lambda a, b, zero: (
+                torch.zeros(a, b, device=device) if zero else
+                torch.randn(a, b, device=device) * (1.0 / a ** 0.5)
+            ).requires_grad_(True)
+            self.TU_K = mk(self.d_model, r, False)
+            self.TV_K = mk(r, attn_dim, True)     # ZERO -> no-op luc khoi tao
+            self.TU_V = mk(self.d_model, r, False)
+            self.TV_V = mk(r, attn_dim, True)     # ZERO
+            self.params += [self.TU_K, self.TV_K, self.TU_V, self.TV_V]
         self.WK, self.bK, self.WV, self.bV = [], [], [], []
         self.UK, self.VK_, self.UV, self.VV_ = [], [], [], []
         for _ in range(n_attn_tgt):
@@ -307,13 +338,14 @@ class Mapper:
               f"| GDN {(n-n_attn)/1e6:.1f}M "
               f"(attn_rank={self.attn_rank}, gdn_per_head={self.gdn_per_head}, gdn_terms={self.gdn_terms})")
 
-    def map_attn(self, j, k, v):
+    def map_attn(self, j, k, v, emb=None):
         if self.ckpt:
             from torch.utils.checkpoint import checkpoint
-            return checkpoint(self._map_attn_impl, j, k, v, use_reentrant=False)
-        return self._map_attn_impl(j, k, v)
+            return checkpoint(self._map_attn_impl, j, k, v, emb,
+                              use_reentrant=False)
+        return self._map_attn_impl(j, k, v, emb)
 
-    def _map_attn_impl(self, j, k, v):
+    def _map_attn_impl(self, j, k, v, emb=None):
         """k,v: (B, H, T, dh) -> (B, H, T, dh) bf16.
 
         Ban cu ghim cung B=1 (`reshape(T, H*dh)`), tuc BATCH 1 LA GIOI HAN CUA
@@ -334,6 +366,14 @@ class Mapper:
         else:
             ok = flat_k @ self.WK[j] + self.bK[j]
             ov = flat_v @ self.WV[j] + self.bV[j]
+        # kenh danh tinh token (xem docstring __init__): cong THEO TUNG VI TRI
+        # phan thong tin CHINH XAC ve token that, thu ma mapper khong the suy
+        # ra chac chan tu cache 4B. TV zero-init -> luc dau cong 0 (no-op).
+        if self.TU_K is not None and emb is not None:
+            e = emb.float()
+            if e.shape[1] == T:            # khop do dai; bo qua neu lech (an toan)
+                ok = ok + (e @ self.TU_K) @ self.TV_K
+                ov = ov + (e @ self.TU_V) @ self.TV_V
         mk = ok.reshape(B, T, H, dh).permute(0, 2, 1, 3)
         mv = ov.reshape(B, T, H, dh).permute(0, 2, 1, 3)
         mk = rope_apply(mk, cos_t, sin_t, +1)                  # apply tgt rope
@@ -367,7 +407,12 @@ class Mapper:
              "B": [[t.detach() for t in terms] for terms in self.B],
              "_meta": {"attn_rank": self.attn_rank,
                        "gdn_per_head": self.gdn_per_head,
-                       "gdn_terms": self.gdn_terms}}
+                       "gdn_terms": self.gdn_terms,
+                       "tok_rank": self.tok_rank,
+                       "d_model": self.d_model}}
+        if self.TU_K is not None:
+            d.update({"TU_K": self.TU_K, "TV_K": self.TV_K,
+                      "TU_V": self.TU_V, "TV_V": self.TV_V})
         if self.attn_rank:
             d.update({"UK": self.UK, "VK": self.VK_,
                       "UV": self.UV, "VV": self.VV_})
@@ -391,6 +436,14 @@ class Mapper:
         # nhat (R=4 nap tu R=1 phai giong het) la bai KHONG CAN GPU.
         dev = self.params[0].device
         sd = torch.load(path, map_location=dev)
+        # kenh danh tinh token: checkpoint CU khong co -> giu zero-init (no-op),
+        # nen nap checkpoint cu vao mapper co kenh chay GIONG HET ban cu. Day la
+        # dieu kien de so sanh mot-bien sach: chi khac nhau o cho kenh co duoc
+        # hoc hay khong, khong khac o diem xuat phat.
+        if self.TU_K is not None and "TU_K" in sd:
+            for dst, key in ((self.TU_K, "TU_K"), (self.TV_K, "TV_K"),
+                             (self.TU_V, "TU_V"), (self.TV_V, "TV_V")):
+                dst.data.copy_(sd[key].data)
         for name in ("bK", "bV", "alpha"):
             for dst, src in zip(getattr(self, name), sd[name]):
                 dst.data.copy_(src.data)
@@ -618,9 +671,13 @@ def build_template_from_meta(probe_past, meta, device="cuda"):
     return past
 
 
-def build_student_past(tpl_past, src_past, mapper):
+def build_student_past(tpl_past, src_past, mapper, emb=None):
     """Clone template 27B (positions/shapes right, khong copy tensor), swap in
-    mapped grad-tracking tensors by ATTRIBUTE replacement (not in-place)."""
+    mapped grad-tracking tensors by ATTRIBUTE replacement (not in-place).
+
+    emb (tuy chon): embedding 9B cua CHINH cac token trong ngu canh, dang
+    (B, T, d_model) -- kenh danh tinh token kieu EAGLE (xem Mapper.__init__).
+    Bo trong = hanh vi y het ban cu."""
     import torch
     past = clone_cache_struct(tpl_past)
     attn_s, gdn_s = split_layers(src_past)
@@ -629,7 +686,7 @@ def build_student_past(tpl_past, src_past, mapper):
     amap = depth_map(len(ks), len(kt))
     for j, it in enumerate(kt):
         src = attn_s[ks[amap[j]]]
-        mk, mv = mapper.map_attn(j, src.keys, src.values)
+        mk, mv = mapper.map_attn(j, src.keys, src.values, emb)
         attn_t[it].keys = mk
         attn_t[it].values = mv
     gs, gt = sorted(gdn_s), sorted(gdn_t)
