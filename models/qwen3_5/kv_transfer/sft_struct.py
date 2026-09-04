@@ -209,12 +209,32 @@ def main():
             past = o.past_key_values
         return past
 
+    # Token KET THUC that su cua model. Checkpoint Qwen3.5 khai BAT NHAT QUAN:
+    # tokenizer.eos = 248046 nhung khi sinh THAT model dung 248044 o 38/40 ca
+    # (xem docstring e5.stop_ids -- bug da do bang thi nghiem doi chung).
+    _cfg = model_t.config.get_text_config() if hasattr(model_t.config, "get_text_config") \
+        else model_t.config
+    END_ID = getattr(_cfg, "eos_token_id", None)
+    if isinstance(END_ID, (list, tuple)):
+        END_ID = END_ID[0]
+    if END_ID is None:
+        END_ID = tok_t.eos_token_id
+    print(f"token ket thuc dua vao gold: {END_ID}", flush=True)
+
     def enc(it):
         e = tok_t(it["prompt"], return_tensors="pt", truncation=True,
                   max_length=args.max_ctx)["input_ids"].to("cuda")
         cut, warm = e[:, :-WARM_P], e[:, -WARM_P:]
         gold = tok_t(it["gold"], add_special_tokens=False,
                      return_tensors="pt")["input_ids"][:, :args.gold_cap].to("cuda")
+        # BUG DA SUA (2026-09-05, DOC TAY bat duoc o moc EVAL 400): gold cua
+        # Buoc 0 bi cat ngay tai 'Final Answer: X' (cut_after_answer) nen
+        # KHONG CON token ket thuc nao. Train nhu vay = day model KHONG BAO GIO
+        # dung -> dau ra lap vo tan 'Final Answer: 750 </think> Final Answer:
+        # 750 ...' cho het 320 token, parse chi 2,1% du <think> da hoc duoc
+        # 87,5%. Phai NOI token ket thuc that vao cuoi gold.
+        gold = torch.cat(
+            [gold, torch.tensor([[END_ID]], device="cuda", dtype=gold.dtype)], 1)
         feed = torch.cat([warm, gold[:, :-1]], 1)
         return cut, warm, gold, feed
 
