@@ -61,6 +61,7 @@ def _load(name):
 
 e5 = _load("e5_train")
 eba = _load("eba_gen")
+gd = _load("gen_data")
 e5.patch_recurrent_rebind()   # BAT BUOC truoc khi nap model (xem docstring)
 
 WARM_P = 5
@@ -260,6 +261,46 @@ def reward_of(item, text, w):
     return w["A"] * s["A"] + w["B"] * s["B"] + w["C"] * s["C"], s
 
 
+def reward_of_gsm8k(item, text, w):
+    """Reward THAT tren gsm8k (khong phai proxy EBA): dung CHINH grader
+    ext_bench.score_text da dung trong eval_big.py/run_gsm_traintest.sh --
+    khong bia mot ham cham diem moi (rule 15: thang do moi phai doc tay
+    truoc khi tin, ham nay DA duoc doc tay/dung o nhieu noi trong du an)."""
+    hit = gd.score_item(item, text)
+    return float(hit), {"C": float(hit)}
+
+
+def load_gsm8k_pool(data_path, pseudo_gold_path, limit):
+    """Doc dung format /content/train_items_gsm.json (data['train'], kind==
+    'gsm8k') -- CHINH tap run_gsm_traintest.sh dung cho 'TRAIN', tach hoan
+    toan khoi 100 mau NIEM PHONG (gsm8k_train() trong gen_data.py: split rieng
+    voi test da do). Ap dung pseudo-gold 9B tu sinh (da loc CHI item 9B lam
+    DUNG, gen_pseudo_vllm.py) giong HET co che e9_joint.py dong 213-227: item
+    9B lam sai GIU gold goc cua bo du lieu, khong bao gio day mapper hoc theo
+    quy dao sai cua 9B."""
+    data = json.loads(Path(data_path).read_text())
+    items = [it for it in data["train"] if it.get("kind") == "gsm8k"]
+    if limit:
+        items = items[:limit]
+    n_rep = 0
+    if pseudo_gold_path and Path(pseudo_gold_path).exists():
+        pg = json.loads(Path(pseudo_gold_path).read_text())
+        for it in items:
+            g = pg.get(it.get("id", ""))
+            if g and g.get("gold"):
+                it["gold"] = g["gold"]
+                it["pseudo"] = True
+                n_rep += 1
+        print(f"pseudo-gold gsm8k: thay {n_rep}/{len(items)} item bang quy "
+              f"dao 9B tu sinh (con lai giu gold goc cua bo du lieu)",
+              flush=True)
+    else:
+        print(f"CANH BAO: khong thay pseudo-gold {pseudo_gold_path} -- "
+              f"tat ca {len(items)} item dung gold goc (khong phai CoT 9B)",
+              flush=True)
+    return items
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--src-model", default="Qwen/Qwen3.5-4B")
@@ -273,11 +314,23 @@ def main():
     ap.add_argument("--lora-t-r", type=int, default=16)
     ap.add_argument("--lora-t-modules",
                     default="q_proj,o_proj,in_proj_qkvz,out_proj")
+    ap.add_argument("--task", default="eba", choices=["eba", "gsm8k"],
+                    help="eba = du lieu tong hop Entity-Binding (proxy); "
+                         "gsm8k = gsm8k THAT + pseudo-gold 9B tu sinh -- "
+                         "dung engine GRPO nhu nhau, chi doi nguon du lieu "
+                         "+ ham reward (user 2026-09-04: gop thanh 1 pipeline)")
     ap.add_argument("--n-items", type=int, default=400)
     ap.add_argument("--difficulty-max", type=int, default=1,
-                    help="chi dung item co difficulty <= gia tri nay (0..3) "
-                         "-- bat dau tu de nhat, escalate dan giong probe "
-                         "trich-so da lam truoc do")
+                    help="[chi --task eba] chi dung item co difficulty <= "
+                         "gia tri nay (0..3)")
+    ap.add_argument("--gsm-data", default="/content/train_items_gsm.json")
+    ap.add_argument("--pseudo-gold", default="/content/pseudo_gold_gsm2.json")
+    ap.add_argument("--gsm-limit", type=int, default=1200,
+                    help="[chi --task gsm8k] gioi han so item TRAIN doc tu "
+                         "gsm-data (0 = tat ca)")
+    ap.add_argument("--gold-cap", type=int, default=0,
+                    help="tran token gold cho anchor-CE. 0 = tu dong: 64 cho "
+                         "eba, 256 cho gsm8k (khop GOLD_CAP cua gen_pseudo_vllm.py)")
     ap.add_argument("--val-frac", type=float, default=0.15)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--k", type=int, default=6, help="so completion/prompt")
@@ -329,15 +382,22 @@ def main():
         except Exception as ex:
             print(f"HF-UP FAIL {dest}: {type(ex).__name__}: {ex}", flush=True)
 
-    # ---- data: sinh tai cho, KHONG doc/ghi dia -- item la thuan JSON+meta ----
-    items = eba.build(args.n_items, "/tmp/_eba_items.json", seed=args.seed)
-    items = [it for it in items if it["difficulty"] <= args.difficulty_max]
+    # ---- data ----
+    if args.task == "gsm8k":
+        items = load_gsm8k_pool(args.gsm_data, args.pseudo_gold, args.gsm_limit)
+        gold_cap = args.gold_cap or 256
+        do_reward = reward_of_gsm8k
+    else:
+        items = eba.build(args.n_items, "/tmp/_eba_items.json", seed=args.seed)
+        items = [it for it in items if it["difficulty"] <= args.difficulty_max]
+        gold_cap = args.gold_cap or 64
+        do_reward = reward_of
     rng = random.Random(args.seed)
     rng.shuffle(items)
     n_val = max(8, int(len(items) * args.val_frac))
     val_items, train_items = items[:n_val], items[n_val:]
-    print(f"eba: {len(train_items)} train, {len(val_items)} val "
-          f"(difficulty<={args.difficulty_max})", flush=True)
+    print(f"{args.task}: {len(train_items)} train, {len(val_items)} val, "
+          f"gold_cap={gold_cap}", flush=True)
 
     # ---- nap 9B + LoRA-9B (warm-start SFT) ----
     t0 = time.time()
@@ -466,7 +526,7 @@ def main():
                   max_length=2048)["input_ids"].to("cuda")
         cut, warm = e[:, :-WARM_P], e[:, -WARM_P:]
         gold_ids = tok_t(it["gold"], add_special_tokens=False,
-                         return_tensors="pt")["input_ids"][:, :64].to("cuda")
+                         return_tensors="pt")["input_ids"][:, :gold_cap].to("cuda")
         return cut, warm, gold_ids
 
     import bitsandbytes as bnb
@@ -480,10 +540,12 @@ def main():
 
     @torch.no_grad()
     def run_val(n):
-        """Bao cao reward TRUNG BINH (A/B/C rieng) tren val -- KHONG phai
-        vong val gsm8k day du cua e9_joint, chi de theo doi GRPO co tien
-        khong. Dung greedy (nhiet do 0) cho on dinh giua cac moc."""
-        agg = {"A": [], "B": [], "C": []}
+        """Bao cao reward TRUNG BINH tren val -- KHONG phai vong val gsm8k
+        day du cua e9_joint/run_gsm_traintest.sh (khong niem phong, chi tap
+        con TRAIN de theo doi GRPO co tien khong). Dung greedy (nhiet do 0)
+        cho on dinh giua cac moc."""
+        keys = ("A", "B", "C") if args.task == "eba" else ("C",)
+        agg = {kk: [] for kk in keys}
         for it in val_items[:n]:
             cut, warm, _ = enc(it)
             src = e5.prefill_chunked(model_s, cut)
@@ -501,8 +563,9 @@ def main():
                 if int(inp) in STOPS:
                     break
             txt = tok_t.decode(gen, skip_special_tokens=True)
-            s = eba.score_eba(it, txt)
-            for kk in ("A", "B", "C"):
+            s = eba.score_eba(it, txt) if args.task == "eba" \
+                else {"C": float(gd.score_item(it, txt))}
+            for kk in keys:
                 agg[kk].append(s[kk])
             del st, tpl, src, cur, o
             torch.cuda.empty_cache()
@@ -565,7 +628,7 @@ def main():
         with clock("reward"):
             rewards, sub = [], []
             for txt in texts:
-                r, s = reward_of(it, txt, w)
+                r, s = do_reward(it, txt, w)
                 rewards.append(r)
                 sub.append(s)
 
