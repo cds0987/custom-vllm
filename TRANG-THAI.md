@@ -260,8 +260,7 @@ Cập nhật: 2026-09-04.
   KHÔNG flash-attention (attention chỉ 0,03% phép tính); mapper vốn chỉ
   chạy batch 1 — đã sửa (`map_attn`/`map_gdn`), bài kiểm 23/23.
 - **`e5.patch_recurrent_rebind()`**: GDN 5.15 cập nhật state bằng `.copy_()`
-  IN-PLACE → vỡ autograd. e9_joint đã có bản vá kèm ghi chú "học phí 3 probe";
-  probe_train_batch thành probe THỨ TƯ dính. Đã đưa ra e5_train dùng chung.
+  IN-PLACE → vỡ autograd (đã dính 4 probe). Bản vá dùng chung ở `e5_train`.
 - **Chẩn đoán QUÁ KHỚP (2026-08-30)**: mapper train 86,0%/val 63,3% (chênh
   22,7); suite_swe train 100%/val 28,6%/niêm phong 47,2% — thuộc lòng 190
   mẫu. → phóng to mapper SAI HƯỚNG; giả thuyết "mapper quá nhỏ" bị bác.
