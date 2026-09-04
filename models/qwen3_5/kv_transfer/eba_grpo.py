@@ -584,14 +584,33 @@ def main():
         (out / "results.json").write_text(json.dumps(results, indent=1))
 
     def save_ckpt(tag):
+        """Luu local + upload HF trong DUNG 1 COMMIT (CommitOperationAdd +
+        create_commit) thay vi ~8-10 upload_file rieng le -- fix rate-limit
+        60 commit/gio da dinh that trong eba_grpo_v2c (log 'HF-UP FAIL...429
+        Too Many Requests'), khong phai loi dang nhap/xac thuc (cung token
+        da thanh cong hang chuc lan truoc do trong dung phien)."""
         torch.save(mapper.state_dict(), out / f"mapper_{tag}.pt")
         model_s.save_pretrained(str(out / f"lora_{tag}"))
         model_t.save_pretrained(str(out / f"lorat_{tag}"))
-        hf_up(out / f"mapper_{tag}.pt", f"mapper_{tag}.pt")
+        if not args.hf_repo or not os.environ.get("HF_TOKEN"):
+            return
+        from huggingface_hub import CommitOperationAdd
+        ops = [CommitOperationAdd(
+            path_in_repo=f"{args.hf_prefix}/mapper_{tag}.pt",
+            path_or_fileobj=str(out / f"mapper_{tag}.pt"))]
         for sub in (f"lora_{tag}", f"lorat_{tag}"):
             for f in sorted((out / sub).glob("*")):
                 if f.is_file():
-                    hf_up(f, f"{sub}/{f.name}")
+                    ops.append(CommitOperationAdd(
+                        path_in_repo=f"{args.hf_prefix}/{sub}/{f.name}",
+                        path_or_fileobj=str(f)))
+        try:
+            _api.create_commit(repo_id=args.hf_repo, operations=ops,
+                               commit_message=f"{args.hf_prefix} ckpt {tag}")
+            print(f"HF-UP {tag} ({len(ops)} file, 1 commit)", flush=True)
+        except Exception as ex:
+            print(f"HF-UP FAIL ckpt {tag}: {type(ex).__name__}: {ex}",
+                  flush=True)
 
     # Dong ho tung chang (y het e9_joint.py: PHAI synchronize truoc khi doc
     # dong ho, CUDA chay bat dong bo). Them SAU khi do duoc gop lo giam
