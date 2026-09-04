@@ -150,24 +150,31 @@ def clone_cache_repeat(past, k):
 def sample_rollout_batch(model, tok, past_k, warm, n_new, temperature, stops, k):
     """past_k: cache DA O BATCH=K (clone_cache_repeat). Decode CA K nhanh
     CUNG LUC moi buoc thay vi K vong rieng -- day la duong chinh, thay cho
-    K lan goi sample_rollout(). KHONG dung som theo tung hang rieng (phuc
-    tap hoa vong lap) -- decode DU n_new buoc cho ca K roi CAT SAU tai vi
-    tri stop dau tien cua tung hang (bai hoc: don gian hoa dung muc, gen_len
-    da ngan (~30-50) nen phan tinh du thua khong dang ke so voi loi ich gop
-    lo)."""
+    K lan goi sample_rollout(). KHONG dung som theo TUNG HANG RIENG (van
+    phai forward CA batch=K moi buoc, khong the bo qua 1 hang giua batch) --
+    nhung DUNG SOM CA VONG LAP khi TAT CA k hang deu da gap stop, vi phan
+    con lai chac chan bi cat bo o buoc trim ben duoi. Voi gen_len nho (EBA,
+    ~30-50) phan tinh du thua khong dang -- nhung gen_len=200 (gsm8k that,
+    2026-09-04) thi dang: nhieu loi giai xong o ~80-120 token, chay het 200
+    la lang phi ~40-60% vong lap khong sinh gia tri gi them."""
     warm_b = warm.repeat(k, 1)
     o = model(input_ids=warm_b, past_key_values=past_k, use_cache=True)
     cur = o.past_key_values
     probs = torch.softmax(o.logits[:, -1, :].float() / temperature, -1)
     inp = torch.multinomial(probs, 1)
     gens = [[int(inp[i, 0])] for i in range(k)]
+    done = [int(inp[i, 0]) in stops for i in range(k)]
     for _ in range(n_new - 1):
+        if all(done):
+            break
         o = model(input_ids=inp, past_key_values=cur, use_cache=True)
         cur = o.past_key_values
         probs = torch.softmax(o.logits[:, -1, :].float() / temperature, -1)
         inp = torch.multinomial(probs, 1)
         for i in range(k):
             gens[i].append(int(inp[i, 0]))
+            if int(inp[i, 0]) in stops:
+                done[i] = True
     del cur, o
     trimmed, texts = [], []
     for g in gens:
