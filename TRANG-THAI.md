@@ -297,5 +297,4 @@ Cập nhật: 2026-09-04.
 5. (Hoãn) P5 ablation nguồn graft; P6 converter toàn-model.
 
 ## Nợ dài hạn / quyết định chờ user
-- Chưa đo qua mạng thật; chưa soak nhiều giờ. Nộp `upstream/`? Revoke HF
-  token sau chiến dịch? Mở B/C khi nào?
+- Chưa đo qua mạng thật; chưa soak nhiều giờ. Nộp `upstream/`? Revoke HF token? Mở B/C?
