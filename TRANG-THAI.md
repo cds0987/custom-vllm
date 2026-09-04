@@ -233,17 +233,23 @@ Cập nhật: 2026-09-04.
   needle 29/29 | score 54, xác nhận E7 (4→9 dễ hơn 4→27). HF `v49/`.
   Baseline 27B thuần đối chứng: BBH 53,8%/GSM8K 80%/MuSR 58,1%, rác 0,0%
   cả 3 bộ (HF `extbench_self/`).
-- **Nhánh 4→27B ĐÓNG (2026-08-28)**: nội bộ kỷ lục (bfcl 18/20) nhưng
-  benchmark NGOÀI sụp (BBH 6,0% vs self 53,8%) — thông tin CÓ trong cache,
-  lỗi ở khâu DỊCH. **Chuyển sang cặp 4→9** (user chốt): nền VRAM rộng hơn
-  hẳn (6,86GiB vs 16,16GiB của 4→27B), ctx16384+gold256 chạy được.
+- **Nhánh 4→27B TẠM DỪNG — KHÔNG đóng (user đính chính 2026-09-04)**: nội bộ
+  kỷ lục (bfcl 18/20, needle 15/15) nhưng benchmark NGOÀI sụp (BBH 6,0% vs
+  self 53,8%) — thông tin CÓ trong cache, lỗi ở khâu DỊCH (chính là vấn đề
+  phương pháp entity/relationship + reward phân rã đang nhắm). **Dùng 4→9 để
+  TÍCH LUỸ trước, rồi đẩy mạnh vào 4→27** (user chốt): nền VRAM 6,86GiB vs
+  16,16GiB, ctx16384+gold256 → lặp nhanh hơn nhiều, công thức tái dùng 100%.
+  **27B = CORE TARGET của sản phẩm.**
+- **⚠️ Luật đọc CCA (Claude sai 2026-09-04, user bắt)**: CCA/VarExpl là thước
+  TUYẾN TÍNH — chỉ kết luận được "bê thẳng/tile/ánh xạ tuyến tính hỏng",
+  KHÔNG kết luận được mapper phi tuyến đã train làm được gì. Bằng chứng ngay
+  trong dự án: 4→27B CCA-GDN 0,785 + không có tile nguyên, mà mapper train
+  vẫn đạt bfcl 18/20 + needle 15/15. Đúng luật error-placement đã kiểm ≥4 lần.
 - **NGÀY 28-29/08 — joint 4→9 + 4 bug harness (chi tiết STATUS.md)**:
-  pseudo-gold bằng vLLM offline nhanh **49×**; 4 bug harness làm mọi số trước
-  đó sai, nặng nhất là **DỪNG SAI TOKEN KẾT THÚC** (tokenizer khai 248046
-  nhưng model kết thúc bằng 248044) → 92% tụt còn 32%, vá bằng `e5.stop_ids()`.
-  Đọc tay 20 đầu ra gsm8k: 13/17 ca "văn hoàn hảo, đề bài bị bóp méo" — số
-  sống sót, QUAN HỆ bị đảo lộn. Giả thuyết dung lượng GDN bị bác lần đầu ở đây
-  (và bác lại lần hai ở `joint49cc`, xem trên).
+  pseudo-gold bằng vLLM offline nhanh **49×**; bug nặng nhất **DỪNG SAI TOKEN
+  KẾT THÚC** (tokenizer khai 248046, model kết thúc 248044) → 92% tụt 32%, vá
+  bằng `e5.stop_ids()`. Đọc tay 20 đầu ra gsm8k: 13/17 ca "văn hoàn hảo, đề
+  bài bị bóp méo" — số sống sót, QUAN HỆ bị đảo lộn.
 - **MA TRẬN ĐỐI CHỨNG ĐẦY ĐỦ (2026-08-31, 1.650 mẫu)** — bảng đầy đủ nằm
   trong BÁO CÁO HTML (link đầu file) + `STATUS.md`; số `suite_swe`/`musr`
   bản gốc dính lỗi chấm điểm đã vá, đừng trích lại. Kết luận còn giá trị:
