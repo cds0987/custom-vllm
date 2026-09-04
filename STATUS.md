@@ -2812,3 +2812,120 @@ train 100% / val 28,6% / niêm phong 47,2% — thuộc lòng 190 mẫu train.
 Giả thuyết "mapper quá nhỏ" bị bác ở mốc phân xử đặt trước.
 
 Train đã bão hoà, hai lần độc lập: `joint49v` 67→66→62, `joint49w` 100→95.
+
+## Chi tiết dồn từ TRANG-THAI.md (2026-09-04, giữ file gốc ≤300 dòng)
+
+### joint49y — checkpoint tham chiếu CŨ (thay bởi joint49z)
+Niêm phong 1.650+179 mẫu: bfcl 94,0%/bbh 65,0%/needle 94,6%/suite_mid 99,2%/
+suite_rag 98,4%/suite_swe 56,1% (số này SAU đó phát hiện dính bug scorer, xem
+"suite_gen.score ĐÃ VÁ")/musr 58,9%. ctx-BỎ suite_swe/musr sập 0,0% cả hai —
+không ăn gian. 2 sự cố vận hành: thiếu --decode-batch, resume-file sai.
+Báo cáo HTML: https://claude.ai/code/artifact/b20fe8d6-0e21-44d1-afa8-b1622d62385a
+
+### PIPELINE THẬT bridge tokens (2026-09-02, real_bridge_4b.py) — chi tiết đầy đủ
+4B TỰ SINH bridge (không trích oracle từ đề gốc), n=30 gsm8k, cùng bộ mẫu:
+
+| biến thể | tỷ lệ | so oracle |
+|---|---|---|
+| mapped | 0,0% | (như trên) |
+| bridge_4b (4B tự tóm tắt) | 13,3% | oracle full 23,3% / nums 16,7% |
+
+Vẫn cải thiện rõ so mapped, nhưng THẤP HƠN oracle. Đọc tay 2 nguyên nhân cụ
+thể: (1) 4B đôi khi TỰ GIẢI SAI ngay trong lúc tóm tắt dù bị cấm rõ ("Do NOT
+solve") và chèn "Final Answer" sai vào bridge — gây nhiễu ngược; (2) 4B đôi
+khi dùng ký hiệu ẩn danh (X=5,Y=25,Z=4...) thay vì tên thực thể → 9B mất neo
+ngữ nghĩa, không dùng lại được. Mẫu dùng TÊN THẬT ("22 green pens") theo tốt
+hơn ký hiệu ẩn danh dù vẫn có thể sai bước tính sau. Kết luận: cơ chế bridge
+tokens hoạt động thật (không phải chỉ là ảo ảnh của oracle), nhưng cần tinh
+chỉnh cách ra lệnh cho 4B (cấm tự giải rõ hơn, ép dùng tên thực thể) trước
+khi coi là giải pháp sản phẩm hoàn chỉnh. Lên HF `evalbig/real_bridge_30.json`.
+(User sau đó chuyển hướng ưu tiên sang synthetic-data + GRPO thay vì tiếp
+tục hướng bridge-tokens này — xem mục EBA+GRPO trong TRANG-THAI.md.)
+
+Bài học vận hành: gom lô (--decode-batch>1) KHÔNG an toàn cho bench sinh dài
+(gsm8k 320 token/mẫu) — công kiểm batch=8 bắt được lệch thật (b1≠bB) ở mẫu
+`big/gsm8k/221`; đã tách batch=1 riêng cho gsm8k trong `run_joint49bb_seal.sh`.
+Batch>1 vẫn an toàn cho bench ngắn (suite_swe 24 token, đã kiểm 25/25 khớp).
+
+### EBA (Entity Binding Arithmetic) + GRPO — chi tiết đầy đủ (2026-09-03→04)
+Thiết kế do user đề xuất: sinh dữ liệu tổng hợp K thực thể (giá trị số phân
+biệt) + N distractor (thực thể không dùng nhưng vẫn xuất hiện trong đề) +
+một phép tính (sum/diff/product), ground-truth JSON 100% chắc chắn (không
+qua model nào). File `models/qwen3_5/kv_transfer/eba_gen.py`.
+
+Chấm 3 lớp TÁCH RIÊNG (không gộp) để định vị lỗi (đúng bài học "error-
+placement" của dự án): Layer A = nhớ đúng giá trị mỗi thực thể ĐƯỢC DÙNG
+(tìm số trong PHẠM VI CÂU chứa tên, tránh rò rỉ hàng xóm); Layer B = không
+lẫn giá trị của distractor vào câu của thực thể dùng; Layer C = đáp số cuối
+đúng (khớp chuỗi số chính xác, an toàn dấu phẩy). `tests/test_eba_gen.py`
+9/9, bắt 2 bug thật lúc dựng (rule 15: đọc tay ≥8 mẫu trước khi tin số).
+
+GRPO (`eba_grpo.py`) theo tài liệu Unsloth: reward = tổ hợp trọng số A/B/C;
+advantage = Z-score CHUẨN HOÁ TRONG NHÓM K mẫu cùng prompt (không cần mạng
+value/critic riêng); nhóm reward đồng nhất → advantage=None → bỏ qua
+gradient bước đó (KHÔNG bỏ qua val/checkpoint — bug đã vá, xem dưới). Ấm từ
+SFT (`joint49cc`) vì Unsloth cảnh báo reward đồng nhất toàn nhóm cho
+gradient=0, cần policy đã có năng lực nền trước khi RL.
+
+Kiến trúc 2 pha/bước: (1) MỘT lần build cache có grad (mapper+TBPTT 4B
+prefill); (2) clone K nhánh KHÔNG grad để sample nhiệt độ lấy reward; (3)
+clone K nhánh CÓ GIỮ GRAPH để 1 lần forward batch=K teacher-forced tính
+log-prob (dùng quy ước pad -100 giống `e9_joint.enc_batch`); (4) anchor-CE
+trọng số nhỏ (kiểu "ptx" InstructGPT) thay cho model tham chiếu đóng băng
+riêng — rẻ hơn nhiều trên 1 GPU. Tăng tốc đo được: gộp lô pha 1 (2,6×) +
+gộp lô pha 2 (thêm 1,6×) = tổng 4,2× (38-40s/bước → 9,3-9,5s/bước).
+
+Đã thử và LOẠI (đo trước khi kết luận, không suy luận): cài
+`flash-linear-attention` (fla) — GDN forward TỰ ĐỘNG chuyển sang kernel
+Triton nếu `import fla` thành công (`use_kernel_func_from_hub_with_fallback`
+trong transformers). Đúng về mặt kiến trúc (GDN vốn dùng vòng lặp Python
+thuần khi không có fla) nhưng ĐO THỰC TẾ chậm hơn 2,2× (20,37s/bước) vì
+JIT-recompile Triton mỗi bước do độ dài prompt EBA thay đổi liên tục —
+không amortize được cache kernel. Đã gỡ cài đặt.
+
+Bug nghiêm trọng tự phát hiện (không phải user báo): `continue` khi
+advantage=None nhảy qua LUÔN khối `if step % val_every == 0` phía sau trong
+CÙNG vòng lặp — chạy `eba_grpo_v2b` ~500 bước/~50+ phút GPU không lưu được
+checkpoint nào vì các mốc val_every/snapshot_every đều trùng bước bị bỏ
+gradient. Vá bằng cờ `skipped` tách riêng phần backward khỏi phần
+val/checkpoint (LUÔN chạy). Commit `5a02e1e`.
+
+Thí nghiệm scale-up 2000 item/1000 bước = `eba_grpo_v2c` (ấm từ
+`eba_grpo_v2` bị recycle giữa chừng ở bước 200, resume tiếp tục không mất
+công). Chạy XONG đủ 1000 bước dù runtime Colab recycle ngay sau đó (mọi
+checkpoint đã kịp lên HF trước khi mất — rule 6d). Val nội bộ (n=30,
+seed=0 train-val-split) dao động 0,73-0,80 suốt từ bước 50 đến 1000, không
+đơn điệu đi lên — bão hoà sớm.
+
+So dứt điểm (`run_eba_compare3` tự viết) trên bộ HELD-OUT THẬT (n=200,
+seed=99999, khác seed=0 lúc train) — baseline `joint49cc` (SFT thuần) vs
+`eba_grpo_v2c/best` vs `eba_grpo_v2c/last`, McNemar Layer C từng cặp:
+
+| checkpoint | A | B | C |
+|---|---|---|---|
+| baseline joint49cc | 0,365 | 0,110 | 0,310 |
+| eba_grpo_v2c/best | 0,762 | 0,470 | 0,630 |
+| eba_grpo_v2c/last (bước 1000) | 0,797 | 0,500 | 0,650 |
+
+McNemar C: best vs baseline — best-đúng/baseline-sai=70, best-sai/baseline-
+đúng=6, chi2=52,224, p=0,0000 (CÓ Ý NGHĨA). last vs baseline — last-đúng/
+baseline-sai=72, last-sai/baseline-đúng=4, chi2=59,066, p=0,0000 (CÓ Ý
+NGHĨA). best vs last — best-đúng/last-sai=2, best-sai/last-đúng=6,
+chi2=1,125, p=0,2888 (CHƯA phân biệt được với nhiễu).
+
+Kết luận: GRPO cải thiện THẬT và LỚN so với SFT thuần trên cả 3 lớp điểm
+(đặc biệt Layer B — không lẫn distractor — tăng gấp 4,5 lần từ 0,110→0,500,
+đúng đích nhắm "liên kết số-với-thực-thể"). Train quá ~150 bước không thêm
+lợi ích đo được (best≈last, p=0,29) — 850 bước còn lại của ngân sách 1000
+là lãng phí, lần sau nên rút ngắn steps hoặc thêm cơ chế early-stop theo
+val plateau. File kết quả: `evalbig/eba_eval_baseline.json`,
+`evalbig/eba_eval_v2c_best.json`, `evalbig/eba_eval_v2c_last.json`,
+`evalbig/eba_compare3_final.json` (tất cả trên HF
+`gunnybd01/qwen35-kv-mapper-4b-27b`, repo hiện đã PUBLIC).
+
+Nợ chưa trả: `save_ckpt()` trong `eba_grpo.py` gọi `upload_file` riêng lẻ
+cho từng file (~8-10 lần/lần lưu) → dính rate-limit HF 60 commit/giờ trong
+lúc chạy `eba_grpo_v2c` (log "HF-UP FAIL...429 Too Many Requests") — KHÔNG
+phải lỗi đăng nhập/xác thực (cùng token đã upload thành công hàng chục lần
+trong đúng phiên đó trước khi dính limit). Đã chẩn đoán, CHƯA vá: cần
+chuyển sang `upload_folder` (1 commit/lần lưu) trước lần train tiếp theo.

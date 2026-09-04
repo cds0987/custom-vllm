@@ -3,9 +3,34 @@
 File này được CLAUDE.md nạp tự động đầu mỗi phiên. Claude TỰ ĐỘNG cập nhật khi
 trạng thái đổi — không hỏi user. Giới hạn cứng ≤300 dòng; chi tiết dồn `STATUS.md`.
 
-Cập nhật: 2026-09-02.
+Cập nhật: 2026-09-04.
 
 ## Trạng thái hiện tại
+
+- **🎯 EBA + GRPO — RL CÓ CẢI TIẾN THẬT, XÁC NHẬN THỐNG KÊ (2026-09-04)**:
+  hướng do user đề xuất — sinh dữ liệu tổng hợp Entity-Binding-Arithmetic
+  (thực thể+số+distractor, ground-truth 100% chắc chắn không qua model,
+  `eba_gen.py`, 3 lớp điểm A=nhớ giá trị/B=không lẫn distractor/C=đáp số
+  cuối đúng) rồi train GRPO 2 pha kiểu Unsloth (SFT-warm-start từ
+  `joint49cc` + RL, K=6 nhóm, anchor-CE thay reference model, `eba_grpo.py`)
+  — nhắm thẳng lỗi "gán SAI con số vào đúng thực thể" đã chẩn đoán ở gsm8k
+  phía dưới. Scale-up 2000 item/1000 bước = `eba_grpo_v2c`.
+
+  **So dứt điểm n=200 held-out (seed=99999≠seed train) + McNemar**:
+
+  | checkpoint | A | B | C |
+  |---|---|---|---|
+  | baseline `joint49cc` (SFT thuần) | 0,365 | 0,110 | 0,310 |
+  | `eba_grpo_v2c/best` (SFT+GRPO) | 0,762 | 0,470 | **0,630** |
+  | `eba_grpo_v2c/last` (bước 1000) | 0,797 | 0,500 | **0,650** |
+
+  best/last vs baseline: McNemar **p<0,0001** (χ²=52,2/59,1) — RL cải thiện
+  THẬT gấp đôi C, không phải nhiễu. best vs last: p=0,29 — train quá bước
+  ~150 không thêm lợi (val nội bộ dao động 0,73-0,80 suốt 850 bước, bão hoà
+  sớm). Checkpoint + kết quả lên HF `eba_grpo_v2c/` + `evalbig/eba_*`.
+  Học phí: bug `continue` nhảy qua cả val/checkpoint khi reward đồng nhất
+  trong nhóm K (đã vá, commit `5a02e1e`); rate-limit HF 60 commit/giờ khi
+  save nhiều file riêng lẻ (CHƯA vá — cần `upload_folder` cho lần train sau).
 
 - **🎯 MỤC TIÊU HIỆN TẠI (user chốt 2026-09-01): CHỈ `suite_swe` (đầy đủ) +
   `gsm8k`.** `joint49bb` (warm-start từ `joint49z`, drop hết các bộ khác kể
@@ -115,30 +140,12 @@ Cập nhật: 2026-09-02.
   THƯỜNG, không còn "bịa số từ hư không". → bản tóm tắt NGẮN (51 token) gần
   bằng bản đầy đủ (67 token). Lên HF `evalbig/bridge_full30.json`.
 
-- **PIPELINE THẬT (2026-09-02, `real_bridge_4b.py`) — 4B TỰ SINH bridge**
-  (không trích oracle từ đề gốc), n=30 gsm8k, cùng bộ mẫu:
-
-  | biến thể | tỷ lệ | so oracle |
-  |---|---|---|
-  | mapped | 0,0% | (như trên) |
-  | **bridge_4b** (4B tự tóm tắt) | **13,3%** | oracle full 23,3% / nums 16,7% |
-
-  Vẫn cải thiện rõ so mapped, nhưng THẤP HƠN oracle. Đọc tay 2 nguyên nhân
-  cụ thể: (1) 4B đôi khi TỰ GIẢI SAI ngay trong lúc tóm tắt dù bị cấm rõ
-  ("Do NOT solve") và chèn "Final Answer" sai vào bridge — gây nhiễu ngược;
-  (2) 4B đôi khi dùng ký hiệu ẩn danh (X=5,Y=25,Z=4...) thay vì tên thực thể
-  → 9B mất neo ngữ nghĩa, không dùng lại được. Mẫu dùng TÊN THẬT ("22 green
-  pens") theo tốt hơn ký hiệu ẩn danh dù vẫn có thể sai bước tính sau.
-  **Kết luận**: cơ chế bridge tokens hoạt động thật (không phải chỉ là ảo
-  ảnh của oracle), nhưng cần tinh chỉnh cách ra lệnh cho 4B (cấm tự giải rõ
-  hơn, ép dùng tên thực thể) trước khi coi là giải pháp sản phẩm hoàn chỉnh.
-  Lên HF `evalbig/real_bridge_30.json`.
-
-  **Bài học vận hành mới**: gom lô (`--decode-batch`>1) KHÔNG an toàn cho
-  bench sinh dài (gsm8k 320 token/mẫu) — công kiểm batch=8 bắt được lệch
-  thật (b1≠bB) ở mẫu `big/gsm8k/221`; đã tách batch=1 riêng cho gsm8k trong
-  `run_joint49bb_seal.sh`. Batch>1 vẫn an toàn cho bench ngắn (suite_swe 24
-  token, đã kiểm 25/25 khớp).
+- **PIPELINE THẬT bridge tokens (2026-09-02, `real_bridge_4b.py`)** — 4B tự
+  sinh bridge (không oracle), n=30 gsm8k: mapped 0,0% → bridge_4b **13,3%**
+  (thấp hơn oracle 23,3%, do 4B đôi khi tự giải sai/dùng ký hiệu ẩn danh).
+  Cơ chế hoạt động thật nhưng cần tinh chỉnh trước khi coi là giải pháp sản
+  phẩm — **user sau đó chuyển ưu tiên sang synthetic-data+GRPO** (xem mục
+  EBA+GRPO đầu file). Chi tiết đầy đủ + bài học vận hành batch: `STATUS.md`.
 
 - **Báo cáo toàn cục "Prefill bằng model nhỏ" (quy tắc 6c)**:
   https://claude.ai/code/artifact/8e4cccf6-b447-4439-97c2-14e7ca9ffee1
@@ -278,14 +285,6 @@ Cập nhật: 2026-09-02.
   - Checkpoint đã lưu HF `joint49z/`. Bước kế đã duyệt: thêm `gsm8k` (tập
     con nhỏ trước, KHÔNG đổ hết 3.000 mẫu — sẽ làm chậm train và loãng tín
     hiệu musr/suite_swe) vào lượt tiếp theo, ấm từ `joint49z`.
-
-- **`joint49y` = checkpoint tham chiếu CŨ (thay bởi `joint49z`)** — niêm phong
-  1.650+179 mẫu, bfcl 94,0%/bbh 65,0%/needle 94,6%/suite_mid 99,2%/suite_rag
-  98,4%/suite_swe 56,1%(số này SAU đó phát hiện dính bug scorer, xem "suite_gen.score
-  ĐÃ VÁ")/musr 58,9%. ctx-BỎ suite_swe/musr sập 0,0% cả hai — không ăn gian.
-  Chi tiết đầy đủ + 2 sự cố vận hành (thiếu --decode-batch, resume-file sai)
-  đã dồn sang `STATUS.md`. Báo cáo HTML:
-  https://claude.ai/code/artifact/b20fe8d6-0e21-44d1-afa8-b1622d62385a
 
 ## Hàng đợi (đã duyệt 2026-08-14)
 1. ✅ Spec decoding + ✅ util sweep (mặc định 0.97, đỉnh 12 phiên) — đóng bằng số đo.
