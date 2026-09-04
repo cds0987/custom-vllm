@@ -53,9 +53,18 @@ Cập nhật: 2026-09-04.
   | **`gsm_grpo_v1c` (RL trực tiếp gsm8k)** | **10,0%** | **10,0%** |
 
   Train≈test (không quá khớp) — cao nhất chiến dịch gsm8k tới nay, vượt cả
-  2 baseline SFT và nhánh RL-proxy. n=100 còn nhỏ (10 vs 8 đúng, chênh 2
-  mẫu) — CHƯA chạy McNemar để phân xử ý nghĩa thống kê, cần làm ở lượt sau
-  trước khi tuyên bố thắng chắc chắn. Checkpoint lên HF `gsm_grpo_v1c/`.
+  2 baseline SFT và nhánh RL-proxy. Checkpoint lên HF `gsm_grpo_v1c/`.
+
+  **McNemar (2026-09-04, đọc trực tiếp 3 file JSON per-item trên HF, n=100
+  giao cả 3 checkpoint)**: `gsm_grpo_v1c` vs `joint49cc` — 9 thắng/3 thua,
+  χ²=2,08, **p=0,149**; vs `eba_grpo_v2c` — 8 thắng/2 thua, χ²=2,50,
+  **p=0,114**. **CHƯA đạt ý nghĩa thống kê ở n=100** (dù xu hướng thắng rõ
+  ~3-4:1) — đọc trung thực: không phải "chưa cải thiện", là "cải thiện có
+  khả năng thật nhưng cỡ mẫu chưa đủ để khẳng định". Cần niêm phong lớn
+  hơn (n≥200) ở lượt sau để phân xử dứt điểm, giống cách đã làm với EBA.
+  Đã sửa `save_ckpt()` gộp upload thành 1 commit/checkpoint (trước là
+  ~8-10 file riêng lẻ → dính rate-limit 60 commit/giờ ở `eba_grpo_v2c`,
+  KHÔNG phải lỗi đăng nhập như nghi ban đầu) — sẵn sàng cho lần train dài.
   Học phí: bug `continue` nhảy qua cả val/checkpoint khi reward đồng nhất
   trong nhóm K (đã vá, commit `5a02e1e`); rate-limit HF 60 commit/giờ khi
   save nhiều file riêng lẻ (CHƯA vá — cần `upload_folder` cho lần train sau).
@@ -220,19 +229,14 @@ Cập nhật: 2026-09-04.
 - **Mở context 27B (2026-08-27, chi tiết STATUS.md)**: gradient checkpointing
   đóng hẳn (OOM do 1 lớp `repeat_kv`); CPU-offload thủ công THẮNG (steady
   12,81GiB, T=8192 OK, T=16384 vẫn OOM) — `load_4bit_cpu_offload_io`.
-- **MAPPER 4B→9B TRAIN THẬT XONG (2026-08-27, max-ctx=16384)**: dừng sớm ở
-  bước 984/2600 — **BFCL 23/25 | needle 29/29 | score 54**, nhỉnh hơn mapper
-  4→27B mà đạt trực tiếp ctx 16384 (27B chỉ tới 4096 trên L4) — xác nhận E7
-  (cặp 4→9 dễ hơn 4→27). Checkpoint + data trên HF `v49/`.
-- **BENCHMARK NGOÀI — baseline 27B THUẦN (2026-08-27)**: BBH 53,8% | GSM8K
-  80% | MuSR 58,1% (756 mẫu: 53,6%). Rác 0,0% cả 3 bộ — mốc đối chứng: khi
-  chạy cross, mọi tỷ lệ rác > 0 đều quy được cho mapper. HF `extbench_self/`.
-- **Nhánh 4→27B ĐÓNG (2026-08-28)**: test nội bộ kỷ lục (bfcl 18/20) nhưng
-  benchmark NGOÀI sụp (BBH 6,0% vs self 53,8%, GSM8K 0% vs 80%). 4B-self
-  gsm8k 81,5% cao hơn 27B → thông tin CÓ trong cache, lỗi ở khâu DỊCH.
-- **Kiến trúc 2 lớp + chuyển sang cặp 4→9 (2026-08-28, user chốt, chi tiết
-  STATUS.md)**: 4→27B nền 2 model 16,16GiB (trống 5,54), gold ≤48 khi ctx≤1024.
-  Cặp **4→9 rộng hơn hẳn**: nền 6,86GiB, ctx16384+gold256 chạy được.
+- **MAPPER 4B→9B TRAIN THẬT XONG (2026-08-27, max-ctx=16384)**: BFCL 23/25 |
+  needle 29/29 | score 54, xác nhận E7 (4→9 dễ hơn 4→27). HF `v49/`.
+  Baseline 27B thuần đối chứng: BBH 53,8%/GSM8K 80%/MuSR 58,1%, rác 0,0%
+  cả 3 bộ (HF `extbench_self/`).
+- **Nhánh 4→27B ĐÓNG (2026-08-28)**: nội bộ kỷ lục (bfcl 18/20) nhưng
+  benchmark NGOÀI sụp (BBH 6,0% vs self 53,8%) — thông tin CÓ trong cache,
+  lỗi ở khâu DỊCH. **Chuyển sang cặp 4→9** (user chốt): nền VRAM rộng hơn
+  hẳn (6,86GiB vs 16,16GiB của 4→27B), ctx16384+gold256 chạy được.
 - **NGÀY 28-29/08 — joint 4→9 + 4 bug harness (chi tiết STATUS.md)**:
   pseudo-gold bằng vLLM offline nhanh **49×**; 4 bug harness làm mọi số trước
   đó sai, nặng nhất là **DỪNG SAI TOKEN KẾT THÚC** (tokenizer khai 248046
@@ -246,14 +250,11 @@ Cập nhật: 2026-09-04.
   mapper luôn tốt hơn bê thẳng cache; LoRA+mapper cộng hưởng chứ không cộng
   dồn; ranh giới truy-hồi/quan-hệ khớp 3 nguồn độc lập. Bỏ chữ "cascade"
   khỏi mọi bảng (user chốt): ghi thẳng thành phần.
-- **CÒN TREO**: `4B 45,3% > 9B 30,6%` trên bbh (cả 2 engine); 9B 0/30 trên
-  4 task bbh cụ thể → nghi 9B sai KHUÔN, chưa xác minh. **vLLM BỎ QUA LoRA**
-  dù log báo có nạp — `+LoRA` phải đo bằng transformers.
+- **CÒN TREO**: `4B 45,3% > 9B 30,6%` trên bbh — nghi 9B sai KHUÔN, chưa
+  xác minh. **vLLM BỎ QUA LoRA** dù log báo có nạp — đo `+LoRA` bằng transformers.
 - **TĂNG TỐC (2026-08-31)**: eval gom lô decode 6,7× (`batch_decode.py`);
-  template-XƯƠNG thay prefill 9B thừa; dùng lại spill 4B giữa các lượt;
-  KHÔNG flash-attention (attention chỉ 0,03% phép tính); `probe_train_batch`
-  batch 2 = 1,85-1,97× bước train thật; mapper vốn chỉ chạy batch 1 — đã sửa
-  (`map_attn`/`map_gdn`), bài kiểm 23/23.
+  KHÔNG flash-attention (attention chỉ 0,03% phép tính); mapper vốn chỉ
+  chạy batch 1 — đã sửa (`map_attn`/`map_gdn`), bài kiểm 23/23.
 - **BUG CHẶN TRAIN đã sửa**: tham số GDN của Mapper không phải tensor LÁ —
   optimizer ném "can't optimize a non-leaf Tensor". Đã thêm bài kiểm.
 - **`e5.patch_recurrent_rebind()`**: GDN 5.15 cập nhật state bằng `.copy_()`
