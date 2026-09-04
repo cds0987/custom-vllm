@@ -28,6 +28,34 @@ Cập nhật: 2026-09-04.
   THẬT gấp đôi C, không phải nhiễu. best vs last: p=0,29 — train quá bước
   ~150 không thêm lợi (val nội bộ dao động 0,73-0,80 suốt 850 bước, bão hoà
   sớm). Checkpoint + kết quả lên HF `eba_grpo_v2c/` + `evalbig/eba_*`.
+
+  **NHƯNG đo trên gsm8k THẬT thì `eba_grpo_v2c` KHÔNG cải thiện** (TRAIN
+  6,7%/NIÊM PHONG 4,0%, kém hơn `joint49bb` 8,0%) — cải tiến trên proxy EBA
+  KHÔNG chuyển giao sang gsm8k thật. → **gộp `eba_grpo.py` thành 1 pipeline
+  chung** (cờ `--task {eba,gsm8k}`, cùng engine RL, đổi nguồn dữ liệu+reward)
+  rồi RL TRỰC TIẾP trên gsm8k thật + ground-truth CoT do 9B tự sinh có sẵn
+  (`pseudo_gold_gsm2.json`, chỉ giữ quỹ đạo 9B làm ĐÚNG — không dạy mapper
+  suy luận sai). Warm-start từ `eba_grpo_v2c/best`. **`gsm_grpo_v1c`, 400
+  bước, K=3, gen_len=200** (đã vá `sample_rollout_batch` dừng sớm cả vòng
+  lặp khi mọi nhánh gặp stop token → nhanh 2,67× — 21,7s→8,1s/bước, AN TOÀN
+  tuyệt đối vì phần bỏ qua vốn bị trim sau đó, không đổi output). Học phí:
+  K=4 OOM ở bước ~10 (VRAM 22,02/22,03GiB) → hạ K=3 (an toàn hơn, không đụng
+  gen_len/gold_cap theo yêu cầu user). VAL nội bộ bão hoà dao động 0,07-0,23
+  (đỉnh bước 300).
+
+  **Đo dứt điểm gsm8k THẬT (`run_gsm_traintest.sh`)**:
+
+  | checkpoint | TRAIN (60) | NIÊM PHONG (100) |
+  |---|---|---|
+  | `joint49bb` (SFT thuần) | 8,3% | 8,0% |
+  | `joint49cc` (SFT thuần) | 13,3% | 4,0% |
+  | `eba_grpo_v2c` (RL trên EBA proxy) | 6,7% | 4,0% |
+  | **`gsm_grpo_v1c` (RL trực tiếp gsm8k)** | **10,0%** | **10,0%** |
+
+  Train≈test (không quá khớp) — cao nhất chiến dịch gsm8k tới nay, vượt cả
+  2 baseline SFT và nhánh RL-proxy. n=100 còn nhỏ (10 vs 8 đúng, chênh 2
+  mẫu) — CHƯA chạy McNemar để phân xử ý nghĩa thống kê, cần làm ở lượt sau
+  trước khi tuyên bố thắng chắc chắn. Checkpoint lên HF `gsm_grpo_v1c/`.
   Học phí: bug `continue` nhảy qua cả val/checkpoint khi reward đồng nhất
   trong nhóm K (đã vá, commit `5a02e1e`); rate-limit HF 60 commit/giờ khi
   save nhiều file riêng lẻ (CHƯA vá — cần `upload_folder` cho lần train sau).
@@ -249,42 +277,15 @@ Cập nhật: 2026-09-04.
   nó — sửa bằng đọc `/proc/*/cmdline` loại trừ pid của mình.
 - **Đợt sửa thang đo (2026-08-31, chi tiết STATUS.md)**: `suite_gen.score`
   ĐÃ VÁ (khớp chuỗi con trên số garble — `test_suite_gen_scoring.py` 15/15).
-  Rà soát phát hiện lỗi lan tới 4 cấu hình cascade cũ, không riêng 49w/49y.
-  Sau vá: `suite_swe` đáp án đầy đủ 49w=49y=3,3% (không cải tiến ở lớp này
-  lúc đó); verb_noun (lớp quan hệ) vẫn +9,7 thật. Bằng chứng cơ chế mạnh
-  nhất: tỷ lệ suy biến toàn bộ 1.650 mẫu giảm đều 23,6%→16,8%→16,1%→8,4%
-  qua từng thành phần LoRA-4B/mapper/LoRA-9B — đo trực tiếp, không qua
-  hàm chấm nào. Báo cáo HTML:
-  https://claude.ai/code/artifact/b20fe8d6-0e21-44d1-afa8-b1622d62385a
+  Bằng chứng cơ chế mạnh nhất: tỷ lệ suy biến toàn bộ 1.650 mẫu giảm đều
+  23,6%→16,8%→16,1%→8,4% qua từng thành phần LoRA-4B/mapper/LoRA-9B. Báo
+  cáo HTML: https://claude.ai/code/artifact/b20fe8d6-0e21-44d1-afa8-b1622d62385a
 
-- **`joint49z` = CHECKPOINT THAM CHIẾU MỚI (thay `joint49y`), 2026-09-01
-  — pseudo-gold CoT thật từ chính 9B (user đề xuất "dùng 9B sinh câu trả lời,
-  train dạng CoT để mapper+LoRA học đúng bước suy luận"):**
-  - Cơ chế: `gen_pseudo_vllm.py` đã sẵn dùng 9B làm giáo viên từ đầu dự án,
-    nhưng ngân sách chỉ 24 token (cắt cụt CoT). Mở lên 200 token cho 4 họ
-    quan hệ (`musr`,`suite_rag/mid/swe`) — hạ tầng train (`--gold-cap 256`)
-    không cần sửa. 9B tự làm đúng: suite_mid 100%, suite_swe 99%, suite_rag
-    97%, musr chỉ 46,4% (khó ngay cả với 9B — giữ gold cũ cho phần sai).
-  - Train tiếp từ `joint49y`, CHỈ đổi `--pseudo-gold` (thí nghiệm một-biến).
-    1000 bước, best đúng ở bước cuối: **val score 103** (bfcl14,needle15,
-    bbh47,suite_swe5/7,musr13/19) — verify-meta khớp, không hồi quy tốc độ
-    (+8% so 49y, VRAM không đổi).
-  - **NIÊM PHONG 1.650 mẫu — kết quả đột phá thật ở lớp đáp án ĐẦY ĐỦ**
-    (không còn chỉ verb_noun xấp xỉ): **`suite_swe` 3,3%→52,8%** (65/123),
-    **`musr` →75,0%** (42/56, dùng scorer đã vá). Đối chứng ctx-BỎ:
-    `suite_swe` sập đúng **0,0%** — sạch. `musr` ctx-BỎ ban đầu đo 25,0%
-    (14/56) — ĐIỀU TRA: cả 14 mẫu "đúng" có VĂN BẢN GIỐNG HỆT NHAU (đoạn
-    rác vô nghĩa về "fascicle"), và đúng bằng số mẫu có đáp án="A" trong
-    tập (14/56) — mô hình sập về MỘT câu cố định chứa "A" ngẫu nhiên khi
-    mất ngữ cảnh, trúng lỗi chấm cũ (bắt chữ A-F đầu tiên). musr ctx-BỎ
-    THẬT = 0/56 — không ăn gian, cả hai bộ đều sạch.
-  - `bbh`/`bfcl` "giữ được" >100% so với self (bbh self 30,3%→mapped 62,8%)
-    — mapped VƯỢT trần self 9B, đáng chú ý nhưng CHƯA điều tra kỹ, có thể
-    liên quan bí ẩn "9B thua 4B" cũ (mapped né được lỗi khuôn của 9B-self?).
-    Cần đọc tay trước khi diễn giải thêm.
-  - Checkpoint đã lưu HF `joint49z/`. Bước kế đã duyệt: thêm `gsm8k` (tập
-    con nhỏ trước, KHÔNG đổ hết 3.000 mẫu — sẽ làm chậm train và loãng tín
-    hiệu musr/suite_swe) vào lượt tiếp theo, ấm từ `joint49z`.
+- **`joint49z` (2026-09-01, checkpoint tham chiếu thời điểm đó, nay đã bị
+  `joint49bb`→`joint49cc`→`eba_grpo_v2c`→`gsm_grpo_v1c` thay thế nhiều lớp)**:
+  pseudo-gold CoT thật từ chính 9B (user đề xuất) — niêm phong 1.650 mẫu:
+  `suite_swe` 3,3%→52,8%, `musr`→75,0%, ctx-BỎ sạch cả hai. Chi tiết đầy
+  đủ (bug musr ctx-BỎ ban đầu, bbh vượt trần self): `STATUS.md`.
 
 ## Hàng đợi (đã duyệt 2026-08-14)
 1. ✅ Spec decoding + ✅ util sweep (mặc định 0.97, đỉnh 12 phiên) — đóng bằng số đo.

@@ -2929,3 +2929,33 @@ lúc chạy `eba_grpo_v2c` (log "HF-UP FAIL...429 Too Many Requests") — KHÔNG
 phải lỗi đăng nhập/xác thực (cùng token đã upload thành công hàng chục lần
 trong đúng phiên đó trước khi dính limit). Đã chẩn đoán, CHƯA vá: cần
 chuyển sang `upload_folder` (1 commit/lần lưu) trước lần train tiếp theo.
+
+### joint49z — chi tiet day du (2026-09-01, sieu boi joint49bb/joint49cc, giu de tham chieu)
+Checkpoint tham chieu MOI thay joint49y luc do — pseudo-gold CoT that tu
+chinh 9B (user de xuat "dung 9B sinh cau tra loi, train dang CoT de
+mapper+LoRA hoc dung buoc suy luan"):
+- Co che: gen_pseudo_vllm.py da san dung 9B lam giao vien tu dau du an,
+  nhung ngan sach chi 24 token (cat cut CoT). Mo len 200 token cho 4 ho
+  quan he (musr, suite_rag/mid/swe) -- ha tang train (--gold-cap 256)
+  khong can sua. 9B tu lam dung: suite_mid 100%, suite_swe 99%, suite_rag
+  97%, musr chi 46,4% (kho ngay ca voi 9B -- giu gold cu cho phan sai).
+- Train tiep tu joint49y, CHI doi --pseudo-gold (thi nghiem mot-bien).
+  1000 buoc, best dung o buoc cuoi: val score 103 (bfcl14,needle15,
+  bbh47,suite_swe5/7,musr13/19) -- verify-meta khop, khong hoi quy toc do
+  (+8% so 49y, VRAM khong doi).
+- NIEM PHONG 1.650 mau -- ket qua dot pha that o lop dap an DAY DU (khong
+  con chi verb_noun xap xi): suite_swe 3,3%->52,8% (65/123), musr ->75,0%
+  (42/56, dung scorer da va). Doi chung ctx-BO: suite_swe sap dung 0,0% --
+  sach. musr ctx-BO ban dau do 25,0% (14/56) -- DIEU TRA: ca 14 mau "dung"
+  co VAN BAN GIONG HET NHAU (doan rac vo nghia ve "fascicle"), va dung
+  bang so mau co dap an="A" trong tap (14/56) -- mo hinh sap ve MOT cau
+  co dinh chua "A" ngau nhien khi mat ngu canh, trung loi cham cu (bat
+  chu A-F dau tien). musr ctx-BO THAT = 0/56 -- khong an gian, ca hai bo
+  deu sach.
+- bbh/bfcl "giu duoc" >100% so voi self (bbh self 30,3%->mapped 62,8%) --
+  mapped VUOT tran self 9B, dang chu y nhung CHUA dieu tra ky, co the lien
+  quan bi an "9B thua 4B" cu (mapped ne duoc loi khuon cua 9B-self?). Can
+  doc tay truoc khi dien giai them.
+- Checkpoint da luu HF joint49z/. Buoc ke da duyet: them gsm8k vao luot
+  tiep theo, am tu joint49z -- dan toi joint49aa/joint49bb/joint49cc va
+  cuoi cung la eba_grpo/gsm_grpo cua chien dich RL (xem TRANG-THAI.md).
