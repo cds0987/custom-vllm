@@ -168,16 +168,25 @@ def main():
     import copy as _copy
 
     def meta_for(t, b):
+        """t = do dai ngu canh, b = KICH THUOC LO.
+
+        BUG DA SUA (2026-09-05, bat khi do batch B=2): ban dau chi va chieu
+        batch cho lop ATTENTION (k/v) ma bo sot lop GDN (rec/conv) -> template
+        giu conv_states o batch 1, trong khi dau vao batch 2 ->
+        'Sizes of tensors must match except in dimension 2. Expected size 1 but
+        got size 2'. build_student_past thay recurrent_states bang dau ra
+        mapper (dung batch) nhung conv_states lay zeros_like TU TEMPLATE, nen
+        template sai batch la hong."""
         m = _copy.deepcopy(base_meta)
         m["cache_ints"] = {k: (t if v == T_BASE else v)
                            for k, v in m["cache_ints"].items()}
         for lay in m["layers"]:
             lay["ints"] = {k: (t if v == T_BASE else v) for k, v in lay["ints"].items()}
-            if lay["kind"] == "a":
-                for key in ("k", "v"):
-                    sh, dt = lay[key]
-                    sh = tuple(t if d == T_BASE else d for d in sh)
-                    lay[key] = ((b,) + sh[1:], dt)
+            keys = ("k", "v") if lay["kind"] == "a" else ("rec", "conv")
+            for key in keys:
+                sh, dt = lay[key]
+                sh = tuple(t if d == T_BASE else d for d in sh)
+                lay[key] = ((b,) + sh[1:], dt)   # chieu 0 = batch, ca a lan g
         return m
 
     def prefill_tbptt(ids, wnd):
