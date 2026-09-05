@@ -3,9 +3,58 @@
 File này được CLAUDE.md nạp tự động đầu mỗi phiên. Claude TỰ ĐỘNG cập nhật khi
 trạng thái đổi — không hỏi user. Giới hạn cứng ≤300 dòng; chi tiết dồn `STATUS.md`.
 
-Cập nhật: 2026-09-04.
+Cập nhật: 2026-09-05.
 
 ## Trạng thái hiện tại
+
+- **⚡ TĂNG TỐC RL 2,25× — "lấy tốc độ vLLM ngay trong process" (2026-09-05,
+  user hỏi vì sao không dùng vLLM offline cho GRPO như Unsloth)**.
+  vLLM không cắm thẳng được: rollout phải bắt đầu từ **cache do mapper sinh**
+  (vLLM không nhận cache ngoài qua API thường — Phase C phải vá KVConnector)
+  và **LoRA-9B đổi mỗi bước** (on-policy), lại không còn VRAM cho engine thứ
+  hai. Nhưng tốc độ vLLM đến từ 3 nguồn tách rời được, `probe_decode_speed.py`
+  đo từng nguồn (9B bnb-4bit, decode 64 token):
+
+  | k (hàng decode) | 2 | 4 | 8 | 16 |
+  |---|---|---|---|---|
+  | ms/bước decode | 95,7 | 94,4 | 95,2 | 100,1 |
+  | tok/s tổng | 20,9 | 42,4 | 84,1 | **159,8** |
+
+  **Thời gian mỗi bước decode gần như KHÔNG đổi từ 2 đến 16 hàng** (decode ở
+  batch nhỏ bị chặn bởi băng thông đọc TRỌNG SỐ) → đây chính là
+  continuous-batching của vLLM, lấy được nguyên vẹn mà không cần vLLM.
+  Kernel Marlin W4A16 qua transformers = **ngõ cụt** (nó giải nén ngược về
+  bf16, không vừa L4 cạnh 4B; champion còn lỗi metadata `group_size=0`).
+  Đồng bộ GPU→CPU mỗi token mất 9-10% → gom còn 1 lần/16 token.
+
+  **Kiến trúc mới (`--bsz`)**: mỗi bước xử lý B mẫu × K nhánh. Lô chỉ gồm mẫu
+  **cùng độ dài prompt CHÍNH XÁC** (không đệm — đệm phá attention 96%, GDN
+  nặng hơn); đo trên pool thật (2073 mẫu, 41-201 token): B=4 phủ 91,8%, phần
+  lẻ chạy lô nhỏ hơn nên không bỏ mẫu nào. Advantage vẫn chuẩn hoá RIÊNG
+  trong nhóm K của TỪNG mẫu. `test_grpo_batch.py` 7/7.
+
+  **Đoán sai 2 lần về chỗ OOM (đoán logits → đoán GDN forward), phải đo mới
+  ra**: đỉnh VRAM nằm ở **backward của pha teacher-force**, không ở sampling
+  (pha 1 đỉnh 16,4 GiB / pha 2 đỉnh 20,35 GiB trên 22,03). → pha 1 gộp rộng
+  (`@no_grad`, không lưu gì), pha 2 chia miếng `--tf-chunk` hàng một, lan
+  ngược ngay và cộng dồn gradient (tổng loss đồng nhất). Đo dứt điểm:
+
+  | cấu hình | s/bước | **s/mẫu** | đỉnh VRAM |
+  |---|---|---|---|
+  | bsz=1 k=2 (cũ) | 20,5 | 20,5 | 16,2 GiB |
+  | bsz=2 k=2 tf=1 | 28,5 | 14,2 | 17,7 GiB |
+  | **bsz=4 k=2 tf=1** | 36,5 | **9,1** | 20,4 GiB |
+  | bsz=4 k=2 tf=2 | — | — | **44/48 miếng OOM** |
+
+  → chốt **bsz=4, k=2, tf-chunk=1** (= phương án A; (C) k=3 bị bác vì pha 2
+  KHÔNG rẻ theo hàng như pha 1, k=3 làm chậm ~20%/mẫu). 1 epoch = **508 bước
+  ≈ 5,1 giờ** thay vì 10,7 giờ. Đang chạy `gsm_struct_rl_v2`.
+  **Bẫy đã chặn**: lưới an toàn bỏ-qua-miếng-khi-OOM cứu khỏi crash nhưng
+  ở tf=2 làm 44/48 miếng bị bỏ → lượt train "chạy xong" mà gần như không có
+  gradient (log đẹp, kết quả rỗng). Đã thêm chốt: **dừng hẳn nếu >20% miếng
+  OOM trong 20 bước đầu**. Sửa kèm: `--gsm-limit 0` (runner thiếu → pool bị
+  cắt 2157→1200), `log_softmax(dtype=fp32)` thay `.float()` (bit-identical,
+  bỏ 1 bản sao 222MB/hàng).
 
 - **🎯 EBA + GRPO — RL CÓ CẢI TIẾN THẬT, XÁC NHẬN THỐNG KÊ (2026-09-04)**:
   hướng do user đề xuất — sinh dữ liệu tổng hợp Entity-Binding-Arithmetic
@@ -99,90 +148,41 @@ Cập nhật: 2026-09-04.
   con số** ("Kylie dùng 3 khăn" → sinh "6 khăn"). Chữ nghĩa truyền qua cache
   tốt, **liên kết số-với-thực-thể thì không** — giới hạn cơ chế mapper.
 
-  **PROBE TRÍCH-XUẤT-SỐ (2026-09-02)** — bắt 9B chỉ NHẮC LẠI một con số có sẵn
-  trong đề, không tính toán (`run_49bb_probe_so.sh`, 40 bài × 2 biến thể):
+  **PROBE TRÍCH-XUẤT-SỐ (2026-09-02, chi tiết `STATUS.md`)** — bắt 9B chỉ
+  NHẮC LẠI một con số có sẵn trong đề: nhắc số ĐẦU 50,0% đúng / 80,0% có mặt;
+  nhắc số CUỐI 15,0% / 27,5%. **Cả hai đều THẤP → thông tin số KHÔNG tới được
+  9B nguyên vẹn**; bậc theo độ sâu rõ (đầu đề còn, cuối mất). Đối chiếu
+  `needle` 99,2% → vấn đề là MẬT ĐỘ chi tiết số, không phải truy hồi.
 
-  | biến thể | số đầu model sinh | có mặt trong đầu ra |
-  |---|---|---|
-  | nhắc số ĐẦU của đề | 50,0% | 80,0% |
-  | nhắc số CUỐI của đề | 15,0% | 27,5% |
+- **`joint49cc` (mapper `--gdn-terms` 1→4) — TRAIN + ĐO XONG (2026-09-02),
+  chi tiết đầy đủ ở `STATUS.md`**. `suite_swe` 600 mẫu: 49cc **81,0%** vs
+  49bb 78,2% → McNemar p≈0,156, **chưa phân biệt được với nhiễu**. `gsm8k`:
+  train 13,3% / niêm phong 4,0% (49bb: 8,3/8,0) → **quá khớp nhẹ mới xuất
+  hiện** khi mở dung lượng → **dung lượng GDN KHÔNG phải nút thắt gsm8k**.
+  ⚠️ Số 81,7/78,2/16,7/5,0 báo cáo lần đầu là SAI do bug kép (eval_big không
+  đọc `gdn_terms` từ `_meta` → âm thầm cắt về 1; resume tải lại kết quả sai
+  từ HF). Đã có `test_eval_big.py` chống tái phát.
+  **Bài học mẫu-nhỏ (lặp lại)**: không kết luận từ val 8-16 mẫu.
 
-  **Cả hai đều THẤP → thông tin số KHÔNG tới được 9B nguyên vẹn** → loại
-  `--w-entity`, đòn bẩy tưởng đúng lúc đó là `--gdn-terms`. Bậc theo độ sâu
-  rõ (80%→27,5%): đầu đề còn, cuối mất. Đối chiếu `needle` 99,2% → vấn đề là
-  MẬT ĐỘ chi tiết số, không phải truy hồi. (Kết luận "gdn-terms là đòn bẩy
-  đúng" SAU ĐÓ bị chính oracle ablation bác — xem mục dưới.)
+- **ORACLE ABLATION (2026-09-02, `oracle_ablation.py`)** — hoán đổi attn/GDN
+  mapped bằng cache 9B THẬT, n=30 gsm8k: self **86,7%** (trần) | mapped 0,0%
+  | attn-thật+GDN-mapper **26,7%** | attn-mapper+GDN-thật 3,3%. **NGƯỢC giả
+  thuyết "GDN là nút thắt duy nhất"**. Đọc tay: hàng cuối sinh RÁC/SUY BIẾN
+  hoàn toàn, hàng ba sinh văn mạch lạc chỉ sai số liệu → hai nửa cache cần
+  NHẤT QUÁN với nhau; attn mapped cũng đóng góp lỗi.
 
-- **`joint49cc` (mapper `--gdn-terms` 1→4, GDN 0,8M→3,2M) — TRAIN + ĐO XONG
-  (2026-09-02)**. Một-biến từ `joint49bb`. Val best score 8 ở bước 1000
-  (`suite_swe` 7/8, `gsm8k` 1/16); val leo đều 5→6→6→7/8.
-
-  **⚠️ BUG KÉP đã vá — số 81,7%/78,2%/16,7%/5,0% từng báo cáo là SAI**:
-  (1) `eval_big.py` dựng mapper chấm điểm KHÔNG đọc `gdn_terms` từ `_meta`
-  checkpoint → mặc định về 1 → nạp checkpoint `terms=4` bị **âm thầm cắt cụt**
-  về 1 số hạng, không lỗi không cảnh báo. (2) cơ chế "nối lại" (resume) của
-  `eval_big.py` tải nhầm kết quả ĐÃ SAI đó từ HF khi chạy lại lần đầu — tưởng
-  đã sửa nhưng vẫn đọc cache cũ. Phải xoá cả file HF lẫn local rồi chạy lại
-  LẦN 2 mới ra số đúng (xác nhận bằng log `gdn_terms=4` + "HF chưa có kết quả
-  dở dang" ở mọi lượt). Đã thêm `test_eval_big.py` chống tái phát lỗi (1).
-
-  **Số ĐÚNG — đo trên bộ `suite_swe` MỚI 600 mẫu** (`run_swe_big.sh`, seed
-  90210 khác bộ niêm phong 31337, kiểm rò rỉ 0/600):
-
-  | checkpoint | n | suite_swe |
-  |---|---|---|
-  | `joint49cc` (terms 4, ĐÚNG) | 600 | **81,0%** |
-  | `joint49bb` (terms 1) | 600 | 78,2% |
-  | `joint49cc` ctx-BỎ | 600 | **0,0%** (sạch) |
-
-  So cặp: 49cc đúng/49bb sai=72, ngược lại=55 → McNemar χ²=2,02, **p≈0,156**
-  — CÀNG không đạt ý nghĩa thống kê so với lần đo sai trước (p=0,076). Kết
-  luận giữ nguyên: **chênh lệch chưa phân biệt được với nhiễu**. 21,2% mẫu
-  đảo kết quả giữa hai checkpoint.
-
-  **`gsm8k` — số ĐÚNG**: TRAIN 8/60=13,3% | NIÊM PHONG 4/100=4,0% (so
-  `joint49bb`: train 8,3%/niêm phong 8,0%, gần bằng nhau). Chênh train>test
-  của `joint49cc` (13,3 vs 4,0) LỚN hơn `joint49bb` — dấu hiệu **quá khớp
-  nhẹ mới xuất hiện** khi mở dung lượng, dù cả hai vẫn rất thấp so với trần
-  89,0%. → **dung lượng GDN KHÔNG phải nút thắt của gsm8k**, và mở thêm còn
-  có nguy cơ phản tác dụng (quá khớp) chứ không giúp gì.
-  **Bài học mẫu-nhỏ (lặp lại)**: val 8 mẫu báo 7/8 vs 4-5/8 nhưng 600 mẫu +
-  McNemar cho thấy chênh không chắc chắn — không kết luận từ val 8-16 mẫu.
-
-- **ORACLE ABLATION (2026-09-02, `oracle_ablation.py`, đề xuất user)** — hoán
-  đổi trực tiếp attn/GDN mapped bằng cache 9B THẬT, n=30 gsm8k, không train:
-  self **86,7%** (trần) | mapped 0,0% | attn-thật+GDN-mapper **26,7%** |
-  attn-mapper+GDN-thật 3,3%. **NGƯỢC giả thuyết "GDN là nút thắt duy nhất"**
-  (đúng ra hàng cuối phải gần trần). Đọc tay quyết định: hàng cuối sinh RÁC/
-  SUY BIẾN HOÀN TOÀN (không phải sai số thường), hàng ba sinh văn mạch lạc
-  chỉ sai số liệu. → cắm GDN thật cạnh attn mapped làm 9B suy biến thay vì
-  được cứu — hai nửa cache cần NHẤT QUÁN với nhau; attn mapped (dù CCA E7
-  cao) cũng đóng góp lỗi, không "đã tốt sẵn" như giả định cũ. Lên HF
-  `evalbig/oracle_ablation.json`.
-
-- **BRIDGE ORACLE (2026-09-02, `bridge_oracle.py`, giai đoạn 3 đề xuất user)
-  — XÁC NHẬN TÍCH CỰC, n=30 gsm8k.** Giữ nguyên cache mapped cho toàn ngữ
-  cảnh, CHÈN THÊM một đoạn prefill THẬT (không qua mapper) ngay trước sinh:
-
-  | biến thể | tỷ lệ | độ dài bridge |
-  |---|---|---|
-  | mapped (không bridge) | 0,0% | — |
-  | bridge_full (nguyên đề bài) | **23,3%** | 67 token |
-  | bridge_nums (chỉ câu có số) | **16,7%** | 51 token |
-
-  Đọc tay xác nhận đúng cơ chế: bridge sửa được CHÍNH LOẠI LỖI đã chẩn đoán —
-  mapped bịa "20% raise" (đề thật 5%) → bridge dùng đúng 5%; mapped bịa điểm
-  số "78" → bridge dùng đúng "100"; mapped bỏ hệ số "5 liters/pail" → bridge
-  tính đúng "5×5=25". Phần còn sai chủ yếu là LỖI SUY LUẬN NHIỀU BƯỚC BÌNH
-  THƯỜNG, không còn "bịa số từ hư không". → bản tóm tắt NGẮN (51 token) gần
-  bằng bản đầy đủ (67 token). Lên HF `evalbig/bridge_full30.json`.
+- **BRIDGE ORACLE (2026-09-02, `bridge_oracle.py`, chi tiết `STATUS.md`) —
+  XÁC NHẬN TÍCH CỰC, n=30 gsm8k.** Giữ cache mapped cho toàn ngữ cảnh, CHÈN
+  THÊM một đoạn prefill THẬT ngay trước sinh: mapped 0,0% → bridge_full
+  **23,3%** (67 token) / bridge_nums **16,7%** (51 token). Đọc tay xác nhận
+  đúng cơ chế: bridge sửa CHÍNH loại lỗi đã chẩn đoán (mapped bịa "20% raise"
+  khi đề thật 5%); phần còn sai là lỗi suy luận nhiều bước bình thường, không
+  còn "bịa số từ hư không". Bản tóm tắt NGẮN gần bằng bản đầy đủ.
 
 - **PIPELINE THẬT bridge tokens (2026-09-02, `real_bridge_4b.py`)** — 4B tự
   sinh bridge (không oracle), n=30 gsm8k: mapped 0,0% → bridge_4b **13,3%**
-  (thấp hơn oracle 23,3%, do 4B đôi khi tự giải sai/dùng ký hiệu ẩn danh).
-  Cơ chế hoạt động thật nhưng cần tinh chỉnh trước khi coi là giải pháp sản
-  phẩm — **user sau đó chuyển ưu tiên sang synthetic-data+GRPO** (xem mục
-  EBA+GRPO đầu file). Chi tiết đầy đủ + bài học vận hành batch: `STATUS.md`.
+  (thấp hơn oracle 23,3% do 4B đôi khi tự giải sai). Cơ chế hoạt động thật
+  nhưng **user sau đó chuyển ưu tiên sang synthetic-data+GRPO**.
 
 - **Báo cáo toàn cục "Prefill bằng model nhỏ" (quy tắc 6c)**:
   https://claude.ai/code/artifact/8e4cccf6-b447-4439-97c2-14e7ca9ffee1

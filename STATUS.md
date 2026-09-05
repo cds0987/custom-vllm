@@ -2959,3 +2959,93 @@ mapper+LoRA hoc dung buoc suy luan"):
 - Checkpoint da luu HF joint49z/. Buoc ke da duyet: them gsm8k vao luot
   tiep theo, am tu joint49z -- dan toi joint49aa/joint49bb/joint49cc va
   cuoi cung la eba_grpo/gsm_grpo cua chien dich RL (xem TRANG-THAI.md).
+
+## 2026-09-05 — TANG TOC RL: "lay toc do vLLM ngay trong process" (2,25x)
+
+Cau hoi user: "trong unsloth ho co vllm cho grpo do, vi sao ta ko dung vllm
+offline de speedup" -> roi "b, tim cach lay duoc toc do cua vllm luon".
+
+### Vi sao vLLM khong cam thang vao duoc
+1. Rollout KHONG bat dau tu prompt van ban ma tu **cache do mapper sinh**.
+   vLLM khong nhan cache ngoai qua API thuong (Phase C da phai va KVConnector/
+   lmcache moi tiem duoc, va do la cache TINH cho phuc vu).
+2. GRPO la **on-policy**: LoRA-9B doi sau MOI lan cap nhat -> vLLM phai nap
+   lai adapter + nhan cache moi moi buoc, an het phan tiet kiem.
+3. Khong con VRAM cho engine thu hai (dang 20,6/22,03 GiB voi 4B+9B+mapper).
+   Unsloth ne duoc vi ho co MOT model va chia se trong so trong mot process.
+
+### Tach 3 nguon toc do cua vLLM va do rieng (probe_decode_speed.py)
+9B bnb-4bit, prompt 256 token, decode 64 token:
+
+    k= 2 -> 95,7 ms/buoc |  20,9 tok/s | peak  7,49 GiB
+    k= 4 -> 94,4 ms/buoc |  42,4 tok/s | peak  7,86 GiB
+    k= 8 -> 95,2 ms/buoc |  84,1 tok/s | peak  8,59 GiB
+    k=16 -> 100,1 ms/buoc | 159,8 tok/s | peak 10,07 GiB
+
+- **BATCH (lay duoc)**: ms/buoc gan nhu khong doi tu 2 den 16 hang, thong
+  luong x7,7. Decode o batch nho bi chan boi bang thong doc TRONG SO, khong
+  phai phep tinh -> GPU gan nhu khong tai o k=2. Day chinh la continuous
+  batching cua vLLM, lay duoc nguyen ven trong process.
+- **KERNEL Marlin (NGO CUT)**: transformers khong co duong Marlin -- no goi
+  compressor.decompress_module de GIAI NEN NGUOC ve bf16 (9B bf16 ~18GB,
+  khong vua L4 canh 4B), va con chet o metadata champion (group_size=0).
+- **DONG BO moi token (lay duoc)**: sync=1 (int(inp[i,0]) tung hang tung
+  token, dung nhu code cu) 95,7 ms vs sync=0 86,1 ms -> mat 9-10%. Thay bang
+  kiem stop tren GPU moi 16 token.
+- backward+LoRA tren bnb: 32/64 tham so co grad, lop thap nhat co grad = 3
+  (Qwen3.5 xen ke, lop 0-2 la GDN khong co q/k/v/o) -- dung ky vong.
+
+### Kien truc gop lo (eba_grpo.py --bsz)
+- make_buckets: lo chi gom mau **cung do dai prompt CHINH XAC** (khong dem;
+  dem pha attention 96% va GDN nang hon). Pool that 2073 mau, 41-201 token,
+  113 do dai: B=2 phu 97,1% / B=4 91,8% / B=8 84,5%; phan le chay lo nho hon
+  nen KHONG bo mau nao.
+- Hang r <-> mau r % B, nhanh r // B (.repeat lap ca khoi B).
+- Advantage chuan hoa RIENG trong nhom K cua tung mau; mau co reward dong
+  nhat nhan adv=0 thay vi bo ca lo.
+- loss chia cho K, cong don qua mau = ngu nghia accum=B (giu do lon gradient
+  moi mau nhu B=1). B=4 -> ~500 lan cap nhat/epoch (hoc phi sft_struct:
+  accum=16 chi 132 lan -> chi hoc duoc <think>; accum=4 527 lan -> hoc du).
+- test_grpo_batch.py 7/7 (bao gom ca ca "khong duoc tron reward giua cac mau").
+
+### DOAN SAI 2 LAN VE CHO OOM -- phai do moi ra (quy tac 5)
+Doan 1 "logits fp32 cua teacher-force" -> sai. Doan 2 "GDN forward" -> sai.
+Do that (in bo nho tung pha o che do sanity):
+
+    student_past_grad : m0 10,40 -> dinh 16,09 -> giu 15,83 GiB  (B=4)
+    sampling (pha 1)  : 15,83 -> dinh 16,39 -> 15,83
+    teacher_force+bwd : 15,72 -> **dinh 20,35** -> 10,60
+
+Dinh nam o **backward cua pha teacher-force**, khong o sampling. => pha 1
+(@no_grad, khong luu gi) gop RONG bsz*k hang; pha 2 chia MIENG --tf-chunk
+hang mot, lan nguoc ngay va cong don gradient (tong loss dong nhat:
+sum_mieng[-(adv*lp).sum()/K] == -(adv*lp).sum()/K). clone_cache_index()
+lay tap con hang bang index_select (kha vi, giu graph).
+Bo nho nghi: resting tang ~1,38 GiB moi mau them (graph st0 = mapper + 4B).
+
+### Do dut diem (SANITY 12-25 buoc, gen_len=224)
+
+    bsz=1 k=2 tf=2 (cu) : 20,5 s/buoc = 20,5 s/mau | dinh 16,2 GiB
+    bsz=2 k=2 tf=1      : 28,5 s/buoc = 14,2 s/mau | dinh 17,7 GiB
+    bsz=4 k=2 tf=1      : 36,5 s/buoc =  9,1 s/mau | dinh 20,4 GiB
+    bsz=4 k=2 tf=2      : 44/48 mieng OOM
+
+Ty trong o bsz=4 tf=1: sampling 59% / teacher_force+backward 39% / khac 2%.
+=> CHOT bsz=4 k=2 tf-chunk=1. 1 epoch = 508 buoc ~ 5,1 gio (truoc 10,7 gio).
+Phuong an (C) k=3 BI BAC bang so: pha 2 KHONG re theo hang nhu pha 1 (moi
+mieng 1 hang), nen k=3 lam cham them ~20%/mau.
+
+### BAY: luoi an toan co the giet luot train trong im lang
+Them try/except OutOfMemoryError quanh moi mieng pha 2 (bo qua mieng thay vi
+giet ca luot 500 buoc). O bsz=4 tf=2 no lam dung viec cua no -- KHONG crash --
+nhung 44/48 mieng bi bo -> luot train "chay xong", log dep, s/buoc dep, ma
+gan nhu KHONG CO GRADIENT nao. Da them CHOT CHAN: dung han (in
+EBA_GRPO_OOM_QUA_NHIEU) neu >20% mieng OOM trong 20 buoc dau.
+
+### Hai bug phu bat duoc trong lot nay
+- run_gsm_struct_rl.sh thieu `--gsm-limit 0` -> pool bi cat 2157 -> 1200 mau
+  (mac dinh --gsm-limit=1200). Cac lan chay truoc qua shell nay deu chi dung
+  1200 mau, khong phai 2157.
+- log_softmax(x.float()) tao THEM mot ban sao fp32 (222 MB/hang o gmax=224)
+  chi de vut di. Doi sang log_softmax(x, dtype=torch.float32): ket qua
+  bit-identical (da kiem), bo han ban sao do.
