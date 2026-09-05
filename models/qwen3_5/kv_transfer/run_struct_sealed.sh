@@ -28,6 +28,11 @@ export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:T
 N_SEAL="${N_SEAL:-250}"
 DB="${DB:-8}"                 # so hang gom lo khi decode
 VB="${VB:-24}"                # so mau cong kiem batch1 vs batchB
+# Hau to prefix. BAT BUOC doi khi doi che do decode: eval_big "noi lai" bang
+# cach TAI KET QUA CU TU HF theo prefix -- doi DB ma giu nguyen prefix thi no
+# lang le dung lai so cu (dung bay da dinh o joint49cc: resume keo ve ket qua
+# SAI tu HF, phai xoa ca HF lan local moi ra so dung).
+SUF="${SUF:-}"
 # "thu_muc:tag" -- tag chon mapper_<tag>.pt / lora_<tag> / lorat_<tag>
 CKS="${CKS:-sft_struct_v3:best gsm_struct_rl_v2:best gsm_struct_rl_v2:last}"
 
@@ -91,7 +96,7 @@ for spec in $CKS; do
   LORA=""
   [ -d "$D/lora_$tag" ]  && LORA="--lora $D/lora_$tag"
   [ -d "$D/lorat_$tag" ] && LORA="$LORA --lora-t $D/lorat_$tag"
-  PFX="sealed_${name}_${tag}"
+  PFX="sealed_${name}_${tag}${SUF}"
   echo "--- $spec (prefix $PFX) ---"
   EVALBIG_ITEMS=/content/gsm_sealed.json python3 -u eval_big.py mapped \
     --tgt-model Qwen/Qwen3.5-9B --max-len 6144 \
@@ -104,8 +109,8 @@ for spec in $CKS; do
 done
 
 echo "=== [4/4] doc tay 8 mau + McNemar tung cap ==="
-python3 - $CKS <<'PYEOF'
-import glob, itertools, json, pathlib, importlib.util
+SUF="$SUF" python3 - $CKS <<'PYEOF'
+import glob, itertools, os, json, pathlib, importlib.util
 spec = importlib.util.spec_from_file_location("mcnemar", "mcnemar.py")
 mc = importlib.util.module_from_spec(spec); spec.loader.exec_module(mc)
 import sys
@@ -113,10 +118,11 @@ cks = sys.argv[1:]
 
 def tim(name, tag):
     # eval_big ghi ra /content/logs/<hf_prefix>_mapped.json
-    p = pathlib.Path(f"/content/logs/sealed_{name}_{tag}_mapped.json")
+    suf = os.environ.get("SUF", "")
+    p = pathlib.Path(f"/content/logs/sealed_{name}_{tag}{suf}_mapped.json")
     if p.exists():
         return str(p)
-    g = sorted(glob.glob(f"/content/logs/sealed_{name}_{tag}*.json"))
+    g = sorted(glob.glob(f"/content/logs/sealed_{name}_{tag}{suf}*.json"))
     return g[-1] if g else None
 
 files = {}
@@ -143,6 +149,22 @@ if files:
         print(f"\n--- {k} | diem={v['hit'] if isinstance(v,dict) else v} "
               f"| dap an dung={seal.get(k,{}).get('expect')}")
         print(repr(txt))
+
+print("\n===== NHANH CHAM DIEM (bao nhieu diem den tu nhanh du phong?) =====")
+for s, f in files.items():
+    d = json.loads(pathlib.Path(f).read_text())
+    d = d.get("items", d)
+    dem = {}
+    for v in d.values():
+        if isinstance(v, dict) and v.get("hit"):
+            dem[v.get("how", "?")] = dem.get(v.get("how", "?"), 0) + 1
+    tong = sum(dem.values())
+    print(f"{s}: {tong} diem | " + " ".join(f"{k}={n}" for k, n in sorted(dem.items())))
+    if dem.get("so_cuoi", 0) > 0.25 * max(tong, 1):
+        print("  CANH BAO: >25% diem den tu nhanh 'so_cuoi' (dau ra co the bi "
+              "CAT truoc khi viet Final Answer) -- doc tay truoc khi tin.")
+    if dem.get("?", 0):
+        print("  (ket qua cu chua ghi 'how' -- chay lai moi co)")
 
 print("\n===== McNEMAR TUNG CAP =====")
 for a, b in itertools.combinations(files, 2):
