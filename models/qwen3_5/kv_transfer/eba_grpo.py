@@ -409,6 +409,11 @@ def main():
     ap.add_argument("--out", default="/content/eba_grpo_v1")
     ap.add_argument("--hf-repo", default="gunnybd01/qwen35-kv-mapper-4b-27b")
     ap.add_argument("--hf-prefix", default="eba_grpo_v1")
+    ap.add_argument("--mapper-ckpt", type=int, default=1,
+                    help="1 = tinh lai map_attn trong backward thay vi giu "
+                         "activation fp32 (~0,5GB/1K ctx). Can cho task "
+                         "gsm8k_struct: gen_len 320 (dai hon 200 cua vong "
+                         "truoc) lam K=3 OOM neu khong bat.")
     ap.add_argument("--sanity", type=int, default=0,
                     help="chay N buoc roi dung + in VRAM/toc do, khong val "
                          "khong luu ckpt -- dung TRUOC khi cam ket --steps day")
@@ -528,7 +533,8 @@ def main():
     else:
         print(f"CANH BAO: khong thay {args.init_mapper} -- mapper train tu "
               f"0, VI PHAM dieu kien 'SFT truoc RL'", flush=True)
-    print(f"nap xong {time.time()-t0:.0f}s", flush=True)
+    mapper.ckpt = bool(args.mapper_ckpt)
+    print(f"nap xong {time.time()-t0:.0f}s | mapper.ckpt={mapper.ckpt}", flush=True)
 
     STOPS = e5.stop_ids(tok_t, model_t)
 
