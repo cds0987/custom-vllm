@@ -40,6 +40,27 @@ for pkg in peft bitsandbytes datasets; do
   python3 -c "import $pkg" 2>/dev/null || pip install -q "$pkg" 2>&1 | tail -1
 done
 
+echo "=== [0/4] keo du lieu tap train (de KIEM RO RI) ==="
+# BAT BUOC co file nay. Truoc day kiem ro ri chi chay "neu file ton tai" ->
+# sau mot lan runtime recycle (mat /content) no se AM THAM BO QUA va van in
+# ket qua nhu binh thuong. Kiem ro ri bi bo qua trong im lang la kieu hong
+# te nhat: bao cao van dep, so van sai.
+python3 - <<'PYEOF'
+import os, pathlib
+from huggingface_hub import hf_hub_download
+d = pathlib.Path("/content/train_items.json")
+if d.exists():
+    print("da co", d)
+else:
+    p = hf_hub_download("gunnybd01/qwen35-kv-mapper-4b-27b",
+                        "joint_v1/train_items.json",
+                        token=os.environ.get("HF_TOKEN"))
+    d.write_bytes(pathlib.Path(p).read_bytes())
+    print("KEO VE", d)
+PYEOF
+[ -f /content/train_items.json ] || {
+  echo "KHONG CO train_items.json -> khong kiem ro ri duoc -> DUNG"; exit 1; }
+
 echo "=== [1/4] dung tap niem phong $N_SEAL mau (gsm8k split test) ==="
 python3 - "$N_SEAL" <<'PYEOF'
 import importlib.util, json, pathlib, sys
@@ -48,21 +69,26 @@ eb = importlib.util.module_from_spec(spec); spec.loader.exec_module(eb)
 n = int(sys.argv[1])
 out = pathlib.Path("/content/gsm_sealed.json")
 if out.exists() and len(json.loads(out.read_text())) == n:
-    print("da co", out); raise SystemExit
-items = eb._gsm8k_items(n)
-for it in items:
-    it["kind"] = "gsm8k"
-out.write_text(json.dumps(items))
-print("da dung", len(items), "mau niem phong ->", out)
-# KIEM RO RI: khong mau niem phong nao duoc nam trong tap train cua mapper
+    items = json.loads(out.read_text())
+    print("da co", out, f"({len(items)} mau)")
+else:
+    items = eb._gsm8k_items(n)
+    for it in items:
+        it["kind"] = "gsm8k"
+    out.write_text(json.dumps(items))
+    print("da dung", len(items), "mau niem phong ->", out)
+# KIEM RO RI chay MOI LAN, ke ca khi tap niem phong da co san (truoc day
+# nhanh "da co" thoat som -> lan chay lai KHONG kiem ro ri lan nao).
+# Khong mau niem phong nao duoc nam trong tap train cua mapper.
 tr = pathlib.Path("/content/train_items.json")
-if tr.exists():
-    d = json.loads(tr.read_text())
-    hoi = {x["prompt"] for sp in ("train", "val") for x in d.get(sp, [])}
-    ro = sum(1 for it in items if it["prompt"] in hoi)
-    print(f"kiem ro ri train/test: {ro}/{len(items)}"
-          + ("  <-- CO RO RI, DUNG LAI" if ro else "  (sach)"))
-    assert ro == 0, "tap niem phong dinh mau da train"
+assert tr.exists(), "thieu train_items.json -- KHONG duoc bo qua kiem ro ri"
+d = json.loads(tr.read_text())
+hoi = {x["prompt"] for sp in ("train", "val") for x in d.get(sp, [])}
+assert hoi, "train_items.json rong -> kiem ro ri vo nghia"
+ro = sum(1 for it in items if it["prompt"] in hoi)
+print(f"kiem ro ri train/test: {ro}/{len(items)} (doi chieu {len(hoi)} prompt)"
+      + ("  <-- CO RO RI, DUNG LAI" if ro else "  (sach)"))
+assert ro == 0, "tap niem phong dinh mau da train"
 PYEOF
 [ -f /content/gsm_sealed.json ] || { echo "khong dung duoc tap niem phong"; exit 1; }
 
