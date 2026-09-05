@@ -49,7 +49,15 @@ def test_3_GAN_SAI_SO_CHO_THUC_THE_bi_phat_nang():
     ten dung, SO SAI -> phai AM, khong duoc chi la 0."""
     txt = GOLD_TXT.replace("Kylie = 20", "Kylie = 60")
     _, d = gs.score(txt, GOLD)
-    assert d["ent"] == gs.PENALTY_WRONG_ENTITY == -2.0
+    assert d["ent"] == gs.PENALTY_WRONG_ENTITY == -8.0
+
+
+def test_3b_sai_so_thuc_the_lam_TONG_diem_AM():
+    """Phat phai DU NANG de thang ca ba thanh phan con lai: du rel/step/ans
+    deu hoan hao, mau gan SAI so van phai bi diem AM (te hon khong tra loi)."""
+    txt = GOLD_TXT.replace("Kylie = 20", "Kylie = 60")
+    tot, _ = gs.score(txt, GOLD)
+    assert tot < 0, f"tong {tot} khong am -> phat chua du nang"
 
 
 def test_4_bo_sot_thuc_the_chi_tut_diem_khong_bi_phat():

@@ -35,7 +35,13 @@ import re
 # so: cho phep dau phay ngan nghin, dau am, thap phan, $ va % di kem
 _NUM = re.compile(r"-?\$?\d[\d,]*\.?\d*%?")
 _THINK = re.compile(r"<think>.*?</think>", re.S)
-PENALTY_WRONG_ENTITY = -2.0
+# PHAT NANG khi gan SAI so cho thuc the (user chot 2026-09-05). Chon -8,0 chu
+# khong phai -2,0: voi trong so mac dinh w_ent=0,25 thi -2,0 chi thanh -0,5,
+# bi ba thanh phan con lai (toi da +1,45) bu lai -> mau gan sai so VAN duoc
+# diem DUONG (+0,95). Voi -8,0: 0,25 x (-8) = -2,0 -> tong = -0,55, AM han,
+# tuc la te hon ca khong tra loi gi. Dung tinh than bat doi xung cua
+# `no_cheating` (-20) trong notebook GRPO Unsloth.
+PENALTY_WRONG_ENTITY = -8.0
 
 
 def _num(s):
