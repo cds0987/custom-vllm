@@ -450,11 +450,32 @@ def run_mapped(args):
         items = [it for it in items if it["bench"] in keep]
         print(f"loc bo: {n0} -> {len(items)} mau ({sorted(keep)})", flush=True)
     items = wreck_ctx(items, args.no_ctx)
-    # Spill mang TEN CAU HINH CUA 4B, khong phai ten chung: cache 4B chi phu
-    # thuoc (prompt, co-LoRA-hay-khong) — KHONG phu thuoc mapper. Cac luot so
-    # sanh bien the mapper co pha A GIONG HET nhau, nen dat ten dung thi lan
-    # sau bo qua duoc 5 phut prefill. Truoc day moi luot `rm -rf` roi lam lai.
-    stag = ("lora" if args.lora else "base")
+    # Spill mang TEN CAU HINH CUA 4B: cache 4B khong phu thuoc mapper, nen cac
+    # luot so sanh bien the mapper dung chung duoc pha A (tiet kiem ~5 phut).
+    #
+    # BUG DA SUA (2026-09-05): ten cu chi la "lora" vs "base" -> KHONG phan
+    # biet LoRA-4B NAO. Dung khi moi bien the dung CHUNG mot LoRA-4B, SAI hoan
+    # toan khi so cac checkpoint tu nhung luot train KHAC NHAU (moi cai co
+    # LoRA-4B rieng): checkpoint chay sau lang le dung lai cache 4B cua
+    # checkpoint chay truoc -> do "mapper cua A tren cache 4B cua B". Khong
+    # nem loi, khong canh bao, chi ra so sai. Da bat duoc khi gsm_grpo_v1 dung
+    # lai 200 cache cua gsm_struct_rl_v2.
+    # Sua: bam NOI DUNG file adapter 4B vao ten (khong dung duong dan -- cung
+    # duong dan co the chua trong so khac sau khi train lai).
+    stag = "base"
+    if args.lora:
+        import hashlib
+        h = hashlib.sha1()
+        fs = sorted(Path(args.lora).glob("adapter_model*"))
+        # PHAI dung han neu khong tim thay file trong so: sha1 cua rong la mot
+        # hang so -> MOI checkpoint se ra cung ten spill -> tai lap dung bug
+        # vua va, ma lan nay con kho thay hon.
+        assert fs, (f"khong thay adapter_model* trong {args.lora} -- khong bam "
+                    f"duoc dinh danh LoRA-4B, cache 4B se bi dung nham")
+        for f in fs:
+            h.update(f.read_bytes())
+        stag = "lora_" + h.hexdigest()[:10]
+        print(f"cache 4B gan voi LoRA-4B {args.lora} -> {stag}", flush=True)
     if args.no_ctx:
         stag += "_" + args.no_ctx
     spill = Path(f"/content/spill_{stag}")
