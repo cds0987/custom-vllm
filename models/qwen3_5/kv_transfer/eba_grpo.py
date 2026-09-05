@@ -62,6 +62,7 @@ def _load(name):
 e5 = _load("e5_train")
 eba = _load("eba_gen")
 gd = _load("gen_data")
+gs = _load("gsm_struct")
 e5.patch_recurrent_rebind()   # BAT BUOC truoc khi nap model (xem docstring)
 
 WARM_P = 5
@@ -277,6 +278,42 @@ def reward_of_gsm8k(item, text, w):
     return float(hit), {"C": float(hit)}
 
 
+def reward_of_gsm_struct(item, text, w):
+    """BUOC 3 -- reward PHAN RA tren dinh dang co cau truc (user chot 2026-09-05).
+
+    4 thanh phan doc lap cong lai (kieu Unsloth: nhieu ham reward rieng, khong
+    mot diem gop), so theo NOI DUNG DA PARSE chu khong theo chuoi chu:
+      R_ent  F1 tap (thuc the, gia tri) -- PHAT NANG -2,0 khi gan SAI so
+      R_rel  F1 tap quan he da chuan hoa
+      R_step ty le gia tri trung gian dung THU TU (LCS)
+      R_ans  chia bac theo sai so tuong doi; hong format -1,0
+    Nho vay mapper bi cham diem theo "co di qua dung cac dai luong 9B da di
+    qua khong", khong phai "co chep dung chu khong" -> chong hoc vet."""
+    total, d = gs.score(text, item["gold_struct_parsed"],
+                        item["gold_struct_parsed"].get("answer"), w)
+    return total, {"C": float(d["ans"] > 0), **d}
+
+
+def load_gsm_struct_pool(data_path, struct_gold_path, limit=0):
+    """Chi lay item CO gold cau truc (Buoc 0 da loc 2 tang: parse duoc VA dap
+    so dung). Parse san gold mot lan de vong RL khong parse lai moi buoc."""
+    data = json.loads(Path(data_path).read_text())
+    sg = json.loads(Path(struct_gold_path).read_text())
+    items = []
+    for sp in ("train", "val"):
+        for it in data.get(sp, []):
+            g = sg.get(it.get("id", ""))
+            if it.get("kind") == "gsm8k" and g and g.get("gold"):
+                it = dict(it)
+                it["gold"] = g["gold"]
+                it["gold_struct_parsed"] = gs.parse(g["gold"])
+                items.append(it)
+    if limit:
+        items = items[:limit]
+    print(f"gsm8k CO CAU TRUC: {len(items)} mau", flush=True)
+    return items
+
+
 def load_gsm8k_pool(data_path, pseudo_gold_path, limit):
     """Doc dung format /content/train_items_gsm.json (data['train'], kind==
     'gsm8k') -- CHINH tap run_gsm_traintest.sh dung cho 'TRAIN', tach hoan
@@ -321,7 +358,13 @@ def main():
     ap.add_argument("--lora-t-r", type=int, default=16)
     ap.add_argument("--lora-t-modules",
                     default="q_proj,o_proj,in_proj_qkvz,out_proj")
-    ap.add_argument("--task", default="eba", choices=["eba", "gsm8k"],
+    ap.add_argument("--struct-gold", default="/content/struct_gold_gsm.json")
+    ap.add_argument("--w-ent", type=float, default=0.25)
+    ap.add_argument("--w-rel", type=float, default=0.25)
+    ap.add_argument("--w-step", type=float, default=0.2)
+    ap.add_argument("--w-ans", type=float, default=1.0)
+    ap.add_argument("--task", default="eba",
+                    choices=["eba", "gsm8k", "gsm8k_struct"],
                     help="eba = du lieu tong hop Entity-Binding (proxy); "
                          "gsm8k = gsm8k THAT + pseudo-gold 9B tu sinh -- "
                          "dung engine GRPO nhu nhau, chi doi nguon du lieu "
@@ -390,7 +433,17 @@ def main():
             print(f"HF-UP FAIL {dest}: {type(ex).__name__}: {ex}", flush=True)
 
     # ---- data ----
-    if args.task == "gsm8k":
+    if args.task == "gsm8k_struct":
+        items = load_gsm_struct_pool(args.gsm_data, args.struct_gold, args.gsm_limit)
+        gold_cap = args.gold_cap or 320
+        do_reward = reward_of_gsm_struct
+        w = {"ent": args.w_ent, "rel": args.w_rel,
+             "step": args.w_step, "ans": args.w_ans}
+        if args.anchor_w:
+            print(f"CANH BAO: --task gsm8k_struct nen chay anchor_w=0 (user chot "
+                  f"bo hann anchor-CE o buoc RL -- day la cho gay hoc vet); "
+                  f"dang la {args.anchor_w}", flush=True)
+    elif args.task == "gsm8k":
         items = load_gsm8k_pool(args.gsm_data, args.pseudo_gold, args.gsm_limit)
         gold_cap = args.gold_cap or 256
         do_reward = reward_of_gsm8k
@@ -551,7 +604,9 @@ def main():
         day du cua e9_joint/run_gsm_traintest.sh (khong niem phong, chi tap
         con TRAIN de theo doi GRPO co tien khong). Dung greedy (nhiet do 0)
         cho on dinh giua cac moc."""
-        keys = ("A", "B", "C") if args.task == "eba" else ("C",)
+        keys = (("A", "B", "C") if args.task == "eba" else
+                ("ent", "rel", "step", "ans", "C") if args.task == "gsm8k_struct"
+                else ("C",))
         agg = {kk: [] for kk in keys}
         for it in val_items[:n]:
             cut, warm, _ = enc(it)
@@ -570,8 +625,12 @@ def main():
                 if int(inp) in STOPS:
                     break
             txt = tok_t.decode(gen, skip_special_tokens=True)
-            s = eba.score_eba(it, txt) if args.task == "eba" \
-                else {"C": float(gd.score_item(it, txt))}
+            if args.task == "eba":
+                s = eba.score_eba(it, txt)
+            elif args.task == "gsm8k_struct":
+                _, s = do_reward(it, txt, w)
+            else:
+                s = {"C": float(gd.score_item(it, txt))}
             for kk in keys:
                 agg[kk].append(s[kk])
             del st, tpl, src, cur, o
