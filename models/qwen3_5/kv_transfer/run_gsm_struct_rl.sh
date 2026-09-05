@@ -107,7 +107,10 @@ fi
 if [ "${GO:-0}" = "1" ]; then
   ARGS="--steps $STEPS --sanity 0"
 else
-  ARGS="--sanity 5"
+  # sanity dai hon 5 buoc khi do bo nho: dinh VRAM phu thuoc DO DAI PROMPT
+  # (41-201 token) va do dai sinh ra, 5 buoc de trung toan mau ngan -> bao
+  # "vua" roi OOM giua chung khi chay that.
+  ARGS="--sanity ${SANITY:-5}"
 fi
 run_rl "$BSZ" "$K" "$ARGS" "/content/logs/${OUT}.log"
 STATUS=$?
