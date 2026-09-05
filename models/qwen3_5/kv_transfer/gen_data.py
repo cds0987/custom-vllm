@@ -160,6 +160,14 @@ def score_item(it, txt):
     raise ValueError(it["bench"])
 
 
+def score_how(it, txt):
+    """NHANH nao cua grader da cho diem (chuoi rong = khong dung). Uy quyen
+    y het score_item de khong lech grader. Xem ext_bench.score_how."""
+    if it["bench"] in ("bbh", "gsm8k", "musr"):
+        return _load("ext_bench").score_how(it, txt)
+    return "khac" if score_item(it, txt) else ""
+
+
 def assert_no_leak(items, sealed_path):
     """Doi chieu BANG CHUOI PROMPT, khong tin suy luan chi so."""
     if not Path(sealed_path).exists():

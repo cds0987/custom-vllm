@@ -746,7 +746,14 @@ def run_mapped(args):
     for grp in groups:
         txts = run_group(grp)
         for it, txt in zip(grp, txts):
-            out[it["id"]] = {"hit": score(it, txt), "txt": txt[:400],
+            # "how" = NHANH nao cua grader da cho diem. Bat buoc voi dinh dang
+            # co cau truc: nhanh du phong "so cuoi" cho diem ca khi dau ra bi
+            # CAT truoc khi kip viet 'Final Answer:' -- khong ghi lai thi
+            # khong phan biet duoc "giai xong" voi "may cat dung cho".
+            # txt luu 1200 (truoc 400): 400 khong du de doc tay mot dau ra
+            # <think>+ENTITIES+STEPS+Final Answer.
+            out[it["id"]] = {"hit": score(it, txt), "txt": txt[:1200],
+                             "how": gd.score_how(it, txt),
                              "n_tok": len(txt.split())}
         i += len(grp)
         n_new += len(grp)

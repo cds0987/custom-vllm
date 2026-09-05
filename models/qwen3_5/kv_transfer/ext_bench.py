@@ -272,6 +272,36 @@ def _norm_math(x):
     return x
 
 
+def score_how(it, text):
+    """NHANH nao cua score_text da cho diem 1 -- "" neu khong dung.
+
+    Vi sao can (2026-09-05, doc tay 8 mau theo quy tac 15): nhanh cuoi cua
+    gsm8k la "lay SO CUOI CUNG con lai sau khi bo <think>". Voi dinh dang co
+    cau truc (ENTITIES/STEPS/Final Answer), mot dau ra BI CAT giua khoi STEPS
+    ma so cuoi tinh co dung dap an van duoc diem, DU chua bao gio viet
+    'Final Answer:'. Khong ghi lai nhanh nao cham thi khong the phan biet
+    "giai xong" voi "may cat dung cho". Da 3 lan bi thang do lua trong du an,
+    lan nay ghi lai bang chung thay vi tin.
+
+    PHAI dong bo voi score_text -- test_score_how giu rang buoc
+    (score_how != "") <=> (score_text == 1).
+    """
+    if it["bench"] not in ("gsm8k", "math500"):
+        return "khac" if score_text(it, text) else ""
+    t = _strip_think(text)
+    exp = _norm_math(it["expect"])
+    boxed = _all_boxed(text)
+    if boxed and _norm_math(boxed[-1]) == exp:
+        return "boxed"
+    fin = re.findall(r"Final Answer:\s*\$?([^\n$]+)", text)
+    if fin and _norm_math(fin[-1]) == exp:
+        return "final"
+    nums = re.findall(r"-?\d+(?:\.\d+)?", t)
+    if nums and _norm_math(nums[-1]) == exp:
+        return "so_cuoi"       # <- nhanh du phong, dang ngo voi dinh dang co cau truc
+    return ""
+
+
 def score_text(it, text):
     t = _strip_think(text)
     if it["bench"] == "bbh":
