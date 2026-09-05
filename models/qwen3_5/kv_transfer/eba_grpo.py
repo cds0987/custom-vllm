@@ -859,7 +859,7 @@ def main():
             return False
 
     best = max([v[1].get("C", -1e9) for v in results["val"]], default=-1e9)
-    n_oom = 0          # so mieng pha 2 bi bo qua vi OOM (luoi an toan)
+    n_oom, n_chunk_tot = 0, 0   # luoi an toan OOM o pha 2 + chot chan ty le
     t_start = time.time()
     if args.start_step:
         print(f"NOI LAI tu buoc {args.start_step + 1}/{args.steps} "
@@ -973,6 +973,13 @@ def main():
                                                       or need_anchor))
                         pg_tot += float(loss_c.detach())
                         del branch, lp, loss_c
+                        if args.sanity:
+                            print(f"  [mem] mieng {ci+1}/{len(chunks)} "
+                                  f"({e_-s} hang) sau backward: "
+                                  f"{torch.cuda.memory_allocated()/2**30:.2f}GiB"
+                                  f" dinh "
+                                  f"{torch.cuda.max_memory_allocated()/2**30:.2f}"
+                                  f"GiB", flush=True)
                     except torch.cuda.OutOfMemoryError:
                         n_oom += 1
                         branch = lp = loss_c = None
@@ -980,12 +987,7 @@ def main():
                         torch.cuda.empty_cache()
                         print(f"buoc {step} mieng {ci+1}/{len(chunks)}: OOM -> "
                               f"bo qua mieng (tong bo qua: {n_oom})", flush=True)
-                    if args.sanity:
-                        print(f"  [mem] mieng {ci+1}/{len(chunks)} "
-                              f"({e_-s} hang) sau backward: "
-                              f"{torch.cuda.memory_allocated()/2**30:.2f}GiB "
-                              f"dinh {torch.cuda.max_memory_allocated()/2**30:.2f}"
-                              f"GiB", flush=True)
+            n_chunk_tot += len(chunks)
             pg_loss = torch.tensor(pg_tot)
 
             anchor_ce = torch.tensor(0.0, device="cuda")
@@ -1012,6 +1014,23 @@ def main():
         del st0
         gc.collect()
         torch.cuda.empty_cache()
+
+        # CHOT CHAN (do 2026-09-05): bsz=4 + tf_chunk=2 lam 44/48 mieng OOM --
+        # luoi an toan cuu khoi crash NHUNG luot train van "chay xong" ma gan
+        # nhu khong co gradient nao. Kieu hong am tham nguy hiem nhat: log
+        # dep, s/buoc dep, ket qua rong. Nen DUNG HAN neu ty le bo qua qua
+        # cao trong 20 buoc dau, de nguoi con kip ha bsz/tf_chunk.
+        if step - args.start_step == 20 and n_chunk_tot:
+            ty_le = n_oom / n_chunk_tot
+            if ty_le > 0.2:
+                print(f"DUNG: {n_oom}/{n_chunk_tot} mieng ({100*ty_le:.0f}%) bi "
+                      f"OOM trong 20 buoc dau -> cau hinh bsz={args.bsz} "
+                      f"k={args.k} tf-chunk={args.tf_chunk} KHONG vua VRAM. "
+                      f"Ha tf-chunk hoac bsz roi chay lai.", flush=True)
+                print("EBA_GRPO_OOM_QUA_NHIEU", flush=True)
+                return
+            print(f"chot chan OOM: {n_oom}/{n_chunk_tot} mieng "
+                  f"({100*ty_le:.1f}%) -- trong nguong, chay tiep", flush=True)
 
         mean_r = sum(rewards) / len(rewards)
         mean_c = sum(x["C"] for x in sub) / len(sub)
