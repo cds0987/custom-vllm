@@ -248,6 +248,30 @@ def clone_cache_repeat_grad(past, k):
     return new
 
 
+def clone_cache_index(past, idx):
+    """Lay MOT TAP CON cac hang cua cache theo chi so idx, GIU GRAPH.
+
+    Dung cho pha 2 khi chia nho teacher-force: index_select la phep kha vi
+    (khac .repeat o cho chon duoc dung nhung hang can), nen gradient tu tung
+    mieng van cong don nguoc ve cung mot lan build st0 (mapper + 4B).
+
+    VI SAO PHAI CHIA NHO (do 2026-09-05): OOM khong nam o sampling ma o
+    torch_chunk_gated_delta_rule (lop GDN) TRONG pha teacher-force CO GRAD --
+    GDN luu hoat hoa cho ca 32 lop, ty le thuan voi so hang. Sampling
+    (@no_grad) thi khong luu gi nen gop rong bao nhieu cung duoc. => gop RONG
+    o pha 1 (cho toc do), chia NHO o pha 2 (cho bo nho)."""
+    new = e5.clone_cache_struct(past)
+    attn_n, gdn_n = e5.split_layers(new)
+    for l in attn_n.values():
+        l.keys = l.keys.index_select(0, idx)
+        l.values = l.values.index_select(0, idx)
+    for l in gdn_n.values():
+        r, c = e5._get(l.recurrent_states), e5._get(l.conv_states)
+        e5._set_like(l, "recurrent_states", r.index_select(0, idx))
+        e5._set_like(l, "conv_states", c.index_select(0, idx))
+    return new
+
+
 def teacher_force_logp_batch(model, past_k, warm_rows, gens, device):
     """Gop K nhanh teacher-force THANH MOT forward co grad (thay vi K lan
     rieng). Feed = warm + gen_ids[:-1], PAD PHAI ve do dai lon nhat trong
@@ -443,6 +467,11 @@ def main():
                          "decode = bsz*k; do 2026-09-05 cho thay thoi gian moi "
                          "buoc decode gan nhu khong doi tu 2 den 16 hang, nen "
                          "tang bsz gan nhu mien phi. Rang buoc that la VRAM.")
+    ap.add_argument("--tf-chunk", type=int, default=2,
+                    help="so hang moi mieng teacher-force (pha 2). OOM do duoc "
+                         "2026-09-05 nam o lop GDN cua pha nay, khong phai o "
+                         "sampling -> pha 1 gop rong bsz*k hang, pha 2 chia "
+                         "mieng nay va cong don gradient. Tong loss khong doi.")
     ap.add_argument("--temperature", type=float, default=0.9)
     ap.add_argument("--gen-len", type=int, default=48)
     ap.add_argument("--tbptt", type=int, default=64)
@@ -879,25 +908,47 @@ def main():
                       f"nhom -> bo qua gradient (VAN cham val/checkpoint)",
                       flush=True)
         else:
-            # pha 2: B x K nhanh teacher-force CO grad trong MOT forward
-            with clock("teacher_force(pha2)"):
-                branch_k = clone_cache_repeat_grad(st0, args.k)
-                lp_k = teacher_force_logp_batch(
-                    model_t, branch_k, warm.repeat(args.k, 1), gens, "cuda")
-                adv_t = torch.tensor(adv, device="cuda")
-                # chia cho K = trung binh trong nhom, CONG DON qua cac mau ->
-                # dung ngu nghia gradient-accumulation accum=B: do lon gradient
-                # moi mau giu nguyen nhu khi chay B=1, chi gop lai thanh 1 lan
-                # opt.step(). (Hoc phi sft_struct: accum=16 -> chi 132 lan cap
-                # nhat/epoch, model chi hoc duoc <think>; accum=4 -> 527 lan,
-                # hoc du cau truc. B=4 o day cho ~500 lan cap nhat/epoch.)
-                pg_loss = -(adv_t * lp_k).sum() / args.k
-                del branch_k
+            # pha 2: teacher-force CO grad, CHIA MIENG tf_chunk hang mot.
+            # OOM do duoc nam o lop GDN cua pha nay (no luu hoat hoa 32 lop,
+            # ty le thuan so hang), KHONG nam o sampling -- nen pha 1 gop rong
+            # con pha 2 chia nho, lan nguoc ngay tung mieng va CONG DON
+            # gradient. Tong loss dong nhat voi lam mot lan:
+            #   sum_mieng[-(adv*lp).sum()/K] == -(adv*lp).sum()/K
+            # Chia cho K = trung binh trong nhom, cong don qua cac mau -> dung
+            # ngu nghia accum=B: do lon gradient MOI MAU giu nguyen nhu khi
+            # chay B=1, chi gop lai thanh 1 lan opt.step(). (Hoc phi
+            # sft_struct: accum=16 -> 132 lan cap nhat/epoch, chi hoc duoc
+            # <think>; accum=4 -> 527 lan, hoc du cau truc.)
+            n_rows = len(gens)
+            need_anchor = bool(args.anchor_w > 0 and B == 1
+                               and gold_ids is not None and gold_ids.shape[1] >= 1)
+            adv_all = torch.tensor(adv, device="cuda")
+            row_item = torch.tensor([r % B for r in range(n_rows)],
+                                    device="cuda")
+            opt.zero_grad(set_to_none=True)
+            pg_tot = 0.0
+            chunks = [(s, min(s + args.tf_chunk, n_rows))
+                      for s in range(0, n_rows, args.tf_chunk)]
+            with clock("teacher_force(pha2)+backward"):
+                for ci, (s, e_) in enumerate(chunks):
+                    idx = row_item[s:e_]
+                    branch = clone_cache_index(st0, idx)
+                    lp = teacher_force_logp_batch(
+                        model_t, branch, warm.index_select(0, idx),
+                        gens[s:e_], "cuda")
+                    loss_c = -(adv_all[s:e_] * lp).sum() / args.k
+                    # retain_graph cho moi mieng TRU mieng cuoi (graph cua st0
+                    # = mapper + 4B dung chung cho ca cac mieng). Neu con
+                    # anchor-CE phia sau thi mieng cuoi cung phai giu graph.
+                    loss_c.backward(retain_graph=(ci < len(chunks) - 1
+                                                  or need_anchor))
+                    pg_tot += float(loss_c.detach())
+                    del branch, lp, loss_c
+            pg_loss = torch.tensor(pg_tot)
 
             anchor_ce = torch.tensor(0.0, device="cuda")
             with clock("anchor_ce"):
-                if (args.anchor_w > 0 and B == 1
-                        and gold_ids is not None and gold_ids.shape[1] >= 1):
+                if need_anchor:
                     branch = deep_clone_cache(st0)
                     gold_list = gold_ids[0].tolist()
                     feed = torch.cat([warm, gold_ids[:, :-1]], 1) \
@@ -910,9 +961,10 @@ def main():
                     del branch, o, logp_g
 
             with clock("backward"):
-                loss = pg_loss + args.anchor_w * anchor_ce
-                opt.zero_grad(set_to_none=True)
-                loss.backward()
+                # gradient cua pg da duoc cong don tung mieng o tren; o day
+                # chi con anchor-CE (neu bat) roi cap nhat MOT lan.
+                if need_anchor:
+                    (args.anchor_w * anchor_ce).backward()
                 opt.step()
 
         del st0

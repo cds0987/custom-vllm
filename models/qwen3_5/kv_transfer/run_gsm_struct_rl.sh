@@ -29,6 +29,7 @@ OUT="${OUT:-gsm_struct_rl_v1}"
 STEPS="${STEPS:-1000}"
 K="${K:-3}"                         # K=4 tung OOM o vong truoc (khi bsz=1)
 BSZ="${BSZ:-4}"                     # so MAU/buoc (user chot 2026-09-05: 4x3)
+TF_CHUNK="${TF_CHUNK:-2}"           # so hang/mieng o pha 2 (cho OOM lop GDN)
 GEN_LEN="${GEN_LEN:-320}"
 
 for pkg in peft bitsandbytes datasets; do
@@ -75,8 +76,9 @@ run_rl () {   # $1=bsz $2=k $3=args them $4=log
     --init-lora-t "/content/$CK/lorat_best" \
     --gsm-data /content/train_items.json \
     --struct-gold /content/struct_gold_gsm.json \
-    --bsz "$1" --k "$2" --gen-len "$GEN_LEN" --gold-cap 320 \
-    --anchor-w 0 \
+    --bsz "$1" --k "$2" --tf-chunk "$TF_CHUNK" \
+    --gen-len "$GEN_LEN" --gold-cap 320 \
+    --gsm-limit 0 --anchor-w 0 \
     --val-every 100 --val-n 32 --snapshot-every 200 \
     --out "/content/$OUT" --hf-prefix "$OUT" \
     $3 2>&1 | tee "$4"
