@@ -12,7 +12,14 @@
 #   - cham theo NOI DUNG DA PARSE, khong theo chuoi chu
 #
 #   bash run_gsm_struct_rl.sh              # sanity 5 buoc
+#   PROBE=1 bash run_gsm_struct_rl.sh      # do BSZ/K lon nhat khong OOM
 #   GO=1 bash run_gsm_struct_rl.sh         # chay that
+#
+# GOP LO (2026-09-05): moi buoc xu ly BSZ mau x K nhanh trong MOT vong decode.
+# Do duoc (probe_decode_speed.py): thoi gian moi buoc decode gan nhu KHONG DOI
+# tu 2 den 16 hang (95,7 -> 100,1 ms) trong khi thong luong x7,7 -- decode o
+# batch nho bi chan boi bang thong doc trong so, khong phai phep tinh. Rang
+# buoc that la VRAM (dinh 20,59/22,5 GiB o bsz=1,k=2), nen PROBE truoc.
 set -u
 cd "$(dirname "$0")"
 mkdir -p /content/logs
@@ -20,7 +27,8 @@ export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:T
 CK="${CK:-sft_struct_v3}"          # warm-start tu Buoc 2
 OUT="${OUT:-gsm_struct_rl_v1}"
 STEPS="${STEPS:-1000}"
-K="${K:-3}"                         # K=4 tung OOM o vong truoc
+K="${K:-3}"                         # K=4 tung OOM o vong truoc (khi bsz=1)
+BSZ="${BSZ:-4}"                     # so MAU/buoc (user chot 2026-09-05: 4x3)
 GEN_LEN="${GEN_LEN:-320}"
 
 for pkg in peft bitsandbytes datasets; do
@@ -60,21 +68,45 @@ except Exception as e:
 PYEOF
 [ -f "/content/$CK/mapper_best.pt" ] || { echo "KHONG THAY $CK (chay Buoc 2 truoc), DUNG"; exit 1; }
 
+run_rl () {   # $1=bsz $2=k $3=args them $4=log
+  python3 -u eba_grpo.py --task gsm8k_struct \
+    --init-mapper "/content/$CK/mapper_best.pt" \
+    --init-lora "/content/$CK/lora_best" \
+    --init-lora-t "/content/$CK/lorat_best" \
+    --gsm-data /content/train_items.json \
+    --struct-gold /content/struct_gold_gsm.json \
+    --bsz "$1" --k "$2" --gen-len "$GEN_LEN" --gold-cap 320 \
+    --anchor-w 0 \
+    --val-every 100 --val-n 32 --snapshot-every 200 \
+    --out "/content/$OUT" --hf-prefix "$OUT" \
+    $3 2>&1 | tee "$4"
+  return ${PIPESTATUS[0]}
+}
+
+if [ "${PROBE:-0}" = "1" ]; then
+  # Thu tu do: cau hinh user chot truoc (4x3=12 hang), tut dan khi OOM.
+  # Chay 3 buoc that (khong phai chi nap model) vi dinh VRAM roi vao pha
+  # sampling + backward, khong phai luc nap.
+  for cfg in "4 3" "4 2" "2 3" "2 2"; do
+    set -- $cfg
+    echo "=== PROBE bsz=$1 k=$2 (= $(($1 * $2)) hang decode) ==="
+    if run_rl "$1" "$2" "--sanity 3" "/content/logs/probe_bsz_$1x$2.log" \
+       && grep -q EBA_GRPO_SANITY_EXIT "/content/logs/probe_bsz_$1x$2.log"; then
+      echo "PROBE_CHOT bsz=$1 k=$2"
+      grep -E 'SANITY xong|lo train' "/content/logs/probe_bsz_$1x$2.log"
+      exit 0
+    fi
+    echo "  -> HONG (OOM hoac loi), tut xuong cau hinh sau"
+    sleep 5
+  done
+  echo "PROBE_KHONG_CAU_HINH_NAO_CHAY"; exit 1
+fi
+
 if [ "${GO:-0}" = "1" ]; then
   ARGS="--steps $STEPS --sanity 0"
 else
   ARGS="--sanity 5"
 fi
-python3 -u eba_grpo.py --task gsm8k_struct \
-  --init-mapper "/content/$CK/mapper_best.pt" \
-  --init-lora "/content/$CK/lora_best" \
-  --init-lora-t "/content/$CK/lorat_best" \
-  --gsm-data /content/train_items.json \
-  --struct-gold /content/struct_gold_gsm.json \
-  --k "$K" --gen-len "$GEN_LEN" --gold-cap 320 \
-  --anchor-w 0 \
-  --val-every 100 --val-n 32 --snapshot-every 200 \
-  --out "/content/$OUT" --hf-prefix "$OUT" \
-  $ARGS 2>&1 | tee "/content/logs/${OUT}.log"
-STATUS=${PIPESTATUS[0]}
+run_rl "$BSZ" "$K" "$ARGS" "/content/logs/${OUT}.log"
+STATUS=$?
 [ "$STATUS" = 0 ] && echo "RUN_GSM_STRUCT_RL_EXIT" || echo "RUN_GSM_STRUCT_RL_FAIL status=$STATUS"

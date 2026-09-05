@@ -148,40 +148,63 @@ def clone_cache_repeat(past, k):
 
 
 @torch.no_grad()
-def sample_rollout_batch(model, tok, past_k, warm, n_new, temperature, stops, k):
-    """past_k: cache DA O BATCH=K (clone_cache_repeat). Decode CA K nhanh
-    CUNG LUC moi buoc thay vi K vong rieng -- day la duong chinh, thay cho
-    K lan goi sample_rollout(). KHONG dung som theo TUNG HANG RIENG (van
-    phai forward CA batch=K moi buoc, khong the bo qua 1 hang giua batch) --
-    nhung DUNG SOM CA VONG LAP khi TAT CA k hang deu da gap stop, vi phan
-    con lai chac chan bi cat bo o buoc trim ben duoi. Voi gen_len nho (EBA,
-    ~30-50) phan tinh du thua khong dang -- nhung gen_len=200 (gsm8k that,
-    2026-09-04) thi dang: nhieu loi giai xong o ~80-120 token, chay het 200
-    la lang phi ~40-60% vong lap khong sinh gia tri gi them."""
-    warm_b = warm.repeat(k, 1)
-    o = model(input_ids=warm_b, past_key_values=past_k, use_cache=True)
+def sample_rollout_batch(model, tok, past_k, warm_rows, n_new, temperature,
+                         stops, check_every=16):
+    """past_k: cache DA O BATCH = so HANG (clone_cache_repeat). warm_rows: da
+    mo rong san ve dung so hang do. Decode CA cac hang CUNG LUC moi buoc thay
+    vi tung vong rieng -- day la duong chinh, thay cho nhieu lan goi
+    sample_rollout().
+
+    So hang = B (so mau trong lo) x K (so nhanh GRPO). Thu tu hang do
+    clone_cache_repeat quyet dinh: .repeat(K,...) LAP CA KHOI B, nen
+    hang r <-> mau r % B, nhanh r // B.
+
+    VI SAO GOP CANG NHIEU HANG CANG LOI (do 2026-09-05,
+    probe_decode_speed.py, 9B bnb-4bit, decode 64 token):
+        k= 2 -> 95,7 ms/buoc |  20,9 tok/s
+        k= 4 -> 94,4 ms/buoc |  42,4 tok/s
+        k= 8 -> 95,2 ms/buoc |  84,1 tok/s
+        k=16 -> 100,1 ms/buoc | 159,8 tok/s
+    Thoi gian moi buoc decode GAN NHU KHONG DOI tu 2 den 16 hang (decode o
+    batch nho bi chan boi bang thong doc TRONG SO, khong phai phep tinh) ->
+    thong luong x7,7 gan nhu mien phi. Day dung la co che toc do cua vLLM
+    (continuous batching), lay duoc NGAY TRONG PROCESS ma khong can vLLM --
+    vLLM khong cam thang vao duoc vi rollout phai bat dau tu cache DO MAPPER
+    SINH va LoRA-9B doi moi buoc.
+
+    DUNG SOM CA VONG LAP khi MOI hang deu da gap stop (phan con lai chac chan
+    bi cat o buoc trim ben duoi): gsm8k gen_len=224 nhieu loi giai xong o
+    ~80-120 token, chay het la lang phi 40-60% vong lap.
+
+    KHONG dong bo GPU->CPU moi token nua (do duoc: int(inp[i,0]) tung hang
+    tung token lam k=2 tu 86,1 -> 95,7 ms/buoc, mat 9-10%). Thay bang kiem
+    tra stop MOI check_every token tren GPU -> 1 lan dong bo / 16 token."""
+    n = warm_rows.shape[0]
+    dev = warm_rows.device
+    stop_t = torch.tensor(sorted(stops), device=dev)
+    o = model(input_ids=warm_rows, past_key_values=past_k, use_cache=True)
     cur = o.past_key_values
     probs = torch.softmax(o.logits[:, -1, :].float() / temperature, -1)
     inp = torch.multinomial(probs, 1)
-    gens = [[int(inp[i, 0])] for i in range(k)]
-    done = [int(inp[i, 0]) in stops for i in range(k)]
-    for _ in range(n_new - 1):
-        if all(done):
-            break
+    toks = [inp]
+    done = torch.isin(inp[:, 0], stop_t)
+    for t in range(n_new - 1):
         o = model(input_ids=inp, past_key_values=cur, use_cache=True)
         cur = o.past_key_values
         probs = torch.softmax(o.logits[:, -1, :].float() / temperature, -1)
         inp = torch.multinomial(probs, 1)
-        for i in range(k):
-            gens[i].append(int(inp[i, 0]))
-            if int(inp[i, 0]) in stops:
-                done[i] = True
+        toks.append(inp)
+        if (t + 2) % check_every == 0:
+            done |= torch.isin(torch.cat(toks[-check_every:], 1), stop_t).any(1)
+            if bool(done.all()):      # <- lan dong bo DUY NHAT moi 16 token
+                break
     del cur, o
+    gens = torch.cat(toks, 1).tolist()      # mot lan chuyen ve CPU
     trimmed, texts = [], []
     for g in gens:
         cut = len(g)
-        for j, t in enumerate(g):
-            if t in stops:
+        for j, tk in enumerate(g):
+            if tk in stops:
                 cut = j + 1
                 break
         g2 = g[:cut]
@@ -225,7 +248,7 @@ def clone_cache_repeat_grad(past, k):
     return new
 
 
-def teacher_force_logp_batch(model, past_k, warm, gens, device):
+def teacher_force_logp_batch(model, past_k, warm_rows, gens, device):
     """Gop K nhanh teacher-force THANH MOT forward co grad (thay vi K lan
     rieng). Feed = warm + gen_ids[:-1], PAD PHAI ve do dai lon nhat trong
     nhom, dem bang -100 khi tinh logp -- dung Y HET quy uoc enc_batch cua
@@ -237,7 +260,7 @@ def teacher_force_logp_batch(model, past_k, warm, gens, device):
     gold = torch.full((k, gmax), -100, dtype=torch.long, device=device)
     for i, g in enumerate(gens):
         gold[i, :len(g)] = torch.tensor(g, device=device)
-    warm_b = warm.repeat(k, 1)
+    warm_b = warm_rows
     if gmax > 1:
         feed_pad = torch.zeros(k, gmax - 1, dtype=torch.long, device=device)
         for i, g in enumerate(gens):
@@ -251,6 +274,35 @@ def teacher_force_logp_batch(model, past_k, warm, gens, device):
     valid = (gold >= 0).float()
     lp = logp.gather(2, gold.clamp(min=0).unsqueeze(-1)).squeeze(-1) * valid
     return lp.sum(dim=1)   # (k,) -- tong logp moi nhanh, co grad
+
+
+def make_buckets(items, bsz, tok, shuffle=True, seed=0):
+    """Chia items thanh cac LO CUNG DO DAI PROMPT CHINH XAC.
+
+    Vi sao phai chinh xac chu khong dem: dem prompt pha attention (do duoc sai
+    96%) va pha GDN nang hon (3,7 lan) -- GDN la trang thai hoi quy chay doc
+    ca chuoi, mot token dem la doi trang thai. Nen thay vi dem, gom cac mau
+    tinh co cung do dai.
+
+    Do duoc tren dung pool gsm8k co cau truc (2073 mau, do dai 41-201 token,
+    113 do dai khac nhau): B=2 phu 97,1% mau vao lo day, B=4 phu 91,8%,
+    B=8 phu 84,5%. Phan le KHONG bi bo -- chay o lo nho hon."""
+    from collections import defaultdict
+    rng = random.Random(seed)
+    by_len = defaultdict(list)
+    for it in items:
+        by_len[len(tok(it["prompt"], truncation=True,
+                       max_length=2048)["input_ids"])].append(it)
+    buckets = []
+    for L in sorted(by_len):
+        lst = by_len[L]
+        if shuffle:
+            rng.shuffle(lst)
+        for i in range(0, len(lst), bsz):
+            buckets.append(lst[i:i + bsz])
+    if shuffle:
+        rng.shuffle(buckets)
+    return buckets
 
 
 def group_advantage(rewards, eps=1e-4):
@@ -384,6 +436,13 @@ def main():
     ap.add_argument("--val-frac", type=float, default=0.15)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--k", type=int, default=6, help="so completion/prompt")
+    ap.add_argument("--bsz", type=int, default=1,
+                    help="so MAU (prompt) gop chung mot lo. Lo chi gom cac mau "
+                         "CO DO DAI PROMPT CHINH XAC BANG NHAU (khong dem -- "
+                         "dem pha attention 96%% va GDN nang hon). So hang "
+                         "decode = bsz*k; do 2026-09-05 cho thay thoi gian moi "
+                         "buoc decode gan nhu khong doi tu 2 den 16 hang, nen "
+                         "tang bsz gan nhu mien phi. Rang buoc that la VRAM.")
     ap.add_argument("--temperature", type=float, default=0.9)
     ap.add_argument("--gen-len", type=int, default=48)
     ap.add_argument("--tbptt", type=int, default=64)
@@ -573,24 +632,34 @@ def main():
 
     import copy as _copy
 
-    def meta_for_len(t):
+    def meta_for(t, b=1):
+        """t = do dai ngu canh, b = KICH THUOC LO.
+
+        BUG DA SUA (bat khi do batch B=2 o sft_struct.py, 2026-09-05): ban dau
+        chi va chieu batch cho lop ATTENTION (k/v) ma bo sot lop GDN
+        (rec/conv) -> template giu conv_states o batch 1 trong khi dau vao
+        batch B -> 'Expected size 1 but got size 2'. build_student_past thay
+        recurrent_states bang dau ra mapper (dung batch) nhung conv_states lay
+        zeros_like TU TEMPLATE, nen template sai batch la hong."""
         m = _copy.deepcopy(base_meta)
         m["cache_ints"] = {k: (t if v == T_BASE else v)
                            for k, v in m["cache_ints"].items()}
         for lay in m["layers"]:
             lay["ints"] = {k: (t if v == T_BASE else v)
                            for k, v in lay["ints"].items()}
-            if lay["kind"] == "a":
-                for key in ("k", "v"):
-                    sh, dt = lay[key]
-                    lay[key] = (tuple(t if d == T_BASE else d for d in sh), dt)
+            keys = ("k", "v") if lay["kind"] == "a" else ("rec", "conv")
+            for key in keys:
+                sh, dt = lay[key]
+                sh = tuple(t if d == T_BASE else d for d in sh)
+                lay[key] = ((b,) + sh[1:], dt)   # chieu 0 = batch, ca a lan g
         return m
 
     def student_past_grad(cut):
-        """CO GRAD -- goi DUNG MOT LAN moi buoc, moi nhanh sau do chi
-        deep_clone_cache() tu day (van gan graph, xem docstring dau file)."""
+        """CO GRAD -- goi DUNG MOT LAN moi buoc cho CA LO, moi nhanh sau do
+        chi clone_cache_repeat_grad() tu day (van gan graph)."""
         src = prefill_tbptt(cut, args.tbptt)
-        tpl = e5.build_template_from_meta(probe_t, meta_for_len(cut.shape[1]))
+        tpl = e5.build_template_from_meta(
+            probe_t, meta_for(cut.shape[1], cut.shape[0]))
         st = e5.build_student_past(tpl, src, mapper)
         del tpl
         return st
@@ -602,6 +671,18 @@ def main():
         gold_ids = tok_t(it["gold"], add_special_tokens=False,
                          return_tensors="pt")["input_ids"][:, :gold_cap].to("cuda")
         return cut, warm, gold_ids
+
+    def enc_bucket(items):
+        """Gop B mau CUNG DO DAI PROMPT thanh mot lo. KHONG DEM: dem prompt se
+        pha attention (da do: sai 96%) va GDN (te hon 3,7 lan) -- nen lo duoc
+        chia theo do dai token CHINH XAC (make_buckets). Lo le chay B nho hon,
+        khong bo mau nao."""
+        es = [tok_t(it["prompt"], return_tensors="pt", truncation=True,
+                    max_length=2048)["input_ids"] for it in items]
+        Ls = {e.shape[1] for e in es}
+        assert len(Ls) == 1, f"lo lech do dai prompt: {sorted(Ls)}"
+        e = torch.cat(es, 0).to("cuda")
+        return e[:, :-WARM_P], e[:, -WARM_P:]
 
     import bitsandbytes as bnb
     groups = [{"params": mapper.params, "lr": args.lr},
@@ -622,32 +703,46 @@ def main():
                 ("ent", "rel", "step", "ans", "C") if args.task == "gsm8k_struct"
                 else ("C",))
         agg = {kk: [] for kk in keys}
-        for it in val_items[:n]:
-            cut, warm, _ = enc(it)
+        stop_t = torch.tensor(sorted(STOPS), device="cuda")
+        # val cung gop lo theo do dai chinh xac: 32 mau x 224 token x 95ms
+        # = ~11 phut neu chay tung mau; gop lo dua ve ~3 phut (cung co che
+        # weight-bound da do o probe_decode_speed.py).
+        for bk in make_buckets(val_items[:n], args.bsz, tok_t, shuffle=False):
+            cut, warm = enc_bucket(bk)
             src = e5.prefill_chunked(model_s, cut)
-            tpl = e5.build_template_from_meta(probe_t, meta_for_len(cut.shape[1]))
+            tpl = e5.build_template_from_meta(
+                probe_t, meta_for(cut.shape[1], cut.shape[0]))
             st = e5.build_student_past(tpl, src, mapper)
             o = model_t(input_ids=warm, past_key_values=st, use_cache=True)
             cur = o.past_key_values
             inp = o.logits[:, -1, :].argmax(-1, keepdim=True)
-            gen = [int(inp)]
-            for _ in range(args.gen_len - 1):
+            toks = [inp]
+            done = torch.isin(inp[:, 0], stop_t)
+            for t in range(args.gen_len - 1):
                 o = model_t(input_ids=inp, past_key_values=cur, use_cache=True)
                 cur = o.past_key_values
                 inp = o.logits[:, -1, :].argmax(-1, keepdim=True)
-                gen.append(int(inp))
-                if int(inp) in STOPS:
-                    break
-            txt = tok_t.decode(gen, skip_special_tokens=True)
-            if args.task == "eba":
-                s = eba.score_eba(it, txt)
-            elif args.task == "gsm8k_struct":
-                _, s = do_reward(it, txt, w)
-            else:
-                s = {"C": float(gd.score_item(it, txt))}
-            for kk in keys:
-                agg[kk].append(s[kk])
-            del st, tpl, src, cur, o
+                toks.append(inp)
+                if (t + 2) % 16 == 0:
+                    done |= torch.isin(torch.cat(toks[-16:], 1), stop_t).any(1)
+                    if bool(done.all()):
+                        break
+            for it, g in zip(bk, torch.cat(toks, 1).tolist()):
+                cutg = len(g)
+                for j, tkn in enumerate(g):
+                    if tkn in STOPS:
+                        cutg = j + 1
+                        break
+                txt = tok_t.decode(g[:cutg], skip_special_tokens=True)
+                if args.task == "eba":
+                    s = eba.score_eba(it, txt)
+                elif args.task == "gsm8k_struct":
+                    _, s = do_reward(it, txt, w)
+                else:
+                    s = {"C": float(gd.score_item(it, txt))}
+                for kk in keys:
+                    agg[kk].append(s[kk])
+            del st, tpl, src, cur, o, toks
             torch.cuda.empty_cache()
         return {kk: round(sum(v) / max(len(v), 1), 3) for kk, v in agg.items()}
 
@@ -723,26 +818,34 @@ def main():
     if args.start_step:
         print(f"NOI LAI tu buoc {args.start_step + 1}/{args.steps} "
               f"(best cu = {best:.3f})", flush=True)
+    buckets = make_buckets(train_items, args.bsz, tok_t, seed=args.seed)
+    print(f"lo train: {len(buckets)} lo tu {len(train_items)} mau "
+          f"(bsz={args.bsz}, k={args.k} -> {args.bsz * args.k} hang/decode); "
+          f"1 epoch = {len(buckets)} buoc", flush=True)
     for step in range(args.start_step + 1, args.steps + 1):
-        it = train_items[(step - 1) % len(train_items)]
-        cut, warm, gold_ids = enc(it)
+        bk = buckets[(step - 1) % len(buckets)]
+        B = len(bk)
+        cut, warm = enc_bucket(bk)
+        gold_ids = enc(bk[0])[2] if args.anchor_w > 0 else None
 
         with clock("student_past_grad"):
             st0 = student_past_grad(cut)
 
-        # pha 1: K nhanh sampling GOP LO (1 vong decode batch=K thay vi K
-        # vong rieng le -- fix goc bottleneck 11,8 tok/s, xem docstring
-        # sample_rollout_batch)
+        # pha 1: B mau x K nhanh sampling trong MOT vong decode (B*K hang).
+        # Chi phi moi buoc decode gan nhu khong doi tu 2 den 16 hang (do
+        # 2026-09-05) -> gop them mau vao lo gan nhu mien phi. Thu tu hang:
+        # hang r <-> mau r % B, nhanh r // B (do .repeat lap ca khoi B).
         with clock("sampling(pha1)"):
             branch_k = clone_cache_repeat(st0, args.k)
+            warm_rows = warm.repeat(args.k, 1)
             gens, texts = sample_rollout_batch(
-                model_t, tok_t, branch_k, warm, args.gen_len,
-                args.temperature, STOPS, args.k)
+                model_t, tok_t, branch_k, warm_rows, args.gen_len,
+                args.temperature, STOPS)
             del branch_k
         with clock("reward"):
             rewards, sub = [], []
-            for txt in texts:
-                r, s = do_reward(it, txt, w)
+            for r_i, txt in enumerate(texts):
+                r, s = do_reward(bk[r_i % B], txt, w)
                 rewards.append(r)
                 sub.append(s)
 
@@ -754,28 +857,47 @@ def main():
         # resume: tu buoc 200 chay ~500 buoc lien tuc khong lan nao dung moc
         # val/checkpoint nao ca, vi toan trung vao buoc bi bo qua). Sua bang
         # cach: KHONG continue, chi bo qua backward, van roi xuong duoi.
-        adv = group_advantage(rewards)
-        skipped = adv is None
+        # Advantage tinh RIENG TRONG NHOM K CUA TUNG MAU -- KHONG tron reward
+        # giua cac mau khac nhau trong lo (do khac de, thang diem khac nhau ->
+        # tron vao la hong dung tinh than GRPO). Mau co reward dong nhat ca
+        # nhom nhan adv = 0 (khong dong gop gradient) thay vi bo ca lo.
+        adv = [0.0] * len(rewards)
+        n_active = 0
+        for i in range(B):
+            g = group_advantage([rewards[i + j * B] for j in range(args.k)])
+            if g is None:
+                continue
+            n_active += 1
+            for j in range(args.k):
+                adv[i + j * B] = g[j]
+        skipped = n_active == 0
         pg_loss = torch.tensor(0.0)
         anchor_ce = torch.tensor(0.0)
         if skipped:
             if step % 20 == 0:
-                print(f"buoc {step}: reward dong nhat ({rewards[0]:.2f}) -> "
-                      f"bo qua gradient (VAN cham val/checkpoint neu dung moc)",
+                print(f"buoc {step}: ca {B} mau deu co reward dong nhat trong "
+                      f"nhom -> bo qua gradient (VAN cham val/checkpoint)",
                       flush=True)
         else:
-            # pha 2: K nhanh teacher-force CO grad GOP LO (1 forward batch=K,
-            # thay vi K forward rieng -- cung ky thuat da dung o pha 1)
+            # pha 2: B x K nhanh teacher-force CO grad trong MOT forward
             with clock("teacher_force(pha2)"):
                 branch_k = clone_cache_repeat_grad(st0, args.k)
-                lp_k = teacher_force_logp_batch(model_t, branch_k, warm, gens, "cuda")
+                lp_k = teacher_force_logp_batch(
+                    model_t, branch_k, warm.repeat(args.k, 1), gens, "cuda")
                 adv_t = torch.tensor(adv, device="cuda")
-                pg_loss = -(adv_t * lp_k).mean()
+                # chia cho K = trung binh trong nhom, CONG DON qua cac mau ->
+                # dung ngu nghia gradient-accumulation accum=B: do lon gradient
+                # moi mau giu nguyen nhu khi chay B=1, chi gop lai thanh 1 lan
+                # opt.step(). (Hoc phi sft_struct: accum=16 -> chi 132 lan cap
+                # nhat/epoch, model chi hoc duoc <think>; accum=4 -> 527 lan,
+                # hoc du cau truc. B=4 o day cho ~500 lan cap nhat/epoch.)
+                pg_loss = -(adv_t * lp_k).sum() / args.k
                 del branch_k
 
             anchor_ce = torch.tensor(0.0, device="cuda")
             with clock("anchor_ce"):
-                if args.anchor_w > 0 and gold_ids.shape[1] >= 1:
+                if (args.anchor_w > 0 and B == 1
+                        and gold_ids is not None and gold_ids.shape[1] >= 1):
                     branch = deep_clone_cache(st0)
                     gold_list = gold_ids[0].tolist()
                     feed = torch.cat([warm, gold_ids[:, :-1]], 1) \
