@@ -854,6 +854,7 @@ def main():
             return False
 
     best = max([v[1].get("C", -1e9) for v in results["val"]], default=-1e9)
+    n_oom = 0          # so mieng pha 2 bi bo qua vi OOM (luoi an toan)
     t_start = time.time()
     if args.start_step:
         print(f"NOI LAI tu buoc {args.start_step + 1}/{args.steps} "
@@ -947,19 +948,33 @@ def main():
                       for s in range(0, n_rows, args.tf_chunk)]
             with clock("teacher_force(pha2)+backward"):
                 for ci, (s, e_) in enumerate(chunks):
-                    idx = row_item[s:e_]
-                    branch = clone_cache_index(st0, idx)
-                    lp = teacher_force_logp_batch(
-                        model_t, branch, warm.index_select(0, idx),
-                        gens[s:e_], "cuda")
-                    loss_c = -(adv_all[s:e_] * lp).sum() / args.k
-                    # retain_graph cho moi mieng TRU mieng cuoi (graph cua st0
-                    # = mapper + 4B dung chung cho ca cac mieng). Neu con
-                    # anchor-CE phia sau thi mieng cuoi cung phai giu graph.
-                    loss_c.backward(retain_graph=(ci < len(chunks) - 1
-                                                  or need_anchor))
-                    pg_tot += float(loss_c.detach())
-                    del branch, lp, loss_c
+                    # LUOI AN TOAN OOM: do duoc 2026-09-05, dinh VRAM cua ca
+                    # buoc nam DUNG o day (pha 1 dinh 16,4GiB / pha 2 dinh
+                    # 20,35GiB tren 22,03GiB may). Bien do phu thuoc do dai
+                    # prompt (41-201 token) va do dai sinh, nen mot lo xui co
+                    # the vuot. Bo QUA mieng do (mat phan gradient cua vai
+                    # hang) van hon la giet ca luot train 500 buoc.
+                    try:
+                        idx = row_item[s:e_]
+                        branch = clone_cache_index(st0, idx)
+                        lp = teacher_force_logp_batch(
+                            model_t, branch, warm.index_select(0, idx),
+                            gens[s:e_], "cuda")
+                        loss_c = -(adv_all[s:e_] * lp).sum() / args.k
+                        # retain_graph cho moi mieng TRU mieng cuoi (graph cua
+                        # st0 = mapper + 4B dung chung cho ca cac mieng). Neu
+                        # con anchor-CE phia sau thi mieng cuoi phai giu graph.
+                        loss_c.backward(retain_graph=(ci < len(chunks) - 1
+                                                      or need_anchor))
+                        pg_tot += float(loss_c.detach())
+                        del branch, lp, loss_c
+                    except torch.cuda.OutOfMemoryError:
+                        n_oom += 1
+                        branch = lp = loss_c = None
+                        gc.collect()
+                        torch.cuda.empty_cache()
+                        print(f"buoc {step} mieng {ci+1}/{len(chunks)}: OOM -> "
+                              f"bo qua mieng (tong bo qua: {n_oom})", flush=True)
                     if args.sanity:
                         print(f"  [mem] mieng {ci+1}/{len(chunks)} "
                               f"({e_-s} hang) sau backward: "
