@@ -680,14 +680,48 @@ def run_mapped(args):
         torch.cuda.empty_cache()
         return [tok_t.decode(g, skip_special_tokens=True) for g in gen]
 
+    # --decode-same-len: chi gop cac mau CO DO DAI NGU CANH CHINH XAC BANG
+    # NHAU. Ly do: stack_students DEM TRAI attention KV bang 0 den T_max --
+    # day chinh la nguon lech da ghi nhan ("gom lo KHONG an toan cho bench
+    # sinh dai, gsm8k 320 token/mau"). Neu moi hang cung do dai thi T_max =
+    # do dai that cua tung hang -> KHONG co token dem nao -> phep tinh dong
+    # nhat voi batch 1. Van nen bat --verify-batch de co BANG CHUNG chu khong
+    # phai gia dinh (quy tac 5).
+    _len_cache = {}
+
+    def _ctx_len(it):
+        if it["id"] not in _len_cache:
+            _len_cache[it["id"]] = len(tok_t(
+                it["prompt"], truncation=True,
+                max_length=args.max_len)["input_ids"])
+        return _len_cache[it["id"]]
+
+    def make_groups(xs):
+        """Chia lo theo DUNG luat se dung luc chay that -- cong kiem phai
+        kiem chinh cai nay, khong phai mot cach gom khac."""
+        if args.decode_same_len and args.decode_batch > 1:
+            xs = sorted(xs, key=lambda it: (it["bench"], _ctx_len(it)))
+        gs, cur = [], []
+        for it in xs:
+            if cur and (it["bench"] != cur[0]["bench"]
+                        or len(cur) >= args.decode_batch
+                        or (args.decode_same_len
+                            and _ctx_len(it) != _ctx_len(cur[0]))):
+                gs.append(cur); cur = []
+            cur.append(it)
+        if cur:
+            gs.append(cur)
+        return gs
+
     # ---- CONG KIEM: batch 1 vs batch B tren cung mau ----
     if args.verify_batch and args.decode_batch > 1:
         vs = [it for it in items][:args.verify_batch]
-        by = defaultdict(list)
-        for it in vs:
-            by[it["bench"]].append(it)
         n_ok = n_bad = 0
-        for b, grp in by.items():
+        n_lo = 0
+        for grp in make_groups(vs):
+            if len(grp) == 1:
+                continue          # lo 1 hang khong kiem duoc gi
+            n_lo += 1
             got_b = run_group(grp)
             for it, tb in zip(grp, got_b):
                 t1 = run_one(it)
@@ -697,20 +731,17 @@ def run_mapped(args):
                     n_bad += 1
                     print(f"  LECH {it['id']}\n    b1={t1[:100]!r}\n"
                           f"    bB={tb[:100]!r}", flush=True)
-        print(f"cong kiem batch: {n_ok} khop / {n_bad} lech", flush=True)
+        print(f"cong kiem batch: {n_ok} khop / {n_bad} lech "
+              f"(tren {n_lo} lo nhieu hang)", flush=True)
         if n_bad:
             raise SystemExit("GOM LO SAI KET QUA — dung lai, khong dung so nay")
+        if n_lo == 0:
+            print("  CANH BAO: khong lo nao co >1 hang -> cong kiem KHONG "
+                  "kiem duoc gi. Tang --verify-batch.", flush=True)
 
     t0, n_new = time.time(), 0
     todo = [it for it in items if it["id"] not in out]
-    groups, cur_g = [], []
-    for it in todo:
-        if cur_g and (it["bench"] != cur_g[0]["bench"]
-                      or len(cur_g) >= args.decode_batch):
-            groups.append(cur_g); cur_g = []
-        cur_g.append(it)
-    if cur_g:
-        groups.append(cur_g)
+    groups = make_groups(todo)
     i = 0
     for grp in groups:
         txts = run_group(grp)
@@ -796,6 +827,13 @@ def main():
     ap.add_argument("--slice", default="")
     ap.add_argument("--decode-batch", type=int, default=1,
                     help="Gom lo o buoc decode. 1 = nhu cu. Nut co chai la batch=1 (moi token doc ~5GB trong so 4-bit tu HBM), khong phai attention (chiem 0,03% phep tinh).")
+    ap.add_argument("--decode-same-len", type=int, default=0,
+                    help="Chi gom lo cac mau CO DO DAI NGU CANH BANG NHAU. "
+                         "stack_students dem TRAI attention KV bang 0 den "
+                         "T_max -- do la nguon lech da ghi nhan tren bench "
+                         "sinh dai (gsm8k). Cung do dai => khong co token dem "
+                         "=> phep tinh dong nhat batch 1, van gom lo duoc. "
+                         "Dung KEM --verify-batch de co bang chung.")
     ap.add_argument("--verify-batch", type=int, default=0,
                     help="Chay N mau dau O CA batch 1 lan batch B roi doi chieu. Bat buoc truoc khi tin so: mot loi mask/vi tri se lam sai TOAN BO ket qua ma khong nem loi nao.")
     ap.add_argument("--benches", default="",
