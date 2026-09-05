@@ -827,6 +827,9 @@ def main():
     # chan sampling van la phan lon nhat -- do tiep truoc khi doan tiep
     # (bai hoc flash-attn: da tung toi uu SAI cho, attention chi 0,03%).
     T_ACC = {}
+    M_ACC = {}          # dinh bo nho TRONG tung pha -- them 2026-09-05 sau khi
+    # doan sai HAI LAN cho OOM nam o dau (doan logits, roi doan lop GDN forward;
+    # thuc te backward moi vo). Quy tac 5: do truoc, ket luan sau.
 
     class clock:
         def __init__(self, k):
@@ -834,12 +837,20 @@ def main():
 
         def __enter__(self):
             torch.cuda.synchronize()
+            torch.cuda.reset_peak_memory_stats()
+            self.m0 = torch.cuda.memory_allocated() / 2**30
             self.t = time.time()
             return self
 
         def __exit__(self, *a):
             torch.cuda.synchronize()
             T_ACC[self.k] = T_ACC.get(self.k, 0.0) + time.time() - self.t
+            pk = torch.cuda.max_memory_allocated() / 2**30
+            cur = torch.cuda.memory_allocated() / 2**30
+            old = M_ACC.get(self.k)
+            # giu lan TON NHAT da thay cho moi pha
+            if old is None or pk > old[1]:
+                M_ACC[self.k] = (round(self.m0, 2), round(pk, 2), round(cur, 2))
             return False
 
     best = max([v[1].get("C", -1e9) for v in results["val"]], default=-1e9)
@@ -871,6 +882,11 @@ def main():
                 model_t, tok_t, branch_k, warm_rows, args.gen_len,
                 args.temperature, STOPS)
             del branch_k
+        if args.sanity:
+            print(f"  [mem] buoc {step} B={B} hang={B*args.k} | "
+                  f"sau student_past+pha1: dang giu "
+                  f"{torch.cuda.memory_allocated()/2**30:.2f}GiB | "
+                  f"pha (m0,dinh,sau) = {M_ACC}", flush=True)
         with clock("reward"):
             rewards, sub = [], []
             for r_i, txt in enumerate(texts):
@@ -944,6 +960,12 @@ def main():
                                                   or need_anchor))
                     pg_tot += float(loss_c.detach())
                     del branch, lp, loss_c
+                    if args.sanity:
+                        print(f"  [mem] mieng {ci+1}/{len(chunks)} "
+                              f"({e_-s} hang) sau backward: "
+                              f"{torch.cuda.memory_allocated()/2**30:.2f}GiB "
+                              f"dinh {torch.cuda.max_memory_allocated()/2**30:.2f}"
+                              f"GiB", flush=True)
             pg_loss = torch.tensor(pg_tot)
 
             anchor_ce = torch.tensor(0.0, device="cuda")
