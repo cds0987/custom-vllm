@@ -409,6 +409,14 @@ def main():
     ap.add_argument("--out", default="/content/eba_grpo_v1")
     ap.add_argument("--hf-repo", default="gunnybd01/qwen35-kv-mapper-4b-27b")
     ap.add_argument("--hf-prefix", default="eba_grpo_v1")
+    ap.add_argument("--start-step", type=int, default=0,
+                    help="NOI LAI sau khi Colab recycle: bat dau tu buoc N thay "
+                         "vi 1. Vong lap lay item theo (step-1) %% len(train) "
+                         "nen dat dung N se di TIEP tu cho da dung, khong lap "
+                         "lai phan da hoc. Dung kem --init-mapper tro vao "
+                         "checkpoint cuoi. Can vi 1 epoch RL ~13 gio ma phien "
+                         "Colab khong song lau vay (user chon huong 1: chay du "
+                         "1 epoch, noi qua nhieu phien).")
     ap.add_argument("--mapper-ckpt", type=int, default=1,
                     help="1 = tinh lai map_attn trong backward thay vi giu "
                          "activation fp32 (~0,5GB/1K ctx). Can cho task "
@@ -644,6 +652,18 @@ def main():
         return {kk: round(sum(v) / max(len(v), 1), 3) for kk, v in agg.items()}
 
     results = {"args": vars(args), "val": [], "train": []}
+    # NOI LAI: giu lai lich su val/train cua cac phien truoc, neu khong moi lan
+    # recycle se xoa sach duong cong da do duoc.
+    _rp = out / "results.json"
+    if args.start_step and _rp.exists():
+        try:
+            old = json.loads(_rp.read_text())
+            results["val"] = old.get("val", [])
+            results["train"] = old.get("train", [])
+            print(f"noi lai lich su: {len(results['val'])} moc val, "
+                  f"{len(results['train'])} moc train", flush=True)
+        except Exception as ex:
+            print(f"khong doc duoc results.json cu: {type(ex).__name__}", flush=True)
 
     def save_results():
         (out / "results.json").write_text(json.dumps(results, indent=1))
@@ -698,9 +718,12 @@ def main():
             T_ACC[self.k] = T_ACC.get(self.k, 0.0) + time.time() - self.t
             return False
 
-    best = -1e9
+    best = max([v[1].get("C", -1e9) for v in results["val"]], default=-1e9)
     t_start = time.time()
-    for step in range(1, args.steps + 1):
+    if args.start_step:
+        print(f"NOI LAI tu buoc {args.start_step + 1}/{args.steps} "
+              f"(best cu = {best:.3f})", flush=True)
+    for step in range(args.start_step + 1, args.steps + 1):
         it = train_items[(step - 1) % len(train_items)]
         cut, warm, gold_ids = enc(it)
 
@@ -784,7 +807,7 @@ def main():
                                                 key=lambda x: -x[1]))
             print(f"buoc {step}/{args.steps} pg={pg_loss.item():.4f} "
                   f"anchor_ce={anchor_ce.item():.4f} reward_tb={mean_r:.3f} "
-                  f"C_tb={mean_c:.3f} {(time.time()-t_start)/step:.2f}s/buoc "
+                  f"C_tb={mean_c:.3f} {(time.time()-t_start)/max(step-args.start_step,1):.2f}s/buoc "
                   f"peak={gib():.2f}GiB", flush=True)
             print(f"    thoi gian: {tot/10:.2f}s/buoc do duoc | {share}",
                   flush=True)
@@ -792,7 +815,7 @@ def main():
 
         if args.sanity and step >= args.sanity:
             print(f"SANITY xong {step} buoc, peak={gib():.2f}GiB, "
-                  f"{(time.time()-t_start)/step:.2f}s/buoc", flush=True)
+                  f"{(time.time()-t_start)/max(step-args.start_step,1):.2f}s/buoc", flush=True)
             print("EBA_GRPO_SANITY_EXIT", flush=True)
             return
 
