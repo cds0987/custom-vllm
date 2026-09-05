@@ -294,7 +294,12 @@ def teacher_force_logp_batch(model, past_k, warm_rows, gens, device):
     else:
         feed = warm_b
     o = model(input_ids=feed, past_key_values=past_k, use_cache=True)
-    logp = torch.log_softmax(o.logits[:, WARM_P - 1:WARM_P - 1 + gmax].float(), -1)
+    # dtype=float32 THAY CHO .float() truoc khi log_softmax: ket qua so hoc
+    # y het (van tinh o fp32), nhung KHONG tao them mot ban sao fp32 cua
+    # logits (rows x gmax x 248k = 222MB/hang o gmax=224) chi de vut di.
+    # Pha nay la dinh VRAM cua ca vong (do 2026-09-05: 20,35/22,03 GiB).
+    logp = torch.log_softmax(o.logits[:, WARM_P - 1:WARM_P - 1 + gmax], -1,
+                             dtype=torch.float32)
     valid = (gold >= 0).float()
     lp = logp.gather(2, gold.clamp(min=0).unsqueeze(-1)).squeeze(-1) * valid
     return lp.sum(dim=1)   # (k,) -- tong logp moi nhanh, co grad
