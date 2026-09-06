@@ -79,7 +79,8 @@ run_rl () {   # $1=bsz $2=k $3=args them $4=log
     --bsz "$1" --k "$2" --tf-chunk "$TF_CHUNK" \
     --gen-len "$GEN_LEN" --gold-cap 320 \
     --gsm-limit 0 --anchor-w 0 \
-    --val-every 100 --val-n 32 --snapshot-every 200 \
+    --val-every "${VAL_EVERY:-100}" --val-n 32 \
+    --snapshot-every "${SNAP_EVERY:-200}" \
     --out "/content/$OUT" --hf-prefix "$OUT" \
     $3 2>&1 | tee "$4"
   return ${PIPESTATUS[0]}
@@ -105,7 +106,9 @@ if [ "${PROBE:-0}" = "1" ]; then
 fi
 
 if [ "${GO:-0}" = "1" ]; then
-  ARGS="--steps $STEPS --sanity 0"
+  # EXTRA_ARGS: cho phep noi lai sau recycle (--start-step + --init-* tro vao
+  # snapshot). De rong khi chay moi.
+  ARGS="--steps $STEPS --sanity 0 ${EXTRA_ARGS:-}"
 else
   # sanity dai hon 5 buoc khi do bo nho: dinh VRAM phu thuoc DO DAI PROMPT
   # (41-201 token) va do dai sinh ra, 5 buoc de trung toan mau ngan -> bao
