@@ -35,7 +35,13 @@ def main():
     ap.add_argument("--n", type=int, default=30)
     ap.add_argument("--max-len", type=int, default=2048)
     ap.add_argument("--gen-len", type=int, default=320)
+    ap.add_argument("--items", default="/content/eval_big_items.json",
+                    help="tap de. Mac dinh tap niem phong cu; dua "
+                         "/content/gsm_sealed.json de dung tap 250 mau moi.")
     ap.add_argument("--out", default="/content/logs/oracle_ablation.json")
+    ap.add_argument("--hf-repo", default="gunnybd01/qwen35-kv-mapper-4b-27b")
+    ap.add_argument("--hf-name", default="",
+                    help="ten file tren HF (trong evalbig/). Rong = khong day.")
     args = ap.parse_args()
 
     sys.path.insert(0, str(pathlib.Path(__file__).parent))
@@ -45,9 +51,10 @@ def main():
 
     WARM_P = 5
 
-    items = json.loads(pathlib.Path("/content/eval_big_items.json").read_text())
+    items = json.loads(pathlib.Path(args.items).read_text())
     gsm = [it for it in items if it["bench"] == "gsm8k"][:args.n]
-    print(f"dung {len(gsm)} mau gsm8k niem phong", flush=True)
+    assert gsm, f"khong co mau gsm8k nao trong {args.items}"
+    print(f"dung {len(gsm)} mau gsm8k niem phong tu {args.items}", flush=True)
 
     # ---- 4B: prefill toan bo, giu cache tren RAM (n nho, khong can spill) ----
     tok_s, model_s = e5.load_4bit(args.src_model)
@@ -223,10 +230,26 @@ def main():
     print("    -> XAC NHAN: GDN mapped la nut that that, attn mapped du tot")
     print("  Ca C lan D deu khong len gan A -> GDN khong phai nut that DUY NHAT")
     print("  C len ro rang ma D khong -> attn mapped moi la van de (bat ngo)")
+    print("\nCAU HOI CUA LOT NAY (2026-09-06): C = TRAN cua moi phuong phap")
+    print("  HUAN LUYEN tren duong ong hien tai. sft_struct_v3 dang o 22,0%")
+    print("  tren 250 mau niem phong. Neu C ~ 25% thi du dia con lai chi ~3")
+    print("  diem -> ngung tinh chinh RL, chuyen sang co che (GDN).")
 
-    out = {"results": results, "texts": texts, "n": len(gsm)}
+    out = {"results": results, "texts": texts, "n": len(gsm),
+           "ckpt": args.mapper, "items": args.items}
     pathlib.Path(args.out).write_text(json.dumps(out, ensure_ascii=False))
     print(f"\nda ghi {args.out}")
+    if args.hf_name:
+        # Quy tac 6d: ket qua nao cung phai len HF trong CUNG PHIEN.
+        try:
+            import os
+            from huggingface_hub import HfApi
+            HfApi(token=os.environ.get("HF_TOKEN")).upload_file(
+                path_or_fileobj=args.out, repo_id=args.hf_repo,
+                path_in_repo=f"evalbig/{args.hf_name}")
+            print(f"HF-UP evalbig/{args.hf_name}")
+        except Exception as ex:
+            print(f"HF-UP FAIL: {type(ex).__name__}: {ex}")
 
 
 if __name__ == "__main__":
