@@ -7,6 +7,50 @@ Cập nhật: 2026-09-05.
 
 ## Trạng thái hiện tại
 
+- **🏆 CẢI TIẾN CÓ Ý NGHĨA THỐNG KÊ ĐẦU TIÊN CỦA CHIẾN DỊCH gsm8k
+  (2026-09-06): ĐỊNH DẠNG CÓ CẤU TRÚC + SFT, không phải RL.** Hướng user
+  chốt: bắt 9B tự sinh quỹ đạo `<think>` → `ENTITIES:` → `STEPS:` →
+  `Final Answer:` (`gen_struct_gold.py`, lọc 2 tầng: parse được VÀ đáp số
+  đúng → 2157 mẫu), rồi SFT cho mapper quen phân phối đó (`sft_struct.py`,
+  1 epoch 2125 bước, parse 0% → 93,8%), rồi RL 4 reward phân rã trên chính
+  định dạng đó (`gsm_struct.py` + `eba_grpo.py --task gsm8k_struct`).
+
+  **Niêm phong 250 mẫu (gsm8k split `test`, rò rỉ 0/250, decode batch 1,
+  `run_struct_sealed.sh`)**:
+
+  | checkpoint | niêm phong 250 | nhánh chấm |
+  |---|---|---|
+  | **`sft_struct_v3` (SFT có cấu trúc)** | **55/250 = 22,0%** | final 54 |
+  | `gsm_struct_rl_v2/best` (+RL) | 51/250 = 20,4% | final 51 |
+  | `gsm_grpo_v1c` (kỷ lục cũ) | 29/250 = 11,6% | final 29 |
+  | *trần self-9B* | *89,0%* | |
+
+  **McNemar**: `sft_struct_v3` vs `gsm_grpo_v1c` — lệch 39-13, χ²=12,02,
+  **p=0,0005 → CÓ ý nghĩa thống kê** (mọi lần trước chỉ tới p=0,11-0,16).
+  `sft_struct_v3` vs `gsm_struct_rl_v2` — lệch 26-22, χ²=0,19, **p=0,665 →
+  RL KHÔNG thêm gì**, dù hai bên bất đồng ở 48/250 mẫu. VAL nội bộ của RL
+  trôi xuống đều suốt epoch (C 0,344 bước 100 → 0,125 bước 508; `rel` đứng
+  im 0,72-0,77) — RL bão hoà tức thì rồi hỏng dần. **Lần thứ tư RL bão hoà
+  sớm trên val nội bộ** (EBA, gsm, và giờ struct). Checkpoint + kết quả
+  per-item trên HF (`sft_struct_v3/`, `gsm_struct_rl_v2/`,
+  `sealed_*_b2/`).
+
+  **Đọc cơ chế**: lỗi gốc đã chẩn đoán là "gán SAI số vào đúng thực thể";
+  định dạng có cấu trúc BUỘC model viết ràng buộc số ra trước khi tính, nên
+  phải cam kết sớm thay vì trôi. RL trên cùng định dạng không thêm tín hiệu.
+
+- **⚠️ LỖI ĐO ĐẠC ĐÃ VÁ (2026-09-06) — cache 4B dùng chung nhầm giữa các
+  checkpoint**: `eval_big.py` đặt tên thư mục spill chỉ là `lora` vs `base`,
+  KHÔNG phân biệt LoRA-4B nào → checkpoint chạy sau âm thầm dùng lại cache 4B
+  của checkpoint chạy trước = đo "mapper của A trên cache 4B của B", không lỗi
+  không cảnh báo. Đúng khi so các biến thể mapper dùng CHUNG một LoRA-4B (giả
+  định cũ), sai hẳn khi so checkpoint từ các lượt train khác nhau. Vá: băm nội
+  dung file adapter 4B vào tên spill + `assert` dừng hẳn nếu không thấy file
+  trọng số (sha1 của rỗng là hằng số → mọi checkpoint cùng tên). **Mọi số so
+  sánh nhiều-checkpoint đo TRƯỚC 2026-09-06 đều cần soi lại bằng con mắt này.**
+  Số 22,0% của `sft_struct_v3` đã chạy lại độc lập sau khi vá: **trùng khít
+  55/250, cùng phân rã 54 final + 1 so_cuoi**.
+
 - **⚡ TĂNG TỐC RL 2,25× — "lấy tốc độ vLLM ngay trong process" (2026-09-05,
   user hỏi vì sao không dùng vLLM offline cho GRPO như Unsloth)**.
   vLLM không cắm thẳng được: rollout phải bắt đầu từ **cache do mapper sinh**
@@ -56,67 +100,20 @@ Cập nhật: 2026-09-05.
   cắt 2157→1200), `log_softmax(dtype=fp32)` thay `.float()` (bit-identical,
   bỏ 1 bản sao 222MB/hàng).
 
-- **🎯 EBA + GRPO — RL CÓ CẢI TIẾN THẬT, XÁC NHẬN THỐNG KÊ (2026-09-04)**:
-  hướng do user đề xuất — sinh dữ liệu tổng hợp Entity-Binding-Arithmetic
-  (thực thể+số+distractor, ground-truth 100% chắc chắn không qua model,
-  `eba_gen.py`, 3 lớp điểm A=nhớ giá trị/B=không lẫn distractor/C=đáp số
-  cuối đúng) rồi train GRPO 2 pha kiểu Unsloth (SFT-warm-start từ
-  `joint49cc` + RL, K=6 nhóm, anchor-CE thay reference model, `eba_grpo.py`)
-  — nhắm thẳng lỗi "gán SAI con số vào đúng thực thể" đã chẩn đoán ở gsm8k
-  phía dưới. Scale-up 2000 item/1000 bước = `eba_grpo_v2c`.
-
-  **So dứt điểm n=200 held-out (seed=99999≠seed train) + McNemar**:
-
-  | checkpoint | A | B | C |
-  |---|---|---|---|
-  | baseline `joint49cc` (SFT thuần) | 0,365 | 0,110 | 0,310 |
-  | `eba_grpo_v2c/best` (SFT+GRPO) | 0,762 | 0,470 | **0,630** |
-  | `eba_grpo_v2c/last` (bước 1000) | 0,797 | 0,500 | **0,650** |
-
-  best/last vs baseline: McNemar **p<0,0001** (χ²=52,2/59,1) — RL cải thiện
-  THẬT gấp đôi C, không phải nhiễu. best vs last: p=0,29 — train quá bước
-  ~150 không thêm lợi (val nội bộ dao động 0,73-0,80 suốt 850 bước, bão hoà
-  sớm). Checkpoint + kết quả lên HF `eba_grpo_v2c/` + `evalbig/eba_*`.
-
-  **NHƯNG đo trên gsm8k THẬT thì `eba_grpo_v2c` KHÔNG cải thiện** (TRAIN
-  6,7%/NIÊM PHONG 4,0%, kém hơn `joint49bb` 8,0%) — cải tiến trên proxy EBA
-  KHÔNG chuyển giao sang gsm8k thật. → **gộp `eba_grpo.py` thành 1 pipeline
-  chung** (cờ `--task {eba,gsm8k}`, cùng engine RL, đổi nguồn dữ liệu+reward)
-  rồi RL TRỰC TIẾP trên gsm8k thật + ground-truth CoT do 9B tự sinh có sẵn
-  (`pseudo_gold_gsm2.json`, chỉ giữ quỹ đạo 9B làm ĐÚNG — không dạy mapper
-  suy luận sai). Warm-start từ `eba_grpo_v2c/best`. **`gsm_grpo_v1c`, 400
-  bước, K=3, gen_len=200** (đã vá `sample_rollout_batch` dừng sớm cả vòng
-  lặp khi mọi nhánh gặp stop token → nhanh 2,67× — 21,7s→8,1s/bước, AN TOÀN
-  tuyệt đối vì phần bỏ qua vốn bị trim sau đó, không đổi output). Học phí:
-  K=4 OOM ở bước ~10 (VRAM 22,02/22,03GiB) → hạ K=3 (an toàn hơn, không đụng
-  gen_len/gold_cap theo yêu cầu user). VAL nội bộ bão hoà dao động 0,07-0,23
-  (đỉnh bước 300).
-
-  **Đo dứt điểm gsm8k THẬT (`run_gsm_traintest.sh`)**:
-
-  | checkpoint | TRAIN (60) | NIÊM PHONG (100) |
-  |---|---|---|
-  | `joint49bb` (SFT thuần) | 8,3% | 8,0% |
-  | `joint49cc` (SFT thuần) | 13,3% | 4,0% |
-  | `eba_grpo_v2c` (RL trên EBA proxy) | 6,7% | 4,0% |
-  | **`gsm_grpo_v1c` (RL trực tiếp gsm8k)** | **10,0%** | **10,0%** |
-
-  Train≈test (không quá khớp) — cao nhất chiến dịch gsm8k tới nay, vượt cả
-  2 baseline SFT và nhánh RL-proxy. Checkpoint lên HF `gsm_grpo_v1c/`.
-
-  **McNemar (2026-09-04, đọc trực tiếp 3 file JSON per-item trên HF, n=100
-  giao cả 3 checkpoint)**: `gsm_grpo_v1c` vs `joint49cc` — 9 thắng/3 thua,
-  χ²=2,08, **p=0,149**; vs `eba_grpo_v2c` — 8 thắng/2 thua, χ²=2,50,
-  **p=0,114**. **CHƯA đạt ý nghĩa thống kê ở n=100** (dù xu hướng thắng rõ
-  ~3-4:1) — đọc trung thực: không phải "chưa cải thiện", là "cải thiện có
-  khả năng thật nhưng cỡ mẫu chưa đủ để khẳng định". Cần niêm phong lớn
-  hơn (n≥200) ở lượt sau để phân xử dứt điểm, giống cách đã làm với EBA.
-  Đã sửa `save_ckpt()` gộp upload thành 1 commit/checkpoint (trước là
-  ~8-10 file riêng lẻ → dính rate-limit 60 commit/giờ ở `eba_grpo_v2c`,
-  KHÔNG phải lỗi đăng nhập như nghi ban đầu) — sẵn sàng cho lần train dài.
-  Học phí: bug `continue` nhảy qua cả val/checkpoint khi reward đồng nhất
-  trong nhóm K (đã vá, commit `5a02e1e`); rate-limit HF 60 commit/giờ khi
-  save nhiều file riêng lẻ (CHƯA vá — cần `upload_folder` cho lần train sau).
+- **EBA + GRPO (2026-09-04, chi tiết `STATUS.md`) — bài học về PROXY.**
+  Sinh dữ liệu tổng hợp Entity-Binding-Arithmetic (ground-truth không qua
+  model) rồi GRPO 2 pha: trên chính EBA, RL cải thiện **thật và mạnh** —
+  C 0,310 → 0,630/0,650, McNemar **p<0,0001**. **NHƯNG đo trên gsm8k THẬT
+  thì KHÔNG chuyển giao** (niêm phong 4,0%, kém hơn `joint49bb` 8,0%).
+  → gộp `eba_grpo.py` thành 1 pipeline chung (`--task {eba,gsm8k,gsm8k_struct}`)
+  rồi RL TRỰC TIẾP trên gsm8k thật (`gsm_grpo_v1c`, 400 bước, K=3): TRAIN
+  10,0% / NIÊM PHONG 10,0% (train≈test, cao nhất chiến dịch **lúc đó**;
+  nay đã bị `sft_struct_v3` 22,0% vượt với p=0,0005 — xem đầu file).
+  McNemar hồi đó vs `joint49cc` p=0,149 và vs `eba_grpo_v2c` p=0,114 —
+  **chưa đủ bằng chứng ở n=100**, đúng lý do sau này chuyển sang n=250.
+  Học phí kỹ thuật: bug `continue` nhảy qua cả val/checkpoint khi reward
+  đồng nhất trong nhóm K (vá ở `5a02e1e`); rate-limit HF 60 commit/giờ khi
+  save nhiều file riêng lẻ → `save_ckpt()` gộp 1 commit/checkpoint.
 
 - **🎯 MỤC TIÊU HIỆN TẠI (user chốt 2026-09-01): CHỈ `suite_swe` (đầy đủ) +
   `gsm8k`.** `joint49bb` (warm-start từ `joint49z`, drop hết các bộ khác kể

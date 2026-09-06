@@ -3049,3 +3049,84 @@ EBA_GRPO_OOM_QUA_NHIEU) neu >20% mieng OOM trong 20 buoc dau.
 - log_softmax(x.float()) tao THEM mot ban sao fp32 (222 MB/hang o gmax=224)
   chi de vut di. Doi sang log_softmax(x, dtype=torch.float32): ket qua
   bit-identical (da kiem), bo han ban sao do.
+
+## 2026-09-06 — PHAN XU NIEM PHONG: dinh dang CO CAU TRUC thang, RL khong
+
+### Ket qua (250 mau gsm8k split `test`, ro ri 0/250, decode batch 1)
+
+    sft_struct_v3      (SFT co cau truc)  55/250 = 22,0%   final 54 / so_cuoi 1
+    gsm_struct_rl_v2   (+RL 4 reward)     51/250 = 20,4%   final 51
+    gsm_grpo_v1c       (ky luc cu)        29/250 = 11,6%   final 29
+    tran self-9B                                   89,0%
+
+McNemar (mcnemar.py, nhi thuc CHINH XAC khi so ca lech <25, Yates khi >=25):
+
+    sft_struct_v3 vs gsm_grpo_v1c    : lech 39-13  chi2=12,02  p=0,0005  CO Y NGHIA
+    gsm_struct_rl_v2 vs gsm_grpo_v1c : lech 35-13  chi2= 9,19  p=0,0024  CO Y NGHIA
+    sft_struct_v3 vs gsm_struct_rl_v2: lech 26-22  chi2= 0,19  p=0,665   KHONG
+
+=> Cai tien DAU TIEN cua ca chien dich gsm8k dat y nghia thong ke. Truoc do
+moi lan deu dung o p=0,11-0,16.
+=> RL KHONG them gi tren dinh dang nay, du hai ben bat dong o 48/250 mau
+(chung khac nhau that, chi la dung bang nhau).
+
+### Duong cong VAL cua RL: troi XUONG deu suot epoch
+
+    buoc  100: ent -1,558  rel 0,737  step 0,327  ans 0,278  C 0,344  <- ky luc
+    buoc  200: ent -0,323  rel 0,719  step 0,308  ans 0,175  C 0,281
+    buoc  300: ent -0,864  rel 0,768  step 0,355  ans 0,200  C 0,281
+    buoc  400: ent -1,107  rel 0,737  step 0,211  ans 0,113  C 0,219
+    buoc  500: ent -0,394  rel 0,719  step 0,174  ans 0,125  C 0,125
+    buoc  508: ent -1,395  rel 0,719  step 0,198  ans 0,125  C 0,125
+
+`rel` DUNG IM ca epoch (0,72-0,77) -- RL khong day them duoc gi cho phan
+trich xuat. `ent` dao dong khong xu huong (o moc 200 tung tuong la tien bo,
+hai moc sau bac bo). Lan thu TU RL bao hoa som tren val noi bo (EBA 850 buoc,
+gsm, va gio struct).
+
+### Doc co che
+Loi goc da chan doan (2026-09-02): "lay DUNG thuc the nhung gan SAI con so".
+Dinh dang co cau truc BUOC model viet rang buoc so ra truoc khi tinh
+(ENTITIES: ten = SO), nen no phai cam ket som thay vi troi. Do la thu tao ra
+buoc nhay -- khong phai RL, khong phai reward phan ra, khong phai phat nang
+sai entity (PENALTY_WRONG_ENTITY=-8).
+
+### BA LOI DO DAC BAT DUOC TRONG LOT NAY
+
+1. **Cache 4B dung chung nham giua cac checkpoint** (nang nhat). eval_big dat
+   ten thu muc spill chi la `lora` vs `base` -> khong phan biet LoRA-4B nao ->
+   checkpoint chay sau am tham dung lai cache cua checkpoint chay truoc = do
+   "mapper cua A tren cache 4B cua B". Khong loi, khong canh bao. Bat duoc khi
+   thay dong "dung lai 200 cache 4B da co" luc gsm_grpo_v1 khoi dong. Va: bam
+   NOI DUNG file adapter 4B vao ten spill (`spill_lora_1f9b14aa0f` vs
+   `spill_lora_7146635626`) + assert dung han neu khong thay file trong so
+   (sha1 cua rong la hang so -> moi checkpoint cung ten, tai lap bug ma con
+   kho thay hon). Da chay lai sft_struct_v3 doc lap sau khi va: TRUNG KHIT
+   55/250, cung phan ra 54 final + 1 so_cuoi.
+   **Moi so so-sanh-nhieu-checkpoint do TRUOC 2026-09-06 can soi lai.**
+
+2. **Nhanh du phong cua grader** (bat bang doc tay, quy tac 15). Grader gsm8k
+   xet: oxed -> "Final Answer:" -> SO CUOI con lai sau khi bo <think>. Voi
+   dinh dang co cau truc, dau ra bi CAT giua khoi STEPS ma so cuoi tinh co
+   dung van duoc 1 diem du chua bao gio viet Final Answer. Va: them
+   `score_how()` ghi lai NHANH nao cham diem cho tung mau + luu 1200 ky tu
+   thay 400. Do that: 134/135 diem den tu `final` -> lo co that nhung khong
+   dang ke o day. test_score_how.py 6/6 giu rang buoc
+   (score_how != "") <=> (score_text == 1).
+
+3. **Gom lo decode lam doi DIEM ~1/9 mau.** --verify-batch bat duoc o
+   gsm_struct_rl_v2 (8 khop/1 lech) va DUNG luot chay. Hai dau ra lech co
+   tien to giong het >=100 ky tu roi moi tach -> lat argmax do thu tu cong don
+   bf16 doi theo kich thuoc lo, khong phai loi mask. Nhung ty le do cung co
+   voi hieu ung can do -> phai dung batch 1 cho phep so cap. (Da them
+   --decode-same-len de gom lo KHONG con token dem; van khong du, vi nguon
+   lech la so hoc chu khong phai dem.)
+
+### Hai bay van hanh lap lai
+- `pgrep -f`/`pkill -f` KHOP CHINH chuoi lenh cua cell goi no. Dinh 3 lan
+  trong lot nay (vong cho "doi eval_big xong" cho vinh vien vi tu khop).
+  Cach dung: `pgrep -f 'eval_big[.]py'` -- regex khop "eval_big.py" con chuoi
+  lenh chua "eval_big[.]py" thi khong khop.
+- Runtime recycle 2 lan giua chung. Khong mat gi vi eval_big day ket qua len
+  HF moi 25 mau va checkpoint da len HF theo quy tac 6d. Da gom mot CELL PHUC
+  HOI tu chua (dat token + clone repo + phong lai, idempotent).
