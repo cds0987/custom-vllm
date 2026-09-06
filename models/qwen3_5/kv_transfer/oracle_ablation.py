@@ -178,8 +178,55 @@ def main():
     ebmod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(ebmod)
 
-    results = {"self": {}, "mapped": {}, "attn_that": {}, "gdn_that": {}}
-    texts = {"self": {}, "mapped": {}, "attn_that": {}, "gdn_that": {}}
+    BIEN = ("self", "mapped", "attn_that", "gdn_that")
+    results = {k: {} for k in BIEN}
+    texts = {k: {} for k in BIEN}
+
+    # NOI LAI (them 2026-09-06 sau 4 lan Colab recycle trong mot ngay): truoc
+    # day chi ghi ket qua o CUOI -> job 1,7 gio khong bao gio ve dich giua hai
+    # lan recycle, moi lan mat sach. Gio ghi + day HF moi 10 mau va bo qua mau
+    # da co diem.
+    def _tai_lai():
+        p = pathlib.Path(args.out)
+        if not p.exists() and args.hf_name:
+            try:
+                import os
+                from huggingface_hub import hf_hub_download
+                p = pathlib.Path(hf_hub_download(
+                    args.hf_repo, f"evalbig/{args.hf_name}",
+                    token=os.environ.get("HF_TOKEN")))
+            except Exception as ex:
+                print(f"HF chua co ket qua do dang ({type(ex).__name__})", flush=True)
+                return
+        if not p.exists():
+            return
+        try:
+            old = json.loads(p.read_text())
+            for k in BIEN:
+                results[k].update(old.get("results", {}).get(k, {}))
+                texts[k].update(old.get("texts", {}).get(k, {}))
+            print(f"NOI LAI: da co {len(results['self'])} mau", flush=True)
+        except Exception as ex:
+            print(f"khong doc duoc ket qua cu: {type(ex).__name__}", flush=True)
+
+    def _ghi():
+        out = {"results": results, "texts": texts, "n": len(results["self"]),
+               "ckpt": args.mapper, "items": args.items}
+        pathlib.Path(args.out).write_text(json.dumps(out, ensure_ascii=False))
+        if args.hf_name:
+            try:
+                import os
+                from huggingface_hub import HfApi
+                HfApi(token=os.environ.get("HF_TOKEN")).upload_file(
+                    path_or_fileobj=args.out, repo_id=args.hf_repo,
+                    path_in_repo=f"evalbig/{args.hf_name}")
+            except Exception as ex:
+                print(f"HF-UP FAIL: {type(ex).__name__}: {ex}", flush=True)
+
+    _tai_lai()
+    xong = set(results["self"]) & set(results["gdn_that"])
+    gsm = [it for it in gsm if it["id"] not in xong]
+    print(f"con {len(gsm)} mau phai chay", flush=True)
 
     for i, it in enumerate(gsm):
       with torch.no_grad():
@@ -217,10 +264,17 @@ def main():
         torch.cuda.empty_cache()
 
         if (i + 1) % 5 == 0:
-            print(f"  {i+1}/{len(gsm)} xong", flush=True)
+            n_ = len(results["self"])
+            tl = {k: sum(results[k].values()) for k in BIEN}
+            print(f"  {i+1}/{len(gsm)} xong (tong {n_}) | " +
+                  " ".join(f"{k}={100*v/max(n_,1):.0f}%" for k, v in tl.items()),
+                  flush=True)
+        if (i + 1) % 10 == 0:
+            _ghi()
 
+    _ghi()
     print(f"\n{'bien the':14} {'dung':>6} {'n':>4} {'ty le':>8}")
-    for k in ("self", "mapped", "attn_that", "gdn_that"):
+    for k in BIEN:
         h = sum(results[k].values())
         n = len(results[k])
         print(f"{k:14} {h:6} {n:4} {100*h/n:7.1f}%")
@@ -235,21 +289,11 @@ def main():
     print("  tren 250 mau niem phong. Neu C ~ 25% thi du dia con lai chi ~3")
     print("  diem -> ngung tinh chinh RL, chuyen sang co che (GDN).")
 
-    out = {"results": results, "texts": texts, "n": len(gsm),
-           "ckpt": args.mapper, "items": args.items}
-    pathlib.Path(args.out).write_text(json.dumps(out, ensure_ascii=False))
-    print(f"\nda ghi {args.out}")
-    if args.hf_name:
-        # Quy tac 6d: ket qua nao cung phai len HF trong CUNG PHIEN.
-        try:
-            import os
-            from huggingface_hub import HfApi
-            HfApi(token=os.environ.get("HF_TOKEN")).upload_file(
-                path_or_fileobj=args.out, repo_id=args.hf_repo,
-                path_in_repo=f"evalbig/{args.hf_name}")
-            print(f"HF-UP evalbig/{args.hf_name}")
-        except Exception as ex:
-            print(f"HF-UP FAIL: {type(ex).__name__}: {ex}")
+    # _ghi() da ghi file + day HF o tren (dung len(results) chu KHONG dung
+    # len(gsm) -- sau khi loc mau da xong thi gsm chi con phan CON LAI, ghi
+    # nham se de "n" sai va de len ket qua tot).
+    print(f"\nda ghi {args.out} (n={len(results['self'])})")
+    print("ORACLE_ABLATION_EXIT")
 
 
 if __name__ == "__main__":
