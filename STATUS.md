@@ -3130,3 +3130,39 @@ sai entity (PENALTY_WRONG_ENTITY=-8).
 - Runtime recycle 2 lan giua chung. Khong mat gi vi eval_big day ket qua len
   HF moi 25 mau va checkpoint da len HF theo quy tac 6d. Da gom mot CELL PHUC
   HOI tu chua (dat token + clone repo + phong lai, idempotent).
+
+## 2026-09-06 (tiep) — ORACLE ABLATION tren dinh dang CO CAU TRUC (n=100)
+
+    bien the      dung   n   ty le
+    self            93 100   93,0%     <- tran that
+    mapped          22 100   22,0%     <- khop DUNG sft_struct_v3 (250 mau)
+    attn_that       43 100   43,0%     <- attn THAT + GDN mapper
+    gdn_that         3 100    3,0%     <- attn mapper + GDN THAT
+
+Checkpoint: sft_struct_v3/mapper_best.pt. Tap: 100 mau dau cua gsm_sealed.json.
+Ket qua: HF evalbig/oracle_struct100.json.
+
+### Claude DOAN SAI, so do bac bo
+Doan: "tran huan luyen ~25% (theo oracle cu 26,7%), du dia con ~3 diem -> ngung
+tinh chinh RL, chuyen sang co che GDN". SAI. Do that: 43,0% -> du dia ~21 diem.
+Nguyen nhan doan sai: lay tran cua oracle CU (do 2026-09-02 tren duong ong CHUA
+co dinh dang cau truc, khi do mapped = 0,0%) ap thang cho he MOI. Dinh dang co
+cau truc nang CA HAI dau: mapped 0 -> 22%, attn_that 26,7 -> 43%. Bai hoc: tran
+do tren mot cau hinh KHONG chuyen sang cau hinh khac; phai do lai.
+
+### Doc co che
+- Nut that lon nhat hien nay la ANH XA ATTENTION, khong phai GDN: sua attn
+  thanh hoan hao mua duoc +21 diem. Attention mapper LA thu duoc huan luyen ->
+  phia huan luyen van con duong di (nen luot B dang gia chay).
+- gdn_that 3,0% tai lap DOC LAP lan 2 (lan 1: 3,3% ngay 2026-09-02): cam GDN
+  THAT canh attn mapped lam 9B SUY BIEN chu khong duoc cuu. Hai nua cache phai
+  NHAT QUAN voi nhau -- day khong con la quan sat le.
+- self 93,0% (doi chieu 89,0% da biet tren tap khac) -- tran khong doi.
+
+### Hoc phi van hanh
+Colab recycle 5 LAN trong ngay. oracle_ablation.py truoc day chi ghi ket qua o
+CUOI -> job 1,7 gio khong bao gio ve dich, moi lan mat sach. Da them: ghi +
+day HF moi 10 mau, khoi dong thi tai lai va bo qua mau da co diem (cuu duoc
+50/100 mau o lan recycle thu 5). Bay khi sua: khoi ghi cuoi dung len(gsm) --
+sau khi loc mau da xong thi gsm chi con PHAN CON LAI -> ghi nham se de "n" sai
+va DE LEN ket qua tot. Doi sang len(results).

@@ -25,19 +25,35 @@ Cập nhật: 2026-09-05.
   | `gsm_grpo_v1c` (kỷ lục cũ) | 29/250 = 11,6% | final 29 |
   | *trần self-9B* | *89,0%* | |
 
-  **McNemar**: `sft_struct_v3` vs `gsm_grpo_v1c` — lệch 39-13, χ²=12,02,
-  **p=0,0005 → CÓ ý nghĩa thống kê** (mọi lần trước chỉ tới p=0,11-0,16).
-  `sft_struct_v3` vs `gsm_struct_rl_v2` — lệch 26-22, χ²=0,19, **p=0,665 →
-  RL KHÔNG thêm gì**, dù hai bên bất đồng ở 48/250 mẫu. VAL nội bộ của RL
-  trôi xuống đều suốt epoch (C 0,344 bước 100 → 0,125 bước 508; `rel` đứng
-  im 0,72-0,77) — RL bão hoà tức thì rồi hỏng dần. **Lần thứ tư RL bão hoà
-  sớm trên val nội bộ** (EBA, gsm, và giờ struct). Checkpoint + kết quả
-  per-item trên HF (`sft_struct_v3/`, `gsm_struct_rl_v2/`,
-  `sealed_*_b2/`).
+  **McNemar**: vs `gsm_grpo_v1c` — lệch 39-13, χ²=12,02, **p=0,0005 → CÓ ý
+  nghĩa thống kê** (mọi lần trước chỉ tới p=0,11-0,16). vs
+  `gsm_struct_rl_v2` — lệch 26-22, **p=0,665 → RL KHÔNG thêm gì**, dù hai bên
+  bất đồng ở 48/250 mẫu. VAL nội bộ của RL trôi xuống đều suốt epoch (C 0,344
+  bước 100 → 0,125 bước 508; `rel` đứng im 0,72-0,77). **Lần thứ tư RL bão
+  hoà sớm trên val nội bộ.** Checkpoint + per-item trên HF.
 
   **Đọc cơ chế**: lỗi gốc đã chẩn đoán là "gán SAI số vào đúng thực thể";
   định dạng có cấu trúc BUỘC model viết ràng buộc số ra trước khi tính, nên
   phải cam kết sớm thay vì trôi. RL trên cùng định dạng không thêm tín hiệu.
+
+- **🔭 ORACLE ABLATION TRÊN ĐỊNH DẠNG CÓ CẤU TRÚC (2026-09-06, n=100,
+  `evalbig/oracle_struct100.json`) — BÁC giả thuyết "sắp chạm trần"**:
+
+  | biến thể | tỷ lệ |
+  |---|---|
+  | self (9B tự prefill) | **93,0%** |
+  | mapped (đường ống `sft_struct_v3`) | **22,0%** |
+  | **attn THẬT + GDN-mapper** | **43,0%** |
+  | attn-mapper + GDN THẬT | 3,0% |
+
+  `mapped` 22,0% khớp ĐÚNG `sft_struct_v3` trên 250 mẫu — hai phép đo độc lập.
+  **Dư địa cho phía huấn luyện là ~21 điểm (22 → 43), KHÔNG phải ~3 điểm** như
+  Claude dự đoán. Sai vì lấy trần của oracle CŨ (26,7%, đo trên đường ống chưa
+  có định dạng cấu trúc, lúc đó mapped=0%) áp cho hệ mới; định dạng cấu trúc
+  nâng CẢ HAI đầu (0→22% và 26,7→43%). **Nút thắt lớn nhất giờ là ánh xạ
+  ATTENTION** — và attention mapper chính là thứ được huấn luyện.
+  `gdn_that` 3,0% tái lập độc lập lần 2: cắm GDN thật cạnh attn mapped làm 9B
+  SUY BIẾN chứ không được cứu → **hai nửa cache phải nhất quán với nhau**.
 
 - **⚠️ LỖI ĐO ĐẠC ĐÃ VÁ (2026-09-06) — cache 4B dùng chung nhầm giữa các
   checkpoint**: `eval_big.py` đặt tên thư mục spill chỉ là `lora` vs `base`,
@@ -51,37 +67,26 @@ Cập nhật: 2026-09-05.
   Số 22,0% của `sft_struct_v3` đã chạy lại độc lập sau khi vá: **trùng khít
   55/250, cùng phân rã 54 final + 1 so_cuoi**.
 
-- **⚡ TĂNG TỐC RL 2,25× — "lấy tốc độ vLLM ngay trong process" (2026-09-05,
-  user hỏi vì sao không dùng vLLM offline cho GRPO như Unsloth)**.
-  vLLM không cắm thẳng được: rollout phải bắt đầu từ **cache do mapper sinh**
-  (vLLM không nhận cache ngoài qua API thường — Phase C phải vá KVConnector)
-  và **LoRA-9B đổi mỗi bước** (on-policy), lại không còn VRAM cho engine thứ
-  hai. Nhưng tốc độ vLLM đến từ 3 nguồn tách rời được, `probe_decode_speed.py`
-  đo từng nguồn (9B bnb-4bit, decode 64 token):
+- **⚡ TĂNG TỐC RL 2,25× — "lấy tốc độ vLLM ngay trong process" (2026-09-05)**.
+  vLLM không cắm thẳng được (rollout bắt đầu từ **cache do mapper sinh**;
+  LoRA-9B đổi mỗi bước; hết VRAM cho engine thứ hai). Nhưng tách được 3 nguồn
+  tốc độ và đo riêng (`probe_decode_speed.py`, 9B bnb-4bit, decode 64 token):
+  ms/bước decode **gần như KHÔNG đổi** từ 2→16 hàng (95,7 → 100,1) trong khi
+  thông lượng ×7,7 (20,9 → 159,8 tok/s) — decode ở batch nhỏ bị chặn bởi băng
+  thông đọc TRỌNG SỐ. Đó chính là continuous-batching của vLLM, lấy được
+  nguyên vẹn mà không cần vLLM. Kernel Marlin qua transformers = **ngõ cụt**
+  (giải nén ngược về bf16). Đồng bộ GPU→CPU mỗi token mất 9-10% → gom 1
+  lần/16 token.
 
-  | k (hàng decode) | 2 | 4 | 8 | 16 |
-  |---|---|---|---|---|
-  | ms/bước decode | 95,7 | 94,4 | 95,2 | 100,1 |
-  | tok/s tổng | 20,9 | 42,4 | 84,1 | **159,8** |
+  **Kiến trúc mới (`--bsz`)**: mỗi bước xử lý B mẫu × K nhánh, lô chỉ gồm mẫu
+  **cùng độ dài prompt CHÍNH XÁC** (không đệm — đệm phá attention 96%); B=4
+  phủ 91,8% pool, phần lẻ chạy lô nhỏ hơn. Advantage chuẩn hoá RIÊNG trong
+  nhóm K của TỪNG mẫu. `test_grpo_batch.py` 7/7.
 
-  **Thời gian mỗi bước decode gần như KHÔNG đổi từ 2 đến 16 hàng** (decode ở
-  batch nhỏ bị chặn bởi băng thông đọc TRỌNG SỐ) → đây chính là
-  continuous-batching của vLLM, lấy được nguyên vẹn mà không cần vLLM.
-  Kernel Marlin W4A16 qua transformers = **ngõ cụt** (nó giải nén ngược về
-  bf16, không vừa L4 cạnh 4B; champion còn lỗi metadata `group_size=0`).
-  Đồng bộ GPU→CPU mỗi token mất 9-10% → gom còn 1 lần/16 token.
-
-  **Kiến trúc mới (`--bsz`)**: mỗi bước xử lý B mẫu × K nhánh. Lô chỉ gồm mẫu
-  **cùng độ dài prompt CHÍNH XÁC** (không đệm — đệm phá attention 96%, GDN
-  nặng hơn); đo trên pool thật (2073 mẫu, 41-201 token): B=4 phủ 91,8%, phần
-  lẻ chạy lô nhỏ hơn nên không bỏ mẫu nào. Advantage vẫn chuẩn hoá RIÊNG
-  trong nhóm K của TỪNG mẫu. `test_grpo_batch.py` 7/7.
-
-  **Đoán sai 2 lần về chỗ OOM (đoán logits → đoán GDN forward), phải đo mới
-  ra**: đỉnh VRAM nằm ở **backward của pha teacher-force**, không ở sampling
-  (pha 1 đỉnh 16,4 GiB / pha 2 đỉnh 20,35 GiB trên 22,03). → pha 1 gộp rộng
-  (`@no_grad`, không lưu gì), pha 2 chia miếng `--tf-chunk` hàng một, lan
-  ngược ngay và cộng dồn gradient (tổng loss đồng nhất). Đo dứt điểm:
+  **Đoán sai 2 lần về chỗ OOM (logits → GDN forward), phải đo mới ra**: đỉnh
+  VRAM nằm ở **backward của pha teacher-force** (pha 1 đỉnh 16,4 GiB / pha 2
+  đỉnh 20,35 trên 22,03) → pha 1 gộp rộng (`@no_grad`), pha 2 chia miếng
+  `--tf-chunk` và cộng dồn gradient (tổng loss đồng nhất). Đo dứt điểm:
 
   | cấu hình | s/bước | **s/mẫu** | đỉnh VRAM |
   |---|---|---|---|
@@ -90,15 +95,13 @@ Cập nhật: 2026-09-05.
   | **bsz=4 k=2 tf=1** | 36,5 | **9,1** | 20,4 GiB |
   | bsz=4 k=2 tf=2 | — | — | **44/48 miếng OOM** |
 
-  → chốt **bsz=4, k=2, tf-chunk=1** (= phương án A; (C) k=3 bị bác vì pha 2
-  KHÔNG rẻ theo hàng như pha 1, k=3 làm chậm ~20%/mẫu). 1 epoch = **508 bước
-  ≈ 5,1 giờ** thay vì 10,7 giờ. Đang chạy `gsm_struct_rl_v2`.
-  **Bẫy đã chặn**: lưới an toàn bỏ-qua-miếng-khi-OOM cứu khỏi crash nhưng
-  ở tf=2 làm 44/48 miếng bị bỏ → lượt train "chạy xong" mà gần như không có
-  gradient (log đẹp, kết quả rỗng). Đã thêm chốt: **dừng hẳn nếu >20% miếng
-  OOM trong 20 bước đầu**. Sửa kèm: `--gsm-limit 0` (runner thiếu → pool bị
-  cắt 2157→1200), `log_softmax(dtype=fp32)` thay `.float()` (bit-identical,
-  bỏ 1 bản sao 222MB/hàng).
+  → chốt **bsz=4, k=2, tf-chunk=1**; 1 epoch = 508 bước ≈ 5,1 giờ (trước
+  10,7). Pha 2 KHÔNG rẻ theo hàng như pha 1 → k lớn vẫn đắt.
+  **Bẫy đã chặn**: lưới an toàn bỏ-qua-miếng-khi-OOM cứu khỏi crash nhưng ở
+  tf=2 làm 44/48 miếng bị bỏ → train "chạy xong" mà gần như không gradient
+  (log đẹp, kết quả rỗng). Chốt: **dừng hẳn nếu >20% miếng OOM trong 20 bước
+  đầu**. Sửa kèm: `--gsm-limit 0` (thiếu → pool bị cắt 2157→1200),
+  `log_softmax(dtype=fp32)` thay `.float()` (bit-identical, bỏ 222MB/hàng).
 
 - **EBA + GRPO (2026-09-04, chi tiết `STATUS.md`) — bài học về PROXY.**
   Sinh dữ liệu tổng hợp Entity-Binding-Arithmetic (ground-truth không qua
