@@ -109,19 +109,13 @@ Cập nhật: 2026-09-07.
   `--gsm-limit 0` (thiếu → pool bị cắt 2157→1200), `log_softmax(dtype=fp32)`.
 
 - **EBA + GRPO (2026-09-04, chi tiết `STATUS.md`) — bài học về PROXY.**
-  Sinh dữ liệu tổng hợp Entity-Binding-Arithmetic (ground-truth không qua
-  model) rồi GRPO 2 pha: trên chính EBA, RL cải thiện **thật và mạnh** —
-  C 0,310 → 0,630/0,650, McNemar **p<0,0001**. **NHƯNG đo trên gsm8k THẬT
-  thì KHÔNG chuyển giao** (niêm phong 4,0%, kém hơn `joint49bb` 8,0%).
-  → gộp `eba_grpo.py` thành 1 pipeline chung (`--task {eba,gsm8k,gsm8k_struct}`)
-  rồi RL TRỰC TIẾP trên gsm8k thật (`gsm_grpo_v1c`, 400 bước, K=3): TRAIN
-  10,0% / NIÊM PHONG 10,0% (train≈test, cao nhất chiến dịch **lúc đó**;
-  nay đã bị `sft_struct_v3` 22,0% vượt với p=0,0005 — xem đầu file).
-  McNemar hồi đó vs `joint49cc` p=0,149 và vs `eba_grpo_v2c` p=0,114 —
-  **chưa đủ bằng chứng ở n=100**, đúng lý do sau này chuyển sang n=250.
-  Học phí kỹ thuật: bug `continue` nhảy qua cả val/checkpoint khi reward
-  đồng nhất trong nhóm K (vá ở `5a02e1e`); rate-limit HF 60 commit/giờ khi
-  save nhiều file riêng lẻ → `save_ckpt()` gộp 1 commit/checkpoint.
+  GRPO trên dữ liệu tổng hợp Entity-Binding-Arithmetic cải thiện **thật và
+  mạnh** (C 0,310 → 0,650, **p<0,0001**) — engine RL không hỏng. **NHƯNG
+  KHÔNG chuyển giao sang gsm8k thật** (niêm phong 4,0%). RL trực tiếp trên
+  gsm8k (`gsm_grpo_v1c`, K=3) đạt 10,0%/10,0% — cao nhất **lúc đó**, nay bị
+  `sft_struct_v3` 22,0% vượt (p=0,0005). Học phí: bug `continue` nhảy qua cả
+  val/checkpoint khi reward đồng nhất (vá `5a02e1e`); rate-limit HF 60
+  commit/giờ → `save_ckpt()` gộp 1 commit/checkpoint.
 
 - **🎯 MỤC TIÊU HIỆN TẠI (user chốt 2026-09-01): CHỈ `suite_swe` (đầy đủ) +
   `gsm8k`.** `joint49bb` (warm-start từ `joint49z`, drop hết các bộ khác kể
