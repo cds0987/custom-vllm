@@ -51,6 +51,10 @@ def main():
     ap.add_argument("--src-model", default="Qwen/Qwen3.5-4B")
     ap.add_argument("--tgt-model", default="Qwen/Qwen3.5-9B")
     ap.add_argument("--init-dir", default="/content/gsm_grpo_v1")
+    ap.add_argument("--init-tag", default="best",
+                    help="hau to file trong --init-dir: mapper_<tag>.pt, "
+                         "lora_<tag>, lorat_<tag>. Dat step<N> de NOI LAI tu "
+                         "snapshot sau Colab recycle.")
     ap.add_argument("--data-file", default="/content/train_items.json")
     ap.add_argument("--struct-gold", default="/content/struct_gold_gsm.json")
     ap.add_argument("--epochs", type=float, default=1.0)
@@ -75,6 +79,12 @@ def main():
     ap.add_argument("--hf-repo", default="gunnybd01/qwen35-kv-mapper-4b-27b")
     ap.add_argument("--hf-prefix", default="sft_struct_v1")
     ap.add_argument("--sanity", type=int, default=0)
+    ap.add_argument("--start-step", type=int, default=0,
+                    help="Noi lai sau Colab recycle: bo qua N buoc dau. Dung "
+                         "KEM --init-dir tro vao snapshot tuong ung.")
+    ap.add_argument("--snap-every", type=int, default=0,
+                    help="Luu snapshot step<N> moi N buoc (0 = tat). Dat ~1 gio "
+                         "cong de moi lan recycle mat it nhat.")
     args = ap.parse_args()
 
     from peft import LoraConfig, get_peft_model, set_peft_model_state_dict
@@ -112,7 +122,7 @@ def main():
         target_modules=["q_proj", "o_proj", "in_proj_qkvz", "out_proj"],
         task_type="CAUSAL_LM"))
     model_t.train()
-    p_lt = Path(args.init_dir) / "lorat_best"
+    p_lt = Path(args.init_dir) / f"lorat_{args.init_tag}"
     if p_lt.exists():
         set_peft_model_state_dict(model_t, load_file(str(p_lt / "adapter_model.safetensors")))
         print(f"warm-start LoRA-9B tu {p_lt}", flush=True)
@@ -134,7 +144,7 @@ def main():
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
         task_type="CAUSAL_LM"))
     model_s.train()
-    p_l = Path(args.init_dir) / "lora_best"
+    p_l = Path(args.init_dir) / f"lora_{args.init_tag}"
     if p_l.exists():
         set_peft_model_state_dict(model_s, load_file(str(p_l / "adapter_model.safetensors")))
         print(f"warm-start LoRA-4B tu {p_l}", flush=True)
@@ -152,7 +162,7 @@ def main():
     attn_dim = k0.shape[1] * k0.shape[3]
     del probe_s
 
-    mp = Path(args.init_dir) / "mapper_best.pt"
+    mp = Path(args.init_dir) / f"mapper_{args.init_tag}.pt"
     _meta = torch.load(mp, map_location="cpu").get("_meta", {}) if mp.exists() else {}
     mapper = e5.Mapper(len(a_t), len(g_t), Hs, Ht, attn_dim, theta_s, theta_t,
                        attn_rank=_meta.get("attn_rank", 0),
@@ -322,6 +332,18 @@ def main():
         return {"parse": n_ok / n, "think": n_think / n, "has_ans": n_ans / n}
 
     results = {"args": vars(args), "eval": [], "train": []}
+    # noi lai lich su khi resume, neu khong moi lan recycle se xoa sach duong
+    # cong da do (dung bai hoc tu eba_grpo).
+    _rp = out / "results.json"
+    if args.start_step and _rp.exists():
+        try:
+            old = json.loads(_rp.read_text())
+            results["eval"] = old.get("eval", [])
+            results["train"] = old.get("train", [])
+            print(f"noi lai lich su: {len(results['eval'])} moc eval, "
+                  f"{len(results['train'])} moc train", flush=True)
+        except Exception as ex:
+            print(f"khong doc duoc results.json cu: {type(ex).__name__}", flush=True)
 
     def save_all(tag):
         torch.save(mapper.state_dict(), out / f"mapper_{tag}.pt")
@@ -358,9 +380,17 @@ def main():
     results["eval"].append({"step": 0, **e0})
 
     best = -1.0
+    # NOI LAI sau Colab recycle (them 2026-09-07). Truoc day sft_struct KHONG
+    # co --start-step; voi pool 2157 mau con chay lot, nhung pool 7473 thi
+    # khong: recycle moi ~1,4 gio se cat ngang mai mai (dung cach da giet luot
+    # RL K=8). Lich su eval/train cung noi lai de duong cong khong bi dut.
+    if args.start_step:
+        best = max([e["parse"] for e in results.get("eval", [])], default=-1.0)
+        print(f"NOI LAI tu buoc {args.start_step + 1}/{steps} "
+              f"(parse tot nhat da co = {best*100:.1f}%)", flush=True)
     t_start = time.time()
     opt.zero_grad(set_to_none=True)
-    for step in range(1, steps + 1):
+    for step in range(args.start_step + 1, steps + 1):
         grp = batches[(step - 1) % len(batches)]
         cut, warm, gold, feed = (enc(grp[0]) if len(grp) == 1 else enc_batch(grp))
         if gold.shape[1] < 1:
@@ -381,12 +411,17 @@ def main():
         torch.cuda.empty_cache()
 
         if step % 25 == 0:
+            # chia cho SO BUOC DA CHAY TRONG PHIEN NAY, khong phai `step` --
+            # sau resume `step` bat dau tu start_step nen s/buoc se sai be.
+            da = max(step - args.start_step, 1)
+            sb = (time.time() - t_start) / da
             results["train"].append([step, round(lv, 4)])
             print(f"buoc {step}/{steps} CE={lv:.4f} B={len(grp)} "
-                  f"{(time.time()-t_start)/step:.2f}s/buoc "
+                  f"{sb:.2f}s/buoc "
                   f"peak={torch.cuda.max_memory_allocated()/2**30:.2f}GiB "
-                  f"con ~{(steps-step)*(time.time()-t_start)/step/60:.0f} phut",
-                  flush=True)
+                  f"con ~{(steps-step)*sb/60:.0f} phut", flush=True)
+        if args.snap_every and step % args.snap_every == 0:
+            save_all(f"step{step}")
         if args.sanity and step >= args.sanity:
             print(f"SANITY xong {step} buoc B={args.batch} accum={args.accum}, "
                   f"peak={torch.cuda.max_memory_allocated()/2**30:.2f}GiB, "

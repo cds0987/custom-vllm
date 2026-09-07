@@ -110,6 +110,10 @@ def main():
     ap.add_argument("--max-len", type=int, default=4096)
     ap.add_argument("--util", type=float, default=0.90)
     ap.add_argument("--n", type=int, default=0, help="0 = tat ca")
+    ap.add_argument("--chunk", type=int, default=1000,
+                    help="so mau moi chang; ghi + day HF sau MOI chang de "
+                         "Colab recycle khong lam mat sach (do: recycle moi "
+                         "~1,4 gio, sinh 7473 mau mat ~40 phut).")
     ap.add_argument("--max-tokens", type=int, default=512,
                     help="384 lam cat cut mau co khoi <think> dai (doc tay lan "
                          "thu 200 thay day la mot phan cua 32% parse hong)")
@@ -135,41 +139,72 @@ def main():
     llm = LLM(**kw)
     print(f"vLLM nap xong {time.time()-t0:.0f}s (quant={args.quant})", flush=True)
 
-    prompts = [build_prompt(extract_problem(it["prompt"])) for it in pool]
     sp = SamplingParams(temperature=0.0, max_tokens=args.max_tokens,
                         stop=["\nProblem:", "\nExample:"])
-    t1 = time.time()
-    res = llm.generate(prompts, sp)
-    print(f"sinh xong {time.time()-t1:.0f}s", flush=True)
 
+    # NOI LAI + GHI TUNG CHANG (them 2026-09-07): truoc day goi llm.generate
+    # MOT LAN cho toan bo pool roi moi ghi -> voi 7473 mau (~40 phut) ma Colab
+    # dang recycle moi ~1,4 gio thi mot lan chet la mat sach. Gio chia chang
+    # --chunk mau, ghi + day HF sau MOI chang, va bo qua mau da co gold.
     out, n_parse, n_ans = {}, 0, 0
-    for it, r in zip(pool, res):
-        txt = "<think>\n" + r.outputs[0].text        # bu lai phan bi cat o prompt
-        txt = cut_after_answer(txt)                  # bo rac duoi (xem docstring)
-        p = gs.parse(txt)
-        if not p["ok"]:
-            continue
-        n_parse += 1
-        want = gs._num(it.get("expect"))
-        if want is None or p["answer"] != want:      # TANG 2: 9B sai -> LOAI
-            continue
-        n_ans += 1
-        out[it["id"]] = {
-            "gold": txt.strip(),
-            "answer": p["answer"],
-            "entities": sorted([list(x) for x in p["entities"]]),
-            "relations": len(p["relations"]),
-            "n_steps": len(p["steps"]),
-        }
+    p_out = Path(args.out)
+    if p_out.exists():
+        try:
+            out = json.loads(p_out.read_text())
+            print(f"NOI LAI: da co gold cho {len(out)} mau", flush=True)
+        except Exception as ex:
+            print(f"khong doc duoc gold cu: {type(ex).__name__}", flush=True)
+    con = [it for it in pool if it["id"] not in out]
+    print(f"con {len(con)} mau phai sinh", flush=True)
 
-    n = len(pool)
+    def _day():
+        p_out.write_text(json.dumps(out, ensure_ascii=False))
+        if args.hf_repo and os.environ.get("HF_TOKEN"):
+            try:
+                from huggingface_hub import HfApi
+                HfApi(token=os.environ["HF_TOKEN"]).upload_file(
+                    path_or_fileobj=str(p_out), repo_id=args.hf_repo,
+                    path_in_repo=f"{args.hf_prefix}/{p_out.name}")
+            except Exception as ex:
+                print(f"HF-UP FAIL: {type(ex).__name__}: {ex}", flush=True)
+
+    t1 = time.time()
+    for s in range(0, len(con), args.chunk):
+        lo = con[s:s + args.chunk]
+        res = llm.generate([build_prompt(extract_problem(it["prompt"]))
+                            for it in lo], sp)
+        for it, r in zip(lo, res):
+            txt = "<think>\n" + r.outputs[0].text    # bu lai phan bi cat o prompt
+            txt = cut_after_answer(txt)              # bo rac duoi (xem docstring)
+            p = gs.parse(txt)
+            if not p["ok"]:
+                continue
+            n_parse += 1
+            want = gs._num(it.get("expect"))
+            if want is None or p["answer"] != want:  # TANG 2: 9B sai -> LOAI
+                continue
+            n_ans += 1
+            out[it["id"]] = {
+                "gold": txt.strip(),
+                "answer": p["answer"],
+                "entities": sorted([list(x) for x in p["entities"]]),
+                "relations": len(p["relations"]),
+                "n_steps": len(p["steps"]),
+            }
+        _day()
+        print(f"chang {s//args.chunk + 1}: da sinh {s+len(lo)}/{len(con)}, "
+              f"giu {len(out)} | {(time.time()-t1)/60:.1f} phut", flush=True)
+
+    n = len(con) or 1
     print(f"\n=== KET QUA BUOC 0 ===")
     print(f"tong mau           : {n}")
     print(f"parse duoc du 3 khoi: {n_parse} ({100*n_parse/max(n,1):.1f}%)")
     print(f"VA dap so DUNG      : {n_ans} ({100*n_ans/max(n,1):.1f}%)  <- giu lai")
+    print(f"tong gold da co     : {len(out)} (ke ca cac lan chay truoc)")
     print(f"tong thoi gian      : {(time.time()-t0)/60:.1f} phut")
-    Path(args.out).write_text(json.dumps(out, ensure_ascii=False))
+    _day()
     print(f"da ghi {args.out}")
+    print("GEN_STRUCT_GOLD_EXIT")
 
     if n_ans < 0.5 * n:
         print("\n*** CANH BAO: giu lai <50% -- theo cong kiem da dat ra, PHAI "
