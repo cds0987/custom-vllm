@@ -3,7 +3,7 @@
 File này được CLAUDE.md nạp tự động đầu mỗi phiên. Claude TỰ ĐỘNG cập nhật khi
 trạng thái đổi — không hỏi user. Giới hạn cứng ≤300 dòng; chi tiết dồn `STATUS.md`.
 
-Cập nhật: 2026-09-05.
+Cập nhật: 2026-09-07.
 
 ## Trạng thái hiện tại
 
@@ -32,9 +32,31 @@ Cập nhật: 2026-09-05.
   bước 100 → 0,125 bước 508; `rel` đứng im 0,72-0,77). **Lần thứ tư RL bão
   hoà sớm trên val nội bộ.** Checkpoint + per-item trên HF.
 
-  **Đọc cơ chế**: lỗi gốc đã chẩn đoán là "gán SAI số vào đúng thực thể";
-  định dạng có cấu trúc BUỘC model viết ràng buộc số ra trước khi tính, nên
-  phải cam kết sớm thay vì trôi. RL trên cùng định dạng không thêm tín hiệu.
+  **Đọc cơ chế**: lỗi gốc là "gán SAI số vào đúng thực thể"; định dạng có cấu
+  trúc BUỘC model viết ràng buộc số ra TRƯỚC khi tính → phải cam kết sớm.
+
+- **❌ RL ĐÓNG LẠI (2026-09-07): K=8 KHÔNG cứu được, giả thuyết "K=2 huỷ tín
+  hiệu advantage" BỊ BÁC.** Cùng bước 100, một biến duy nhất là K, cùng 250
+  mẫu niêm phong:
+
+  | checkpoint | K | niêm phong | vs SFT |
+  |---|---|---|---|
+  | `sft_struct_v3` (chỉ SFT) | — | **22,0%** | — |
+  | `gsm_struct_rl_v2` b100 | 2 | 20,4% | p=0,665 |
+  | `gsm_struct_rl_v3` b100 | 8 | 19,6% | p=0,471 |
+
+  K=2 vs K=8: p=0,880. **Cả ba không phân biệt được với nhiễu; RL không lần
+  nào vượt SFT thuần.** Đây là lần thử RL thứ TƯ thất bại trên gsm8k (proxy
+  EBA / gsm8k trực tiếp / struct K=2 / struct K=8) — trong khi chính engine
+  RL đó THẮNG p<0,0001 trên EBA. Kết luận: **chính sách không phải chỗ mất
+  điểm**; mapper không "chọn token kém" mà "không chuyển đủ thông tin".
+
+  **VAL nội bộ CHỈ NGƯỢC HƯỚNG**: VAL 100 (32 mẫu) của K=8 tốt hơn K=2 ở CẢ 4
+  thành phần (C 0,406 vs 0,344; ent −0,061 vs −1,558), nhưng niêm phong 250
+  cho kết quả NGƯỢC. Tin VAL thì đã kết luận sai và đốt thêm 13,5 giờ. →
+  **mọi quyết định chốt bằng niêm phong n≥250 + McNemar.** Học phí vận hành:
+  Colab recycle mỗi 1-1,4 giờ → epoch 13,5 giờ KHÔNG chạy nổi; lối tắt "đo
+  checkpoint bước 100" cho phán quyết trong 47 phút.
 
 - **🔭 ORACLE ABLATION TRÊN ĐỊNH DẠNG CÓ CẤU TRÚC (2026-09-06, n=100,
   `evalbig/oracle_struct100.json`) — BÁC giả thuyết "sắp chạm trần"**:
@@ -56,16 +78,12 @@ Cập nhật: 2026-09-05.
   SUY BIẾN chứ không được cứu → **hai nửa cache phải nhất quán với nhau**.
 
 - **⚠️ LỖI ĐO ĐẠC ĐÃ VÁ (2026-09-06) — cache 4B dùng chung nhầm giữa các
-  checkpoint**: `eval_big.py` đặt tên thư mục spill chỉ là `lora` vs `base`,
-  KHÔNG phân biệt LoRA-4B nào → checkpoint chạy sau âm thầm dùng lại cache 4B
-  của checkpoint chạy trước = đo "mapper của A trên cache 4B của B", không lỗi
-  không cảnh báo. Đúng khi so các biến thể mapper dùng CHUNG một LoRA-4B (giả
-  định cũ), sai hẳn khi so checkpoint từ các lượt train khác nhau. Vá: băm nội
-  dung file adapter 4B vào tên spill + `assert` dừng hẳn nếu không thấy file
-  trọng số (sha1 của rỗng là hằng số → mọi checkpoint cùng tên). **Mọi số so
-  sánh nhiều-checkpoint đo TRƯỚC 2026-09-06 đều cần soi lại bằng con mắt này.**
-  Số 22,0% của `sft_struct_v3` đã chạy lại độc lập sau khi vá: **trùng khít
-  55/250, cùng phân rã 54 final + 1 so_cuoi**.
+  checkpoint** (chi tiết `STATUS.md`): `eval_big.py` đặt tên thư mục spill chỉ
+  là `lora` vs `base` → checkpoint chạy sau âm thầm dùng lại cache 4B của
+  checkpoint trước = đo "mapper của A trên cache 4B của B", không lỗi không
+  cảnh báo. Vá: băm nội dung adapter 4B vào tên spill + `assert` nếu thiếu file
+  trọng số. **Mọi số so sánh nhiều-checkpoint đo TRƯỚC 2026-09-06 cần soi lại.**
+  `sft_struct_v3` đã chạy lại độc lập sau khi vá: **trùng khít 55/250**.
 
 - **⚡ TĂNG TỐC RL 2,25× — "lấy tốc độ vLLM ngay trong process" (2026-09-05)**.
   vLLM không cắm thẳng được (rollout bắt đầu từ **cache do mapper sinh**;
@@ -78,30 +96,17 @@ Cập nhật: 2026-09-05.
   (giải nén ngược về bf16). Đồng bộ GPU→CPU mỗi token mất 9-10% → gom 1
   lần/16 token.
 
-  **Kiến trúc mới (`--bsz`)**: mỗi bước xử lý B mẫu × K nhánh, lô chỉ gồm mẫu
-  **cùng độ dài prompt CHÍNH XÁC** (không đệm — đệm phá attention 96%); B=4
-  phủ 91,8% pool, phần lẻ chạy lô nhỏ hơn. Advantage chuẩn hoá RIÊNG trong
-  nhóm K của TỪNG mẫu. `test_grpo_batch.py` 7/7.
-
-  **Đoán sai 2 lần về chỗ OOM (logits → GDN forward), phải đo mới ra**: đỉnh
-  VRAM nằm ở **backward của pha teacher-force** (pha 1 đỉnh 16,4 GiB / pha 2
-  đỉnh 20,35 trên 22,03) → pha 1 gộp rộng (`@no_grad`), pha 2 chia miếng
-  `--tf-chunk` và cộng dồn gradient (tổng loss đồng nhất). Đo dứt điểm:
-
-  | cấu hình | s/bước | **s/mẫu** | đỉnh VRAM |
-  |---|---|---|---|
-  | bsz=1 k=2 (cũ) | 20,5 | 20,5 | 16,2 GiB |
-  | bsz=2 k=2 tf=1 | 28,5 | 14,2 | 17,7 GiB |
-  | **bsz=4 k=2 tf=1** | 36,5 | **9,1** | 20,4 GiB |
-  | bsz=4 k=2 tf=2 | — | — | **44/48 miếng OOM** |
-
-  → chốt **bsz=4, k=2, tf-chunk=1**; 1 epoch = 508 bước ≈ 5,1 giờ (trước
-  10,7). Pha 2 KHÔNG rẻ theo hàng như pha 1 → k lớn vẫn đắt.
+  **Kiến trúc `--bsz`**: mỗi bước B mẫu × K nhánh, lô chỉ gồm mẫu **cùng độ
+  dài prompt CHÍNH XÁC** (đệm phá attention 96%). Đỉnh VRAM nằm ở **backward
+  của pha teacher-force**, không ở sampling (đoán sai 2 lần, phải đo mới ra)
+  → pha 1 gộp rộng `@no_grad`, pha 2 chia miếng `--tf-chunk` + cộng dồn
+  gradient. Đo: bsz=1 k=2 20,5 s/mẫu → **bsz=4 k=2 tf=1 9,1 s/mẫu** (epoch
+  5,1h thay vì 10,7h). Pha 2 KHÔNG rẻ theo hàng như pha 1 → K lớn vẫn đắt
+  (K=8 = 25,6 s/mẫu).
   **Bẫy đã chặn**: lưới an toàn bỏ-qua-miếng-khi-OOM cứu khỏi crash nhưng ở
-  tf=2 làm 44/48 miếng bị bỏ → train "chạy xong" mà gần như không gradient
-  (log đẹp, kết quả rỗng). Chốt: **dừng hẳn nếu >20% miếng OOM trong 20 bước
-  đầu**. Sửa kèm: `--gsm-limit 0` (thiếu → pool bị cắt 2157→1200),
-  `log_softmax(dtype=fp32)` thay `.float()` (bit-identical, bỏ 222MB/hàng).
+  tf=2 làm 44/48 miếng bị bỏ → train "chạy xong" mà gần như không gradient.
+  Chốt: **dừng hẳn nếu >20% miếng OOM trong 20 bước đầu**. Sửa kèm:
+  `--gsm-limit 0` (thiếu → pool bị cắt 2157→1200), `log_softmax(dtype=fp32)`.
 
 - **EBA + GRPO (2026-09-04, chi tiết `STATUS.md`) — bài học về PROXY.**
   Sinh dữ liệu tổng hợp Entity-Binding-Arithmetic (ground-truth không qua

@@ -3166,3 +3166,43 @@ day HF moi 10 mau, khoi dong thi tai lai va bo qua mau da co diem (cuu duoc
 50/100 mau o lan recycle thu 5). Bay khi sua: khoi ghi cuoi dung len(gsm) --
 sau khi loc mau da xong thi gsm chi con PHAN CON LAI -> ghi nham se de "n" sai
 va DE LEN ket qua tot. Doi sang len(results).
+
+## 2026-09-07 — LUOT B: K=8 KHONG cuu duoc, RL DONG LAI
+
+    checkpoint                    K   niem phong 250
+    sft_struct_v3 (chi SFT)       -   55/250 = 22,0%
+    gsm_struct_rl_v2 buoc100      2   51/250 = 20,4%
+    gsm_struct_rl_v3 buoc100      8   49/250 = 19,6%
+
+    McNemar: sft vs K=2  lech 26-22  p=0,665
+             sft vs K=8  lech 27-21  p=0,471
+             K=2 vs K=8  lech 23-21  p=0,880
+
+Tat ca cham qua nhanh `final` (49/49 cho v3) -- thang do sach.
+Mot bien duy nhat (K), cung buoc 100, cung tap, cung che do decode.
+
+### Gia thuyet bi bac
+"K=2 huy tin hieu advantage" (voi K=2, Z-score trong nhom luon ra [+1,-1], moi
+thong tin do lon bi vut; EBA thang thi dung K=6). Khoi phuc K=8 KHONG doi gi.
+=> RL that bai lan thu TU tren gsm8k (proxy EBA / gsm8k truc tiep / struct K=2
+/ struct K=8), trong khi CHINH engine RL do thang p<0,0001 tren EBA.
+Doc: chinh sach khong phai cho mat diem. Mapper khong "chon token kem" ma
+"khong chuyen du thong tin" -- dung voi oracle (attn_that 43% vs mapped 22%).
+
+### VAL NOI BO CHI NGUOC HUONG (bang chung, khong phai nguyen tac suong)
+                VAL 100 (n=32)            niem phong 250
+    K=2   C=0,344  ent=-1,558             20,4%
+    K=8   C=0,406  ent=-0,061             19,6%
+VAL noi K=8 tot hon o CA 4 thanh phan; niem phong noi nguoc lai. Neu tin VAL
+thi da ket luan "K=8 hieu qua" va dot tiep 13,5 gio. => Moi quyet dinh phai
+chot bang niem phong n>=250 + McNemar. (User da chat van dung diem nay truoc
+khi co so: "sao lai val lai vay".)
+
+### Hoc phi van hanh
+- Colab recycle ~moi 1-1,4 gio trong 2 ngay nay. Epoch K=8 = 948 buoc x 51,2s
+  = 13,5 gio -> KHONG chay noi (moi phien chet truoc khi toi buoc 200).
+- Loi tat: v2 dat DINH o buoc 100 roi troi xuong suot phan con lai, nen do
+  checkpoint buoc 100 cua v3 la phep so DUNG (cung buoc, mot bien) va chi ton
+  47 phut thay vi 13,5 gio. Do truoc, dung dot GPU de "cho cho du epoch".
+- Cell phong tu do snapshot moi nhat tren HF va noi lai bang --start-step;
+  qua 2 lan recycle khong mat cong nao.
