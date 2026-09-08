@@ -3255,3 +3255,21 @@ nay). Khong moc nao vuot 91,7% -> `save_all("best")` KHONG chay lan nao sau
 resume -> `sft_struct_v4:best` thuc chat la checkpoint BUOC 300. May la da
 quyet dinh do CA `last` truoc khi biet co bug nay. Sua: loai moc step==0 khoi
 phep khoi tao `best`.
+
+### Bo ba day du (2026-09-08, cung 250 mau niem phong, cung cau hinh _b2)
+
+    sft_struct_v3      (2157 gold)              55/250 = 22,0%  | final 54, so_cuoi 1 | thieu FA 24/250
+    sft_struct_v4:best (5575 gold, buoc 300)    62/250 = 24,8%  | final 59, so_cuoi 3 | thieu FA 45/250
+    sft_struct_v4:last (5575 gold, buoc 5527)   90/250 = 36,0%  | final 87, so_cuoi 3 | thieu FA 22/250
+
+    McNemar  v4:last vs v3       lech 49-14  chi2=18,35  p=1,84e-05  CO Y NGHIA
+             v4:last vs v4:best  lech 48-20  chi2=10,72  p=0,0011    CO Y NGHIA
+             v4:best vs v3       lech 23-16  chi2= 0,92  p=0,337     KHONG
+
+QUAN HE LIEU-DAP UNG: 22,0% -> 24,8% (moi 300 buoc tren pool moi, CHUA khac
+v3) -> 36,0% (du epoch). Manh hon mot phep so A/B don le: loai duoc gia thuyet
+"checkpoint may man", hieu ung tang theo LUONG tiep xuc voi du lieu moi.
+
+Dinh dang KHONG hong ma con TOT LEN theo train: thieu 'Final Answer:'
+45/250 (buoc 300) -> 22/250 (het epoch). Canh bao "parse giam" rut ra tu eval
+noi bo 48 mau khong chi la bao dong gia ma con SAI CHIEU.

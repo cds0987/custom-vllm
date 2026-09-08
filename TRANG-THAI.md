@@ -23,19 +23,26 @@ Cập nhật: 2026-09-08.
   (`sft_struct_v4`, warm-start từ `sft_struct_v3`, B=1 accum=4 → ~1382 lần
   cập nhật so với ~527 trước).
 
-  | checkpoint | gold | niêm phong 250 |
-  |---|---|---|
-  | `gsm_grpo_v1c` (kỷ lục cũ, RL) | — | 11,6% |
-  | `sft_struct_v3` | 2157 | 22,0% |
-  | **`sft_struct_v4:last`** | **5575** | **36,0%** (90/250) |
-  | *oracle attn thật (trần huấn luyện)* | | *43,0%* |
-  | *self-9B* | | *93,0%* |
+  | checkpoint | gold | bước | niêm phong 250 |
+  |---|---|---|---|
+  | `gsm_grpo_v1c` (kỷ lục cũ, RL) | — | — | 11,6% |
+  | `sft_struct_v3` | 2157 | — | 22,0% |
+  | `sft_struct_v4:best` (thực chất bước 300) | 5575 | 300 | 24,8% |
+  | **`sft_struct_v4:last`** | **5575** | **5527** | **36,0%** (90/250) |
+  | *oracle attn thật (trần huấn luyện)* | | | *43,0%* |
+  | *self-9B* | | | *93,0%* |
 
-  **McNemar v4:last vs v3: lệch 49-14, χ²=18,35, p = 1,8×10⁻⁵.** Mạnh hơn hẳn
-  lần trước (v3 vs kỷ lục cũ p=0,0005). Thang đo sạch: 87/90 điểm qua
-  `Final Answer:` thật (3 qua nhánh dự phòng); **định dạng KHÔNG hỏng** — số
-  đầu ra thiếu `Final Answer:` là 22/250 (v4) vs 24/250 (v3), tức lo ngại
-  "parse giảm" từ eval nội bộ là báo động giả.
+  **McNemar**: v4:last vs v3 — lệch 49-14, χ²=18,35, **p = 1,8×10⁻⁵**;
+  v4:last vs v4:best — lệch 48-20, χ²=10,72, **p = 0,0011**; v4:best vs v3 —
+  lệch 23-16, **p = 0,337 (không phân biệt được)**.
+  → **QUAN HỆ LIỀU-ĐÁP ỨNG**: 22,0% (2157 gold) → 24,8% (300 bước trên pool
+  mới, chưa khác v3) → 36,0% (đủ epoch). Mạnh hơn một phép so A/B đơn lẻ vì
+  loại được giả thuyết "checkpoint may mắn": hiệu ứng tăng theo LƯỢNG tiếp xúc.
+
+  Thang đo sạch: 87/90 điểm qua `Final Answer:` thật. **Định dạng KHÔNG hỏng —
+  còn tốt LÊN theo train**: số đầu ra thiếu `Final Answer:` là 45/250 (bước
+  300) → 22/250 (hết epoch), so với 24/250 của v3. Lo ngại "parse giảm" rút ra
+  từ eval nội bộ 48 mẫu là báo động giả, và sai cả về chiều.
 
   **Ý nghĩa**: khoảng cách tới trần huấn luyện (oracle attn thật 43,0%) thu từ
   **21 điểm xuống còn 7 điểm** chỉ bằng dữ liệu. Xác nhận lần hai và mạnh hơn
