@@ -91,14 +91,12 @@ Cập nhật: 2026-09-08.
 
 - **⚡ TĂNG TỐC RL 2,25× — "lấy tốc độ vLLM ngay trong process" (2026-09-05)**.
   vLLM không cắm thẳng được (rollout bắt đầu từ **cache do mapper sinh**;
-  LoRA-9B đổi mỗi bước; hết VRAM cho engine thứ hai). Nhưng tách được 3 nguồn
-  tốc độ và đo riêng (`probe_decode_speed.py`, 9B bnb-4bit, decode 64 token):
-  ms/bước decode **gần như KHÔNG đổi** từ 2→16 hàng (95,7 → 100,1) trong khi
-  thông lượng ×7,7 (20,9 → 159,8 tok/s) — decode ở batch nhỏ bị chặn bởi băng
-  thông đọc TRỌNG SỐ. Đó chính là continuous-batching của vLLM, lấy được
-  nguyên vẹn mà không cần vLLM. Kernel Marlin qua transformers = **ngõ cụt**
-  (giải nén ngược về bf16). Đồng bộ GPU→CPU mỗi token mất 9-10% → gom 1
-  lần/16 token.
+  LoRA-9B đổi mỗi bước; hết VRAM). Nhưng tách được 3 nguồn tốc độ và đo riêng
+  (`probe_decode_speed.py`): ms/bước decode **gần như KHÔNG đổi** từ 2→16 hàng
+  (95,7 → 100,1) trong khi thông lượng ×7,7 — decode ở batch nhỏ bị chặn bởi
+  băng thông đọc TRỌNG SỐ. Đó chính là continuous-batching của vLLM, lấy được
+  mà không cần vLLM. Kernel Marlin qua transformers = **ngõ cụt** (giải nén
+  ngược về bf16). Đồng bộ GPU→CPU mỗi token mất 9-10% → gom 1 lần/16 token.
 
   **Kiến trúc `--bsz`**: mỗi bước B mẫu × K nhánh, lô chỉ gồm mẫu **cùng độ
   dài prompt CHÍNH XÁC** (đệm phá attention 96%). Đỉnh VRAM nằm ở **backward
