@@ -3,37 +3,44 @@
 File này được CLAUDE.md nạp tự động đầu mỗi phiên. Claude TỰ ĐỘNG cập nhật khi
 trạng thái đổi — không hỏi user. Giới hạn cứng ≤300 dòng; chi tiết dồn `STATUS.md`.
 
-Cập nhật: 2026-09-07.
+Cập nhật: 2026-09-08.
 
 ## Trạng thái hiện tại
 
-- **🏆 CẢI TIẾN CÓ Ý NGHĨA THỐNG KÊ ĐẦU TIÊN CỦA CHIẾN DỊCH gsm8k
-  (2026-09-06): ĐỊNH DẠNG CÓ CẤU TRÚC + SFT, không phải RL.** Hướng user
-  chốt: bắt 9B tự sinh quỹ đạo `<think>` → `ENTITIES:` → `STEPS:` →
-  `Final Answer:` (`gen_struct_gold.py`, lọc 2 tầng: parse được VÀ đáp số
-  đúng → 2157 mẫu), rồi SFT cho mapper quen phân phối đó (`sft_struct.py`,
-  1 epoch 2125 bước, parse 0% → 93,8%), rồi RL 4 reward phân rã trên chính
-  định dạng đó (`gsm_struct.py` + `eba_grpo.py --task gsm8k_struct`).
-
-  **Niêm phong 250 mẫu (gsm8k split `test`, rò rỉ 0/250, decode batch 1,
-  `run_struct_sealed.sh`)**:
-
-  | checkpoint | niêm phong 250 | nhánh chấm |
-  |---|---|---|
-  | **`sft_struct_v3` (SFT có cấu trúc)** | **55/250 = 22,0%** | final 54 |
-  | `gsm_struct_rl_v2/best` (+RL) | 51/250 = 20,4% | final 51 |
-  | `gsm_grpo_v1c` (kỷ lục cũ) | 29/250 = 11,6% | final 29 |
-  | *trần self-9B* | *89,0%* | |
-
-  **McNemar**: vs `gsm_grpo_v1c` — lệch 39-13, χ²=12,02, **p=0,0005 → CÓ ý
-  nghĩa thống kê** (mọi lần trước chỉ tới p=0,11-0,16). vs
-  `gsm_struct_rl_v2` — lệch 26-22, **p=0,665 → RL KHÔNG thêm gì**, dù hai bên
-  bất đồng ở 48/250 mẫu. VAL nội bộ của RL trôi xuống đều suốt epoch (C 0,344
-  bước 100 → 0,125 bước 508; `rel` đứng im 0,72-0,77). **Lần thứ tư RL bão
-  hoà sớm trên val nội bộ.** Checkpoint + per-item trên HF.
-
+- **🏆 ĐỊNH DẠNG CÓ CẤU TRÚC (2026-09-06) — cải tiến có ý nghĩa thống kê ĐẦU
+  TIÊN của chiến dịch gsm8k.** Hướng user chốt: bắt 9B tự sinh quỹ đạo
+  `<think>` → `ENTITIES:` → `STEPS:` → `Final Answer:` (`gen_struct_gold.py`,
+  lọc 2 tầng), rồi SFT cho mapper quen phân phối đó (`sft_struct.py`).
+  Niêm phong 250: `sft_struct_v3` **22,0%** vs kỷ lục cũ `gsm_grpo_v1c`
+  11,6% — lệch 39-13, χ²=12,02, **p=0,0005** (mọi lần trước chỉ tới
+  p=0,11-0,16). Thêm RL lên trên: 20,4%, **p=0,665 → không thêm gì**.
   **Đọc cơ chế**: lỗi gốc là "gán SAI số vào đúng thực thể"; định dạng có cấu
   trúc BUỘC model viết ràng buộc số ra TRƯỚC khi tính → phải cam kết sớm.
+
+- **🚀 HƯỚNG 1 THẮNG LỚN (2026-09-08): MỞ DỮ LIỆU CÓ CẤU TRÚC 2157 → 5575
+  ĐƯA gsm8k 22,0% → 36,0%, p < 0,0001.** `gen_struct_gold.py` chạy đủ 7473
+  bài train (vLLM, lọc 2 tầng) → giữ **5575 = 74,6%**; SFT 1 epoch 5527 bước
+  (`sft_struct_v4`, warm-start từ `sft_struct_v3`, B=1 accum=4 → ~1382 lần
+  cập nhật so với ~527 trước).
+
+  | checkpoint | gold | niêm phong 250 |
+  |---|---|---|
+  | `gsm_grpo_v1c` (kỷ lục cũ, RL) | — | 11,6% |
+  | `sft_struct_v3` | 2157 | 22,0% |
+  | **`sft_struct_v4:last`** | **5575** | **36,0%** (90/250) |
+  | *oracle attn thật (trần huấn luyện)* | | *43,0%* |
+  | *self-9B* | | *93,0%* |
+
+  **McNemar v4:last vs v3: lệch 49-14, χ²=18,35, p = 1,8×10⁻⁵.** Mạnh hơn hẳn
+  lần trước (v3 vs kỷ lục cũ p=0,0005). Thang đo sạch: 87/90 điểm qua
+  `Final Answer:` thật (3 qua nhánh dự phòng); **định dạng KHÔNG hỏng** — số
+  đầu ra thiếu `Final Answer:` là 22/250 (v4) vs 24/250 (v3), tức lo ngại
+  "parse giảm" từ eval nội bộ là báo động giả.
+
+  **Ý nghĩa**: khoảng cách tới trần huấn luyện (oracle attn thật 43,0%) thu từ
+  **21 điểm xuống còn 7 điểm** chỉ bằng dữ liệu. Xác nhận lần hai và mạnh hơn
+  cùng một kết luận: **đòn bẩy nằm ở DỮ LIỆU + ĐỊNH DẠNG, không ở thuật toán
+  huấn luyện** (RL thua 4/4 lần).
 
 - **❌ RL ĐÓNG LẠI (2026-09-07): K=8 KHÔNG cứu được, giả thuyết "K=2 huỷ tín
   hiệu advantage" BỊ BÁC.** Cùng bước 100, một biến duy nhất là K, cùng 250
@@ -58,24 +65,14 @@ Cập nhật: 2026-09-07.
   Colab recycle mỗi 1-1,4 giờ → epoch 13,5 giờ KHÔNG chạy nổi; lối tắt "đo
   checkpoint bước 100" cho phán quyết trong 47 phút.
 
-- **🔭 ORACLE ABLATION TRÊN ĐỊNH DẠNG CÓ CẤU TRÚC (2026-09-06, n=100,
-  `evalbig/oracle_struct100.json`) — BÁC giả thuyết "sắp chạm trần"**:
-
-  | biến thể | tỷ lệ |
-  |---|---|
-  | self (9B tự prefill) | **93,0%** |
-  | mapped (đường ống `sft_struct_v3`) | **22,0%** |
-  | **attn THẬT + GDN-mapper** | **43,0%** |
-  | attn-mapper + GDN THẬT | 3,0% |
-
-  `mapped` 22,0% khớp ĐÚNG `sft_struct_v3` trên 250 mẫu — hai phép đo độc lập.
-  **Dư địa cho phía huấn luyện là ~21 điểm (22 → 43), KHÔNG phải ~3 điểm** như
-  Claude dự đoán. Sai vì lấy trần của oracle CŨ (26,7%, đo trên đường ống chưa
-  có định dạng cấu trúc, lúc đó mapped=0%) áp cho hệ mới; định dạng cấu trúc
-  nâng CẢ HAI đầu (0→22% và 26,7→43%). **Nút thắt lớn nhất giờ là ánh xạ
-  ATTENTION** — và attention mapper chính là thứ được huấn luyện.
-  `gdn_that` 3,0% tái lập độc lập lần 2: cắm GDN thật cạnh attn mapped làm 9B
-  SUY BIẾN chứ không được cứu → **hai nửa cache phải nhất quán với nhau**.
+- **🔭 ORACLE ABLATION (2026-09-06, n=100, `evalbig/oracle_struct100.json`)**:
+  self **93,0%** | mapped (`sft_struct_v3`) **22,0%** | **attn THẬT + GDN-mapper
+  43,0%** | attn-mapper + GDN THẬT **3,0%**. `mapped` khớp ĐÚNG số niêm phong
+  250 của v3 — hai phép đo độc lập. **BÁC dự đoán "sắp chạm trần" của Claude**
+  (đoán còn ~3 điểm, thật ra ~21): sai vì lấy trần của oracle CŨ (26,7%, đo khi
+  chưa có định dạng cấu trúc) áp cho hệ mới. **Nút thắt lớn nhất là ánh xạ
+  ATTENTION.** `gdn_that` 3,0% tái lập độc lập lần 2: cắm GDN thật cạnh attn
+  mapped làm 9B SUY BIẾN → **hai nửa cache phải nhất quán với nhau**.
 
 - **⚠️ LỖI ĐO ĐẠC ĐÃ VÁ (2026-09-06) — cache 4B dùng chung nhầm giữa các
   checkpoint** (chi tiết `STATUS.md`): `eval_big.py` đặt tên thư mục spill chỉ

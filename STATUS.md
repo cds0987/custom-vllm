@@ -3206,3 +3206,52 @@ khi co so: "sao lai val lai vay".)
   47 phut thay vi 13,5 gio. Do truoc, dung dot GPU de "cho cho du epoch".
 - Cell phong tu do snapshot moi nhat tren HF va noi lai bang --start-step;
   qua 2 lan recycle khong mat cong nao.
+
+## 2026-09-08 — HUONG 1: mo du lieu co cau truc 2157 -> 5575, gsm8k 22,0% -> 36,0%
+
+### Ket qua (250 mau niem phong, ro ri 0/250, decode batch 1, cung cau hinh _b2)
+
+    gsm_grpo_v1c (ky luc cu, RL)      29/250 = 11,6%
+    sft_struct_v3 (2157 gold)         55/250 = 22,0%
+    sft_struct_v4:last (5575 gold)    90/250 = 36,0%   <- MOI
+    oracle attn that (tran huan luyen)         43,0%
+    self-9B                                    93,0%
+
+    McNemar v4:last vs v3: lech 49-14, chi2=18,35, p = 1,84e-05  CO Y NGHIA
+
+Thang do sach: 87/90 diem qua `Final Answer:` that, 3 qua nhanh du phong
+`so_cuoi`. So dau ra thieu `Final Answer:` trong 1200 ky tu dau: 22/250 (v4)
+vs 24/250 (v3) -> DINH DANG KHONG HONG.
+
+### Duong di
+1. `gen_struct_gold.py` chay du 7473 bai split train (vLLM, teacher = 9B
+   champion W4A16), loc 2 tang (parse duoc VA dap so dung) -> giu 5575 =
+   74,6%. Chia chang 1000, ghi + day HF sau moi chang (Colab recycle ~1,4h).
+2. `sft_struct.py` 1 epoch = 5527 buoc, B=1 accum=4 -> ~1382 lan cap nhat
+   (truoc: ~527). Warm-start tu sft_struct_v3. 3,1-4,1 s/buoc, ~4,5 gio.
+
+### Y nghia
+Khoang cach toi TRAN HUAN LUYEN (oracle attn that 43,0%) thu tu 21 diem
+xuong 7 diem CHI BANG DU LIEU. Xac nhan lan hai, manh hon lan dau:
+don bay o DU LIEU + DINH DANG, khong o thuat toan huan luyen.
+Chuoi bang chung day du tren gsm8k:
+  - doi thuat toan (RL: EBA proxy / gsm8k truc tiep / struct K=2 / struct
+    K=8) -> 4/4 lan p > 0,4, khong nhuc nhich
+  - doi DINH DANG dau ra (struct) -> 11,6% -> 22,0%, p=0,0005
+  - doi QUY MO du lieu (2157 -> 5575) -> 22,0% -> 36,0%, p=1,8e-05
+
+### EVAL NOI BO LAI DANH LUA (lan thu hai)
+parse noi bo (48 mau) dao dong 91,7 -> 89,6 -> 83,3 -> 89,6 -> 85,4 -> 75,0
+-> 83,3. Claude da hai lan dinh dang doc xu huong tu no: lan 1 dung "parse
+giam dan" de dung gia thuyet co che (bai kho -> STEPS dai -> bi cat), moc sau
+bat lai thi rut; lan 2 o moc 75,0% lai canh bao nguy co "hong dinh dang".
+Ca hai deu SAI: dinh dang khong hong (22/250 vs 24/250), va diem niem phong
+TANG 14 diem. => Eval noi bo 48 mau khong doc duoc gi, ke ca theo huong xau.
+
+### BUG da phat hien trong luot nay (CAN VA)
+`sft_struct.py` khi resume khoi tao `best` = max parse cua LICH SU, ma lich su
+CO CA MOC BUOC 0 (91,7% -- diem KE THUA tu v3, khong phai checkpoint cua luot
+nay). Khong moc nao vuot 91,7% -> `save_all("best")` KHONG chay lan nao sau
+resume -> `sft_struct_v4:best` thuc chat la checkpoint BUOC 300. May la da
+quyet dinh do CA `last` truoc khi biet co bug nay. Sua: loai moc step==0 khoi
+phep khoi tao `best`.
