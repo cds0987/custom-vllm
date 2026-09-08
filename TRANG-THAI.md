@@ -45,9 +45,8 @@ Cập nhật: 2026-09-08.
   từ eval nội bộ 48 mẫu là báo động giả, và sai cả về chiều.
 
   **Ý nghĩa**: khoảng cách tới trần huấn luyện (oracle attn thật 43,0%) thu từ
-  **21 điểm xuống còn 7 điểm** chỉ bằng dữ liệu. Xác nhận lần hai và mạnh hơn
-  cùng một kết luận: **đòn bẩy nằm ở DỮ LIỆU + ĐỊNH DẠNG, không ở thuật toán
-  huấn luyện** (RL thua 4/4 lần).
+  **21 xuống 7 điểm** chỉ bằng dữ liệu → **đòn bẩy ở DỮ LIỆU + ĐỊNH DẠNG,
+  không ở thuật toán** (RL thua 4/4).
 
 - **❌ RL ĐÓNG LẠI (2026-09-07): K=8 KHÔNG cứu được, giả thuyết "K=2 huỷ tín
   hiệu advantage" BỊ BÁC.** Cùng bước 100, một biến duy nhất là K, cùng 250
