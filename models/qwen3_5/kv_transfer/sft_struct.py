@@ -374,10 +374,20 @@ def main():
     batches = make_batches(tr_items, args.batch)
     steps = args.steps or int(args.epochs * len(batches))
 
-    e0 = evaluate(out / "samples_step0.json")
-    print(f"TRUOC train: parse={e0['parse']*100:.1f}% think={e0['think']*100:.1f}% "
-          f"co_dap_so={e0['has_ans']*100:.1f}%", flush=True)
-    results["eval"].append({"step": 0, **e0})
+    # Khi NOI LAI thi BO QUA eval buoc 0: no ton ~16 phut (48 mau x 320 token
+    # decode tuan tu) va chi de in mot con so doi chieu ma lich su da co.
+    # Colab recycle moi ~1,4 gio -> chay lai eval nay moi lan resume la dot
+    # ~16 phut/lan cho khong.
+    e0 = next((e for e in results["eval"] if e.get("step") == 0), None)
+    if args.start_step and e0:
+        print(f"NOI LAI: bo qua eval buoc 0 (lich su co parse="
+              f"{e0['parse']*100:.1f}%)", flush=True)
+    else:
+        e0 = evaluate(out / "samples_step0.json")
+        print(f"TRUOC train: parse={e0['parse']*100:.1f}% "
+              f"think={e0['think']*100:.1f}% "
+              f"co_dap_so={e0['has_ans']*100:.1f}%", flush=True)
+        results["eval"].append({"step": 0, **e0})
 
     best = -1.0
     # NOI LAI sau Colab recycle (them 2026-09-07). Truoc day sft_struct KHONG
