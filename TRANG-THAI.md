@@ -3,73 +3,76 @@
 File này được CLAUDE.md nạp tự động đầu mỗi phiên. Claude TỰ ĐỘNG cập nhật khi
 trạng thái đổi — không hỏi user. Giới hạn cứng ≤300 dòng; chi tiết dồn `STATUS.md`.
 
-Cập nhật: 2026-09-08.
+Cập nhật: 2026-09-09.
 
 ## Trạng thái hiện tại
 
 - **🏆 ĐỊNH DẠNG CÓ CẤU TRÚC (2026-09-06) — cải tiến có ý nghĩa thống kê ĐẦU
   TIÊN của chiến dịch gsm8k.** Hướng user chốt: bắt 9B tự sinh quỹ đạo
-  `<think>` → `ENTITIES:` → `STEPS:` → `Final Answer:` (`gen_struct_gold.py`,
-  lọc 2 tầng), rồi SFT cho mapper quen phân phối đó (`sft_struct.py`).
-  Niêm phong 250: `sft_struct_v3` **22,0%** vs kỷ lục cũ `gsm_grpo_v1c`
-  11,6% — lệch 39-13, χ²=12,02, **p=0,0005** (mọi lần trước chỉ tới
-  p=0,11-0,16). Thêm RL lên trên: 20,4%, **p=0,665 → không thêm gì**.
-  **Đọc cơ chế**: lỗi gốc là "gán SAI số vào đúng thực thể"; định dạng có cấu
-  trúc BUỘC model viết ràng buộc số ra TRƯỚC khi tính → phải cam kết sớm.
+  `<think>`→`ENTITIES:`→`STEPS:`→`Final Answer:` (lọc 2 tầng), rồi SFT cho
+  mapper quen phân phối đó. Niêm phong 250: **22,0%** vs kỷ lục cũ 11,6% —
+  lệch 39-13, **p=0,0005** (mọi lần trước chỉ tới p=0,11-0,16). Thêm RL lên
+  trên: 20,4%, **p=0,665 → không thêm gì**. **Cơ chế**: lỗi gốc là "gán SAI
+  số vào đúng thực thể"; định dạng BUỘC model viết ràng buộc số ra TRƯỚC khi
+  tính → phải cam kết sớm.
 
-- **🚀 HƯỚNG 1 THẮNG LỚN (2026-09-08): MỞ DỮ LIỆU CÓ CẤU TRÚC 2157 → 5575
-  ĐƯA gsm8k 22,0% → 36,0%, p < 0,0001.** `gen_struct_gold.py` chạy đủ 7473
-  bài train (vLLM, lọc 2 tầng) → giữ **5575 = 74,6%**; SFT 1 epoch 5527 bước
-  (`sft_struct_v4`, warm-start từ `sft_struct_v3`, B=1 accum=4 → ~1382 lần
-  cập nhật so với ~527 trước).
+- **🚀🚀 ĐƯỜNG RESIDUAL GDN — Ý USER, +8,4 ĐIỂM, p=0,007 (2026-09-09).**
+  User: *"thiếu 1 flow gradient dạng residual để 3 component share info?"* →
+  *"ý tôi là dạng y = x + f(x)"*. Kiểm code: nửa attention ĐÃ có dạng đó
+  (nhánh `attn_rank`, đang TẮT) nhưng **nửa GDN không có đường thẳng nào** —
+  `S` bị chia `rms` (mất thang đo) rồi trộn head bằng `alpha` khởi tạo
+  **uniform 1/Hs** (mỗi head đích = trung bình CẢ 32 head nguồn).
 
-  | checkpoint | gold | bước | niêm phong 250 |
-  |---|---|---|---|
-  | `gsm_grpo_v1c` (kỷ lục cũ, RL) | — | — | 11,6% |
-  | `sft_struct_v3` | 2157 | — | 22,0% |
-  | `sft_struct_v4:best` (thực chất bước 300) | 5575 | 300 | 24,8% |
-  | **`sft_struct_v4:last`** | **5575** | **5527** | **36,0%** (90/250) |
-  | *oracle attn thật (trần huấn luyện)* | | | *43,0%* |
-  | *self-9B* | | | *93,0%* |
+  **Đo mức nén từ chính `alpha` (không cần GPU)**: giữ lại phương sai =
+  `Σ_s α_ts²` — bằng 1,0 nếu `α=I`, 0,031 nếu uniform. Thực đo **0,154 (v3)
+  và 0,156 (v4)** → mỗi head đích là trung bình ~6,4 head nguồn, **~85%
+  phương sai riêng của head mất ở MỖI lớp GDN**. Và mở dữ liệu 2,6× **không
+  chạm tới nó** (0,154 → 0,156) — một ràng buộc dữ liệu không gỡ được.
 
-  **McNemar**: v4:last vs v3 — lệch 49-14, χ²=18,35, **p = 1,8×10⁻⁵**;
-  v4:last vs v4:best — lệch 48-20, χ²=10,72, **p = 0,0011**; v4:best vs v3 —
-  lệch 23-16, **p = 0,337 (không phân biệt được)**.
-  → **QUAN HỆ LIỀU-ĐÁP ỨNG**: 22,0% (2157 gold) → 24,8% (300 bước trên pool
-  mới, chưa khác v3) → 36,0% (đủ epoch). Mạnh hơn một phép so A/B đơn lẻ vì
-  loại được giả thuyết "checkpoint may mắn": hiệu ứng tăng theo LƯỢNG tiếp xúc.
+  Vá: `S' = f(S) + gamma·S`, gamma theo TỪNG HEAD, **khởi tạo 0 → no-op tuyệt
+  đối** (nạp checkpoint v4 chạy giống hệt từng bit, `test_gdn_res` 9/9) → so
+  sánh MỘT BIẾN sạch. `sft_struct_v5` = v4 + đúng cờ này, cùng dữ liệu, cùng
+  5527 bước, warm-start từ `v4:last`.
 
-  Thang đo sạch: 87/90 điểm qua `Final Answer:` thật. **Định dạng KHÔNG hỏng —
-  còn tốt LÊN theo train**: số đầu ra thiếu `Final Answer:` là 45/250 (bước
-  300) → 22/250 (hết epoch), so với 24/250 của v3. Lo ngại "parse giảm" rút ra
-  từ eval nội bộ 48 mẫu là báo động giả, và sai cả về chiều.
+  | checkpoint | niêm phong 250 | nhánh chấm |
+  |---|---|---|
+  | `gsm_grpo_v1c` (kỷ lục cũ, RL) | 11,6% | — |
+  | `sft_struct_v3` (2157 gold) | 22,0% | final 54 |
+  | `sft_struct_v4` (5575 gold) | 36,0% | final 87 |
+  | **`sft_struct_v5` (+residual GDN)** | **44,4%** (111/250) | final 107 |
+  | *oracle attn thật (đo trên v3)* | *43,0%* | |
+  | *self-9B* | *93,0%* | |
 
-  **Ý nghĩa**: khoảng cách tới trần huấn luyện (oracle attn thật 43,0%) thu từ
-  **21 xuống 7 điểm** chỉ bằng dữ liệu → **đòn bẩy ở DỮ LIỆU + ĐỊNH DẠNG,
-  không ở thuật toán** (RL thua 4/4).
+  **McNemar**: v5 vs v4 — lệch 38-17, χ²=7,27, **p=0,007**; v5 vs v3 — lệch
+  66-10, χ²=39,80, **p<10⁻⁹**. **`gamma` học được: |γ| tb 0,0150 (≈28% độ lớn
+  của α), 531 dương/237 âm, đỉnh ở LỚP GIỮA (8-12: 0,023-0,030) gấp ~5 lần
+  lớp đầu/cuối** → mô hình thật sự dùng đường thẳng, và cần nó nhất ở giữa.
 
-- **❌ RL ĐÓNG LẠI (2026-09-07): K=8 KHÔNG cứu được, giả thuyết "K=2 huỷ tín
-  hiệu advantage" BỊ BÁC.** Cùng bước 100, một biến duy nhất là K, cùng 250
-  mẫu niêm phong:
+  **v5 VƯỢT trần oracle 43,0%** — trần đó ràng buộc *hệ v3*, không ràng buộc
+  hệ đã đổi cấu trúc mapper. Lần 3 xác nhận: **trần đo trên một cấu hình
+  KHÔNG chuyển sang cấu hình khác**.
 
-  | checkpoint | K | niêm phong | vs SFT |
-  |---|---|---|---|
-  | `sft_struct_v3` (chỉ SFT) | — | **22,0%** | — |
-  | `gsm_struct_rl_v2` b100 | 2 | 20,4% | p=0,665 |
-  | `gsm_struct_rl_v3` b100 | 8 | 19,6% | p=0,471 |
+- **🚀 HƯỚNG 1 (2026-09-08): MỞ DỮ LIỆU CÓ CẤU TRÚC 2157 → 5575 ĐƯA gsm8k
+  22,0% → 36,0%, p=1,8×10⁻⁵** (lệch 49-14). `gen_struct_gold.py` chạy đủ 7473
+  bài train → giữ **5575 = 74,6%**; SFT 1 epoch 5527 bước (`sft_struct_v4`).
+  **QUAN HỆ LIỀU-ĐÁP ỨNG** (mạnh hơn A/B đơn lẻ, loại được "checkpoint may
+  mắn"): 22,0% (2157 gold) → 24,8% (`v4:best`, thực chất mới bước 300, p=0,337
+  so v3 → CHƯA khác) → 36,0% (đủ epoch, p=0,0011 so bước 300).
+  Định dạng KHÔNG hỏng mà tốt LÊN theo train: thiếu `Final Answer:` 45/250
+  (bước 300) → 22/250 (hết epoch). Lo ngại "parse giảm" từ eval nội bộ 48 mẫu
+  là báo động giả, **sai cả về chiều**.
 
-  K=2 vs K=8: p=0,880. **Cả ba không phân biệt được với nhiễu; RL không lần
-  nào vượt SFT thuần.** Đây là lần thử RL thứ TƯ thất bại trên gsm8k (proxy
-  EBA / gsm8k trực tiếp / struct K=2 / struct K=8) — trong khi chính engine
-  RL đó THẮNG p<0,0001 trên EBA. Kết luận: **chính sách không phải chỗ mất
-  điểm**; mapper không "chọn token kém" mà "không chuyển đủ thông tin".
-
+- **❌ RL ĐÓNG LẠI (2026-09-07): K=8 KHÔNG cứu được.** Cùng bước 100, một biến
+  duy nhất là K, cùng 250 mẫu: `sft_struct_v3` 22,0% | RL K=2 20,4% (p=0,665)
+  | RL K=8 19,6% (p=0,471); K=2 vs K=8 p=0,880. **Cả ba không phân biệt được
+  với nhiễu.** Lần thử RL thứ TƯ thất bại trên gsm8k — trong khi chính engine
+  đó THẮNG p<0,0001 trên EBA → **chính sách không phải chỗ mất điểm**; mapper
+  không "chọn token kém" mà "không chuyển đủ thông tin".
   **VAL nội bộ CHỈ NGƯỢC HƯỚNG**: VAL 100 (32 mẫu) của K=8 tốt hơn K=2 ở CẢ 4
-  thành phần (C 0,406 vs 0,344; ent −0,061 vs −1,558), nhưng niêm phong 250
-  cho kết quả NGƯỢC. Tin VAL thì đã kết luận sai và đốt thêm 13,5 giờ. →
-  **mọi quyết định chốt bằng niêm phong n≥250 + McNemar.** Học phí vận hành:
-  Colab recycle mỗi 1-1,4 giờ → epoch 13,5 giờ KHÔNG chạy nổi; lối tắt "đo
-  checkpoint bước 100" cho phán quyết trong 47 phút.
+  thành phần nhưng niêm phong cho kết quả NGƯỢC → **chốt bằng niêm phong
+  n≥250 + McNemar**. Học phí vận hành: Colab recycle mỗi 1-1,4 giờ → epoch
+  13,5 giờ KHÔNG chạy nổi; lối tắt "đo checkpoint bước 100" cho phán quyết
+  trong 47 phút.
 
 - **🔭 ORACLE ABLATION (2026-09-06, n=100, `evalbig/oracle_struct100.json`)**:
   self **93,0%** | mapped (`sft_struct_v3`) **22,0%** | **attn THẬT + GDN-mapper
@@ -118,42 +121,17 @@ Cập nhật: 2026-09-08.
   val/checkpoint khi reward đồng nhất (vá `5a02e1e`); rate-limit HF 60
   commit/giờ → `save_ckpt()` gộp 1 commit/checkpoint.
 
-- **🎯 MỤC TIÊU HIỆN TẠI (user chốt 2026-09-01): CHỈ `suite_swe` (đầy đủ) +
-  `gsm8k`.** `joint49bb` (warm-start từ `joint49z`, drop hết các bộ khác kể
-  cả ifstruct/pbtable) đã TRAIN XONG 1000 bước + NIÊM PHONG THẬT (123
-  suite_swe + 100 gsm8k). Kết quả:
-
-  | bộ | self 9B | mapped | ctx-BỎ | so joint49z |
-  |---|---|---|---|---|
-  | suite_swe | 99,2% | **77,2%** | 0,0% (sạch) | 56,1% → **77,2% (+21,1)** |
-  | gsm8k | 89,0% | 8,0% | (bỏ qua, ctx=câu hỏi) | lần đầu đo đầy đủ |
-
-  **`suite_swe` là bước nhảy lớn nhất chiến dịch** — thu hẹp phạm vi train
-  (bỏ 7 bộ khác, không loãng tín hiệu) hiệu quả rõ rệt. `gsm8k` vẫn rất yếu
-  (8%) dù đã sửa cắt gold đầu+đuôi (học phí joint49aa: cắt chỉ-đầu làm mất
-  kết luận đáp án) — không còn kẹt cứng 0% nhưng quan hệ toán nhiều-bước
-  có vẻ khó hơn hẳn với mapper hiện tại. Checkpoint `joint49bb/` đã lên HF.
-  **`joint49bb` = checkpoint tham chiếu mới nhất** (thay `joint49z`).
-
-  **PHÂN XỬ "học không nổi" vs "quá khớp" (2026-09-02)** — chấm `joint49bb`
-  trên CHÍNH TẬP TRAIN (60 mẫu/bộ, `EVALBIG_ITEMS` mới thêm vào eval_big.py):
-
-  | bộ | train | niêm phong | chênh |
-  |---|---|---|---|
-  | suite_swe | 93,3% | 77,2% | +16,1 (quá khớp NHẸ, tổng quát hoá thật) |
-  | gsm8k | **8,3%** | 8,0% | **+0,3 → KHÔNG hề quá khớp** |
-
-  **gsm8k sai y hệt trên chính dữ liệu đã train** → loại giả thuyết "thiếu/
-  kém đa dạng dữ liệu". Đọc tay: mô hình lấy ĐÚNG thực thể nhưng **gán SAI
-  con số** ("Kylie dùng 3 khăn" → sinh "6 khăn"). Chữ nghĩa truyền qua cache
-  tốt, **liên kết số-với-thực-thể thì không** — giới hạn cơ chế mapper.
-
-  **PROBE TRÍCH-XUẤT-SỐ (2026-09-02, chi tiết `STATUS.md`)** — bắt 9B chỉ
-  NHẮC LẠI một con số có sẵn trong đề: nhắc số ĐẦU 50,0% đúng / 80,0% có mặt;
-  nhắc số CUỐI 15,0% / 27,5%. **Cả hai đều THẤP → thông tin số KHÔNG tới được
-  9B nguyên vẹn**; bậc theo độ sâu rõ (đầu đề còn, cuối mất). Đối chiếu
-  `needle` 99,2% → vấn đề là MẬT ĐỘ chi tiết số, không phải truy hồi.
-
+- **🎯 PHẠM VI (user chốt 2026-09-01): CHỈ `suite_swe` + `gsm8k`.**
+  `joint49bb` niêm phong: `suite_swe` **77,2%** (self 99,2%, ctx-BỎ 0,0% sạch,
+  từ 56,1% của `joint49z` — bước nhảy lớn nhất của nhánh suite), `gsm8k` 8,0%.
+  **PHÂN XỬ "học không nổi" vs "quá khớp"**: chấm trên CHÍNH TẬP TRAIN —
+  suite_swe 93,3% train vs 77,2% niêm phong (quá khớp NHẸ); **gsm8k 8,3% vs
+  8,0% → KHÔNG hề quá khớp**, sai y hệt trên dữ liệu đã train → loại giả
+  thuyết "thiếu dữ liệu". Đọc tay: lấy ĐÚNG thực thể nhưng **gán SAI con số**
+  ("Kylie dùng 3 khăn" → sinh "6 khăn").
+  **PROBE TRÍCH-XUẤT-SỐ** (chi tiết `STATUS.md`): bắt 9B chỉ NHẮC LẠI một con
+  số có sẵn — số ĐẦU 50,0%/80,0% có mặt, số CUỐI 15,0%/27,5%. Đối chiếu
+  `needle` 99,2% → vấn đề là **MẬT ĐỘ chi tiết số, không phải truy hồi**.
 - **`joint49cc` (mapper `--gdn-terms` 1→4) — TRAIN + ĐO XONG (2026-09-02),
   chi tiết đầy đủ ở `STATUS.md`**. `suite_swe` 600 mẫu: 49cc **81,0%** vs
   49bb 78,2% → McNemar p≈0,156, **chưa phân biệt được với nhiễu**. `gsm8k`:

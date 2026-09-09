@@ -3273,3 +3273,81 @@ v3) -> 36,0% (du epoch). Manh hon mot phep so A/B don le: loai duoc gia thuyet
 Dinh dang KHONG hong ma con TOT LEN theo train: thieu 'Final Answer:'
 45/250 (buoc 300) -> 22/250 (het epoch). Canh bao "parse giam" rut ra tu eval
 noi bo 48 mau khong chi la bao dong gia ma con SAI CHIEU.
+
+## 2026-09-09 — DUONG RESIDUAL GDN (y user): 36,0% -> 44,4%, p=0,007
+
+### Xuat phat tu cau hoi cua user
+"thieu 1 flow gradient dang residual de 3 component share info cho nhau?" ->
+lam ro: "y toi la dang y = x + f(x)".
+
+Kiem code: nua ATTENTION da co dang do (nhanh attn_rank: `x@W = x + (x@U)@V`,
+dang TAT vi attn_rank=0). Nua GDN thi KHONG co duong thang nao:
+    Sn  = S / rms                       # mat thang do
+    acc = sum_r A_r @ Sn @ B_r
+    out = einsum("ts,bsij->btij", alpha, acc) * rms_trung_binh
+alpha khoi tao UNIFORM 1/Hs -> luc bat dau MOI head dich = trung binh CA 32
+head nguon (bop bep hoan toan, khong phai dong nhat).
+
+### Do muc nen TU CHINH alpha (khong can GPU)
+out_t = sum_s alpha_ts * S_s -> neu S_s gan doc lap, phuong sai giu lai =
+sum_s alpha_ts^2. alpha=I -> 1,0 | uniform 1/32 -> 0,031.
+
+    sft_struct_v3: sum a^2 = 0,154 | ~6,3 head nguon hieu dung / head dich
+    sft_struct_v4: sum a^2 = 0,156 | ~6,4
+    theo do sau  : 0,140 (lop dau) -> 0,177 (lop cuoi)  [KHONG xau di theo do sau]
+
+=> ~85% phuong sai rieng cua head mat o MOI lop GDN. Va mo du lieu 2,6x
+KHONG cham toi no (0,154 -> 0,156): mot rang buoc du lieu khong go duoc.
+
+### Ve gia thuyet "nen chong nen n^2 lan" cua user
+- Mapper KHONG noi tiep: map_gdn(j, S_j) doc tu lop NGUON tuong ung, dau ra
+  lop j khong vao phep anh xa lop j+1. alpha ap SONG SONG 24 lan.
+- Cho CO chong chat la forward cua 9B luc decode (loi lop 3 -> dau vao lop 4).
+- Nhung neu nen NHAN theo lop thi 0,15^24 ~ 1e-20, ta da o 0%. Thuc do 36%
+  (luc do) -> chong chat co that nhung KHONG the nhan-theo-lop. Ly do kha di:
+  sum a^2 do phuong sai RIENG CUA HEAD chu khong phai thong tin tac vu (noi
+  dung du thua giua cac head); va 9B la mang da train, khu nhieu duoc mot phan.
+
+### Ban va + ket qua
+S' = f(S) + gamma*S, gamma theo TUNG HEAD (24 lop x 32 head = 768 tham so),
+KHOI TAO 0 -> no-op tuyet doi (test_gdn_res 9/9: nap checkpoint v4 chay giong
+het tung bit) -> so sanh MOT BIEN sach. Tu tat an toan khi Hs != Ht (4B->27B).
+Da noi gdn_res qua CA BON cho dung Mapper + test_9 chong tai phat bug joint49cc.
+
+    checkpoint                        niem phong 250   nhanh cham
+    gsm_grpo_v1c (ky luc cu, RL)      29/250 = 11,6%   final 29
+    sft_struct_v3 (2157 gold)         55/250 = 22,0%   final 54, so_cuoi 1
+    sft_struct_v4 (5575 gold)         90/250 = 36,0%   final 87, so_cuoi 3
+    sft_struct_v5 (+residual GDN)    111/250 = 44,4%   final 107, so_cuoi 4
+    oracle attn that (do tren v3)              43,0%
+    self-9B                                    93,0%
+
+    McNemar  v5 vs v4   lech 38-17  chi2= 7,27  p=0,007      CO Y NGHIA
+             v5 vs v3   lech 66-10  chi2=39,80  p<1e-9       CO Y NGHIA
+             v4 vs v3   lech 49-14  chi2=18,35  p=1,8e-05    CO Y NGHIA
+
+### gamma da hoc duoc (bang chung co che)
+|gamma| tb 0,0150 (≈28% do lon cua |alpha|=0,0537), 531 duong / 237 am.
+Phan bo theo do sau KHONG deu, co DINH O LOP GIUA:
+    lop  0-4 : 0,005
+    lop  8-12: 0,023-0,030   <- dinh, gap ~5 lan lop dau/cuoi
+    lop 16-23: 0,009-0,011
+=> model that su DUNG duong thang, va can no nhat o cac lop GDN GIUA. Dang chu
+y: KHONG trung voi cho tron head manh nhat (lop 0 co sum a^2 thap nhat 0,110
+nhung gamma nho nhat) -> "can duong thang" va "bi tron nhieu" la hai chuyen
+khac nhau.
+
+### v5 VUOT tran oracle 43,0%
+Khong mau thuan: tran do do tren duong ong v3, khong rang buoc he da doi CAU
+TRUC mapper. Day la lan THU BA xac nhan "tran do tren mot cau hinh KHONG
+chuyen sang cau hinh khac" (lan 1: doan 26,7% -> that ra 43%; lan 2: doan con
+~3 diem du dia -> that ra ~21).
+
+### Chuoi bang chung tren gsm8k, day du
+    doi THUAT TOAN (RL x4: EBA proxy / gsm8k truc tiep / struct K=2 / K=8)
+        -> 4/4 lan p > 0,4, khong nhuc nhich
+    doi DINH DANG dau ra (struct)        11,6% -> 22,0%  p=0,0005
+    doi QUY MO du lieu (2157 -> 5575)    22,0% -> 36,0%  p=1,8e-05
+    doi CAU TRUC mapper (residual GDN)   36,0% -> 44,4%  p=0,007
+Ba lan thang deu la thay doi DU LIEU hoac CAU TRUC; khong lan nao la thuat
+toan huan luyen.
