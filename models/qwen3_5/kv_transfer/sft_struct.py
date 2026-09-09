@@ -87,6 +87,12 @@ def main():
                          "-- S bi chia rms roi tron head bang alpha khoi tao "
                          "UNIFORM 1/Hs. Do tren sft_struct_v4: duong cheo alpha "
                          "chi chiem ~13%% khoi luong moi hang sau ca chien dich.")
+    ap.add_argument("--gdn-scale", type=int, default=0,
+                    help="Thang do GDN theo TUNG HEAD thay vi mot so vo huong. "
+                         "rms von tinh theo tung head nhung ban cu khoi phuc "
+                         "bang rms.mean(dim=(1,2,3)) -> moi head dau ra bi ep "
+                         "cung do lon, xoa thong tin 'head nao manh hon'. He so "
+                         "w theo tung head KHOI TAO 0 -> no-op tuyet doi.")
     ap.add_argument("--start-step", type=int, default=0,
                     help="Noi lai sau Colab recycle: bo qua N buoc dau. Dung "
                          "KEM --init-dir tro vao snapshot tuong ung.")
@@ -178,7 +184,9 @@ def main():
                        gdn_terms=_meta.get("gdn_terms", 1),
                        # doc tu _meta HOAC bat moi bang co dong lenh
                        gdn_res=bool(_meta.get("gdn_res", False))
-                       or bool(args.gdn_res))
+                       or bool(args.gdn_res),
+                       gdn_scale=bool(_meta.get("gdn_scale", False))
+                       or bool(args.gdn_scale))
     if mp.exists():
         mapper.load(str(mp))
         print(f"warm-start mapper tu {mp}", flush=True)

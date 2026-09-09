@@ -630,7 +630,8 @@ def main():
                        # PHAI doc tu _meta: bug joint49cc la eval
                        # khong doc gdn_terms -> am tham cat ve mac
                        # dinh, khong loi khong canh bao, ra so SAI.
-                       gdn_res=_meta.get("gdn_res", False))
+                       gdn_res=_meta.get("gdn_res", False),
+                       gdn_scale=_meta.get("gdn_scale", False))
     if Path(args.init_mapper).exists():
         mapper.load(args.init_mapper)
         print(f"warm-start mapper tu {args.init_mapper} "

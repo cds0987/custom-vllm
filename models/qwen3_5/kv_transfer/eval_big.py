@@ -573,7 +573,8 @@ def run_mapped(args):
                        # PHAI doc tu _meta: bug joint49cc la eval
                        # khong doc gdn_terms -> am tham cat ve mac
                        # dinh, khong loi khong canh bao, ra so SAI.
-                       gdn_res=_meta.get("gdn_res", False))
+                       gdn_res=_meta.get("gdn_res", False),
+                       gdn_scale=_meta.get("gdn_scale", False))
     if args.identity_mapper:
         print("COPY NGUYEN: khong nap checkpoint (W=I, A=B=I)", flush=True)
         if args.copy_select:

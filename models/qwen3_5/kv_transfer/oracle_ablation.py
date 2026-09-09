@@ -109,7 +109,8 @@ def main():
                        # PHAI doc tu _meta: bug joint49cc la eval
                        # khong doc gdn_terms -> am tham cat ve mac
                        # dinh, khong loi khong canh bao, ra so SAI.
-                       gdn_res=_meta.get("gdn_res", False))
+                       gdn_res=_meta.get("gdn_res", False),
+                       gdn_scale=_meta.get("gdn_scale", False))
     mapper.load(args.mapper)
     STOPS = e5.stop_ids(tok_t, model_t)
     print(f"mapper nap xong (gdn_terms={_meta.get('gdn_terms', 1)}) | "

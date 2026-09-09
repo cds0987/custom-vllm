@@ -141,7 +141,79 @@ def test_9_MOI_script_dung_Mapper_deu_doc_gdn_res_tu_meta():
         s = (_H / f).read_text(encoding="utf-8")
         if "e5.Mapper(" not in s:
             continue
-        for khoa in ("attn_rank", "gdn_per_head", "gdn_terms", "gdn_res"):
+        for khoa in ("attn_rank", "gdn_per_head", "gdn_terms", "gdn_res",
+                     "gdn_scale"):
             if f'_meta.get("{khoa}"' not in s:
                 thieu.append(f"{f}: khong doc {khoa} tu _meta")
     assert not thieu, "\n".join(thieu)
+
+
+# ============ TANG NEN THU HAI: thang do GDN theo tung head ================
+# rms tinh THEO TUNG HEAD (B,Hs,1,1) nhung ban cu khoi phuc bang mot so vo
+# huong rms.mean(dim=(1,2,3)) -> moi head dau ra bi ep cung do lon.
+
+def test_10_gdn_scale_khoi_tao_0_va_theo_tung_head():
+    m = e5.Mapper(**KW, gdn_scale=True)
+    assert m.gdn_scale is not None and len(m.gdn_scale) == 3
+    for w in m.gdn_scale:
+        assert w.shape == (4, 1, 1) and torch.count_nonzero(w) == 0
+
+
+def test_11_luc_khoi_tao_RA_Y_HET_ban_khong_co_gdn_scale():
+    """Dieu kien song con cho phep so mot-bien."""
+    a = e5.Mapper(**KW, gdn_scale=False)
+    b = e5.Mapper(**KW, gdn_scale=True)
+    S = _S()
+    for j in range(3):
+        assert torch.equal(a.map_gdn(j, S), b.map_gdn(j, S)), f"lech o lop {j}"
+
+
+def test_12_w_khac_0_thi_thang_do_DOI_THEO_HEAD():
+    """S co do lon RAT khac nhau giua cac head -> khi w=1 thang do phai bam
+    theo tung head chu khong con phang."""
+    torch.manual_seed(1)
+    S = torch.randn(1, 4, 128, 128)
+    S[0, 0] *= 10.0            # head 0 manh hon han
+    m = e5.Mapper(**KW, gdn_scale=True)
+    phang = m.map_gdn(0, S).float()
+    with torch.no_grad():
+        m.gdn_scale[0].fill_(1.0)
+    theo_head = m.map_gdn(0, S).float()
+    assert not torch.allclose(phang, theo_head, atol=1e-2)
+    # ty le do lon giua head 0 va head 1 phai TANG khi bam theo head
+    r_phang = phang[0, 0].norm() / phang[0, 1].norm()
+    r_head = theo_head[0, 0].norm() / theo_head[0, 1].norm()
+    assert r_head > r_phang, f"thang do theo head phai lam ro chenh lech: {r_head} vs {r_phang}"
+
+
+def test_13_gdn_scale_co_gradient():
+    m = e5.Mapper(**KW, gdn_scale=True)
+    m.map_gdn(0, _S()).float().sum().backward()
+    assert m.gdn_scale[0].grad is not None
+    assert torch.count_nonzero(m.gdn_scale[0].grad) > 0
+
+
+def test_14_nap_checkpoint_CU_giu_no_op():
+    cu = e5.Mapper(**KW, gdn_scale=False)
+    f = _H / "_tmp_test_gdn_scale.pt"
+    try:
+        torch.save(cu.state_dict(), f)
+        moi = e5.Mapper(**KW, gdn_scale=True)
+        moi.load(str(f))
+        for w in moi.gdn_scale:
+            assert torch.count_nonzero(w) == 0
+        S = _S()
+        for j in range(3):
+            assert torch.equal(cu.map_gdn(j, S), moi.map_gdn(j, S))
+    finally:
+        f.unlink(missing_ok=True)
+
+
+def test_15_gdn_res_va_gdn_scale_doc_lap_va_cong_don_duoc():
+    """Bat ca hai cung luc van phai la no-op luc khoi tao."""
+    a = e5.Mapper(**KW)
+    b = e5.Mapper(**KW, gdn_res=True, gdn_scale=True)
+    S = _S()
+    for j in range(3):
+        assert torch.equal(a.map_gdn(j, S), b.map_gdn(j, S))
+    assert b.gdn_res is not None and b.gdn_scale is not None

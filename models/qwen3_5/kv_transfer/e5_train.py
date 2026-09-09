@@ -231,7 +231,7 @@ class Mapper:
     def __init__(self, n_attn_tgt, n_gdn_tgt, gdn_heads_s, gdn_heads_t,
                  attn_dim, theta_s, theta_t, device="cuda",
                  attn_rank=0, gdn_per_head=False, gdn_terms=1,
-                 tok_rank=0, d_model=0, gdn_res=False):
+                 tok_rank=0, d_model=0, gdn_res=False, gdn_scale=False):
         """attn_rank>0 va gdn_per_head=True = DOI NGAN SACH THAM SO
         (user duyet 2026-08-29).
 
@@ -353,6 +353,27 @@ class Mapper:
         elif gdn_res:
             print(f"gdn_res BO QUA: so head nguon {gdn_heads_s} != dich "
                   f"{gdn_heads_t}, khong cong thang S duoc", flush=True)
+        # ---- TANG NEN THU HAI CUA GDN: thang do theo TUNG HEAD ---------------
+        # rms duoc tinh THEO TUNG HEAD -- (B, Hs, 1, 1) -- nhung luc khoi phuc
+        # ban cu dung rms.mean(dim=(1,2,3)) = MOT so vo huong cho ca mau, nen
+        # moi head dau ra bi ep ve CUNG mot do lon: thong tin "head nao manh
+        # hon head nao" bi xoa. Day la tang nen thu hai, cung ho voi alpha
+        # (tang thu nhat: tron 32 head, do duoc chi giu ~15% phuong sai).
+        # Vá: tron giua thang-do-phang cu va thang-do-theo-head, he so w theo
+        # TUNG HEAD, KHOI TAO 0 -> no-op tuyet doi (nap checkpoint cu chay y
+        # het) -> so sanh mot-bien sach, dung thu thuat da thang o gdn_res.
+        # Thang do cua head dich lay theo DUNG cach noi dung duoc tron (alpha),
+        # khong phai lay thang cua head nguon cung chi so.
+        self.gdn_scale = None
+        if gdn_scale and gdn_heads_s != gdn_heads_t:
+            print(f"gdn_scale BO QUA: so head nguon {gdn_heads_s} != dich "
+                  f"{gdn_heads_t}", flush=True)
+        elif gdn_scale:
+            self.gdn_scale = []
+            for _ in range(n_gdn_tgt):
+                w = torch.zeros(gdn_heads_t, 1, 1, device=device
+                                ).requires_grad_(True)
+                self.gdn_scale.append(w); self.params.append(w)
         n = sum(p.numel() for p in self.params)
         n_attn = sum(p.numel() for p in
                      (self.WK + self.WV + self.UK + self.VK_ + self.UV
@@ -360,7 +381,8 @@ class Mapper:
         print(f"Mapper: {n/1e6:.1f}M tham so | attention {n_attn/1e6:.1f}M "
               f"| GDN {(n-n_attn)/1e6:.1f}M "
               f"(attn_rank={self.attn_rank}, gdn_per_head={self.gdn_per_head}, "
-              f"gdn_terms={self.gdn_terms}, gdn_res={self.gdn_res is not None})")
+              f"gdn_terms={self.gdn_terms}, gdn_res={self.gdn_res is not None}, "
+              f"gdn_scale={self.gdn_scale is not None})")
 
     def map_attn(self, j, k, v, emb=None):
         if self.ckpt:
@@ -422,7 +444,16 @@ class Mapper:
         # rms.mean() TREN CA CHIEU BATCH lam moi mau nhan he so khac
         # voi khi chay rieng (bai kiem batch bat duoc: lech 7,8e-3).
         # Phai lay trung binh THEO TUNG MAU.
-        out = mapped * rms.mean(dim=(1, 2, 3), keepdim=True)
+        sc = rms.mean(dim=(1, 2, 3), keepdim=True)          # (B,1,1,1) ban cu
+        if self.gdn_scale is not None:
+            # Dung THANG DO CUA CHINH HEAD do (Hs == Ht, cung cach gdn_res lay
+            # head t tu head nguon t).
+            # BAY DA TRANH (bai kiem 12/13 bat duoc): ban dau dinh dung
+            # rms_t = alpha @ rms cho "nhat quan voi cach tron noi dung" --
+            # nhung alpha khoi tao UNIFORM 1/Hs nen alpha@rms == rms.mean
+            # DUNG BANG sc => w khong co gradient, VINH VIEN khong hoc duoc.
+            sc = sc + self.gdn_scale[j] * (rms - sc)        # w=0 -> y het cu
+        out = mapped * sc
         if self.gdn_res is not None:
             # y = f(x) + gamma*x. gamma=0 luc khoi tao -> y het ban cu.
             # Cong S GOC (chua chuan hoa) de duong thang giu nguyen ca THANG DO,
@@ -439,9 +470,12 @@ class Mapper:
                        "gdn_terms": self.gdn_terms,
                        "tok_rank": self.tok_rank,
                        "d_model": self.d_model,
-                       "gdn_res": self.gdn_res is not None}}
+                       "gdn_res": self.gdn_res is not None,
+                       "gdn_scale": self.gdn_scale is not None}}
         if self.gdn_res is not None:
             d["gdn_res"] = self.gdn_res
+        if self.gdn_scale is not None:
+            d["gdn_scale"] = self.gdn_scale
         if self.TU_K is not None:
             d.update({"TU_K": self.TU_K, "TV_K": self.TV_K,
                       "TU_V": self.TU_V, "TV_V": self.TV_V})
@@ -483,6 +517,9 @@ class Mapper:
         # mapper co duong residual chay GIONG HET ban cu (mot-bien sach).
         if self.gdn_res is not None and "gdn_res" in sd:
             for dst, src in zip(self.gdn_res, sd["gdn_res"]):
+                dst.data.copy_(src.data)
+        if self.gdn_scale is not None and "gdn_scale" in sd:
+            for dst, src in zip(self.gdn_scale, sd["gdn_scale"]):
                 dst.data.copy_(src.data)
         # ---- attention ----
         old_full = "WK" in sd
