@@ -359,7 +359,8 @@ class Mapper:
                       + self.VV_ + self.bK + self.bV))
         print(f"Mapper: {n/1e6:.1f}M tham so | attention {n_attn/1e6:.1f}M "
               f"| GDN {(n-n_attn)/1e6:.1f}M "
-              f"(attn_rank={self.attn_rank}, gdn_per_head={self.gdn_per_head}, gdn_terms={self.gdn_terms})")
+              f"(attn_rank={self.attn_rank}, gdn_per_head={self.gdn_per_head}, "
+              f"gdn_terms={self.gdn_terms}, gdn_res={self.gdn_res is not None})")
 
     def map_attn(self, j, k, v, emb=None):
         if self.ckpt:
