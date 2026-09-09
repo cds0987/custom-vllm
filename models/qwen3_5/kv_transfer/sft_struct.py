@@ -79,6 +79,14 @@ def main():
     ap.add_argument("--hf-repo", default="gunnybd01/qwen35-kv-mapper-4b-27b")
     ap.add_argument("--hf-prefix", default="sft_struct_v1")
     ap.add_argument("--sanity", type=int, default=0)
+    ap.add_argument("--gdn-res", type=int, default=0,
+                    help="Duong residual cho nua GDN: S' = f(S) + gamma*S, "
+                         "gamma theo tung head, KHOI TAO 0 (no-op) -> nap "
+                         "checkpoint cu chay giong het. Ly do: nua attention da "
+                         "co dang y=x+f(x) (nhanh attn_rank) con GDN thi khong "
+                         "-- S bi chia rms roi tron head bang alpha khoi tao "
+                         "UNIFORM 1/Hs. Do tren sft_struct_v4: duong cheo alpha "
+                         "chi chiem ~13%% khoi luong moi hang sau ca chien dich.")
     ap.add_argument("--start-step", type=int, default=0,
                     help="Noi lai sau Colab recycle: bo qua N buoc dau. Dung "
                          "KEM --init-dir tro vao snapshot tuong ung.")
@@ -167,7 +175,10 @@ def main():
     mapper = e5.Mapper(len(a_t), len(g_t), Hs, Ht, attn_dim, theta_s, theta_t,
                        attn_rank=_meta.get("attn_rank", 0),
                        gdn_per_head=_meta.get("gdn_per_head", False),
-                       gdn_terms=_meta.get("gdn_terms", 1))
+                       gdn_terms=_meta.get("gdn_terms", 1),
+                       # doc tu _meta HOAC bat moi bang co dong lenh
+                       gdn_res=bool(_meta.get("gdn_res", False))
+                       or bool(args.gdn_res))
     if mp.exists():
         mapper.load(str(mp))
         print(f"warm-start mapper tu {mp}", flush=True)

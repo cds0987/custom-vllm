@@ -105,7 +105,11 @@ def main():
                        e5.e1.get_rope_theta(model_t.config.get_text_config()),
                        attn_rank=_meta.get("attn_rank", 0),
                        gdn_per_head=_meta.get("gdn_per_head", False),
-                       gdn_terms=_meta.get("gdn_terms", 1))
+                       gdn_terms=_meta.get("gdn_terms", 1),
+                       # PHAI doc tu _meta: bug joint49cc la eval
+                       # khong doc gdn_terms -> am tham cat ve mac
+                       # dinh, khong loi khong canh bao, ra so SAI.
+                       gdn_res=_meta.get("gdn_res", False))
     mapper.load(args.mapper)
     STOPS = e5.stop_ids(tok_t, model_t)
     print(f"mapper nap xong (gdn_terms={_meta.get('gdn_terms', 1)}) | "

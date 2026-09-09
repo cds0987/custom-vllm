@@ -569,7 +569,11 @@ def run_mapped(args):
     mapper = e5.Mapper(len(a_t), len(g_t), Hs, Ht, attn_dim, theta_s, theta_t,
                        attn_rank=_meta.get("attn_rank", 0),
                        gdn_per_head=_meta.get("gdn_per_head", False),
-                       gdn_terms=_meta.get("gdn_terms", 1))
+                       gdn_terms=_meta.get("gdn_terms", 1),
+                       # PHAI doc tu _meta: bug joint49cc la eval
+                       # khong doc gdn_terms -> am tham cat ve mac
+                       # dinh, khong loi khong canh bao, ra so SAI.
+                       gdn_res=_meta.get("gdn_res", False))
     if args.identity_mapper:
         print("COPY NGUYEN: khong nap checkpoint (W=I, A=B=I)", flush=True)
         if args.copy_select:

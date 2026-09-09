@@ -231,7 +231,7 @@ class Mapper:
     def __init__(self, n_attn_tgt, n_gdn_tgt, gdn_heads_s, gdn_heads_t,
                  attn_dim, theta_s, theta_t, device="cuda",
                  attn_rank=0, gdn_per_head=False, gdn_terms=1,
-                 tok_rank=0, d_model=0):
+                 tok_rank=0, d_model=0, gdn_res=False):
         """attn_rank>0 va gdn_per_head=True = DOI NGAN SACH THAM SO
         (user duyet 2026-08-29).
 
@@ -330,6 +330,29 @@ class Mapper:
                 self.params += [A_r, B_r]
             self.alpha.append(a); self.A.append(As); self.B.append(Bs)
             self.params.append(a)
+        # ---- DUONG RESIDUAL CHO GDN: S' = f(S) + gamma * S (user 2026-09-09) --
+        # Nua attention DA co dang y = x + f(x) (nhanh attn_rank). Nua GDN thi
+        # KHONG co duong thang nao: S bi chia cho rms (mat thang do) roi tron
+        # head bang alpha, ma alpha khoi tao UNIFORM 1/Hs -> luc bat dau MOI head
+        # dich = trung binh CA 32 head nguon, tuc bop bep hoan toan.
+        # Do tren checkpoint sft_struct_v4 (2026-09-09): sau ca chien dich,
+        # duong cheo alpha chi gap 3,4-4,7 lan ngoai duong cheo va chiem ~13%
+        # khoi luong moi hang -> ~87% noi dung moi head dich VAN la hon hop.
+        # Mapper phai boi nguoc tu mot khoi tao xau.
+        # gamma KHOI TAO 0 -> no-op tuyet doi: nap checkpoint cu chay GIONG HET,
+        # nen day la so sanh mot-bien sach. Theo TUNG HEAD (Ht so, ~768 tham so
+        # tong) chu khong mot vo huong: cac head khong nhat thiet can luong
+        # residual nhu nhau.
+        self.gdn_res = None
+        if gdn_res and gdn_heads_s == gdn_heads_t:
+            self.gdn_res = []
+            for _ in range(n_gdn_tgt):
+                g = torch.zeros(gdn_heads_t, 1, 1, device=device
+                                ).requires_grad_(True)
+                self.gdn_res.append(g); self.params.append(g)
+        elif gdn_res:
+            print(f"gdn_res BO QUA: so head nguon {gdn_heads_s} != dich "
+                  f"{gdn_heads_t}, khong cong thang S duoc", flush=True)
         n = sum(p.numel() for p in self.params)
         n_attn = sum(p.numel() for p in
                      (self.WK + self.WV + self.UK + self.VK_ + self.UV
@@ -398,8 +421,13 @@ class Mapper:
         # rms.mean() TREN CA CHIEU BATCH lam moi mau nhan he so khac
         # voi khi chay rieng (bai kiem batch bat duoc: lech 7,8e-3).
         # Phai lay trung binh THEO TUNG MAU.
-        return (mapped * rms.mean(dim=(1, 2, 3), keepdim=True)
-                ).to(torch.bfloat16)
+        out = mapped * rms.mean(dim=(1, 2, 3), keepdim=True)
+        if self.gdn_res is not None:
+            # y = f(x) + gamma*x. gamma=0 luc khoi tao -> y het ban cu.
+            # Cong S GOC (chua chuan hoa) de duong thang giu nguyen ca THANG DO,
+            # thu ma nhanh f() da chia mat.
+            out = out + self.gdn_res[j] * S
+        return out.to(torch.bfloat16)
 
     def state_dict(self):
         d = {"bK": self.bK, "bV": self.bV, "alpha": self.alpha,
@@ -409,7 +437,10 @@ class Mapper:
                        "gdn_per_head": self.gdn_per_head,
                        "gdn_terms": self.gdn_terms,
                        "tok_rank": self.tok_rank,
-                       "d_model": self.d_model}}
+                       "d_model": self.d_model,
+                       "gdn_res": self.gdn_res is not None}}
+        if self.gdn_res is not None:
+            d["gdn_res"] = self.gdn_res
         if self.TU_K is not None:
             d.update({"TU_K": self.TU_K, "TV_K": self.TV_K,
                       "TU_V": self.TU_V, "TV_V": self.TV_V})
@@ -446,6 +477,11 @@ class Mapper:
                 dst.data.copy_(sd[key].data)
         for name in ("bK", "bV", "alpha"):
             for dst, src in zip(getattr(self, name), sd[name]):
+                dst.data.copy_(src.data)
+        # checkpoint CU khong co gdn_res -> giu zero-init (no-op) -> nap vao
+        # mapper co duong residual chay GIONG HET ban cu (mot-bien sach).
+        if self.gdn_res is not None and "gdn_res" in sd:
+            for dst, src in zip(self.gdn_res, sd["gdn_res"]):
                 dst.data.copy_(src.data)
         # ---- attention ----
         old_full = "WK" in sd
