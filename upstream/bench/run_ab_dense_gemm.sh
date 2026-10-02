@@ -16,6 +16,7 @@ MODEL="${MODEL:-unsloth/Qwen3-8B-GGUF:Q4_K_M}"
 TOKENIZER="${TOKENIZER:-Qwen/Qwen3-8B}"
 THRESHOLDS="${THRESHOLDS:-0 1024}"
 PORT="${PORT:-8100}"
+MODE="${MODE:-bench}"     # bench | needle (prompt dai co cai kim, so 2 nhanh)
 mkdir -p "$OUT"
 
 echo "=== [1/4] moi truong"
@@ -52,12 +53,14 @@ print("vllm", vllm.__version__, "| torch", torch.__version__,
 PYEOF
 
 echo "=== [3/4] pytest (GPU)"
-$PY -m pytest tests/test_kernels.py -k "dense_gemm" -q 2>&1 | tail -15 | tee "$OUT/pytest.txt"
+[ -f "$OUT/pytest.txt" ] && grep -q passed "$OUT/pytest.txt" || $PY -m pytest tests/test_kernels.py -k "dense_gemm" -q 2>&1 | tail -15 | tee "$OUT/pytest.txt"
 
 echo "=== [4/4] A/B"
 for THR in $THRESHOLDS; do
-  [ -f "$OUT/thr${THR}.json" ] && { echo "thr=$THR da co, bo qua"; continue; }
-  LOG="$OUT/serve_thr${THR}.log"
+  TAG="thr${THR}"; EXTRA=""
+  [ "$MODE" = needle ] && { TAG="needle_thr${THR}"; EXTRA="--needle-only"; }
+  [ -f "$OUT/${TAG}.json" ] && { echo "$TAG da co, bo qua"; continue; }
+  LOG="$OUT/serve_${TAG}.log"
   VLLM_GGUF_DENSE_GEMM_MIN_ROWS="$THR" nohup vllm serve "$MODEL" --tokenizer "$TOKENIZER" \
     --served-model-name ab --port "$PORT" --max-model-len 16384 --max-num-seqs 64 \
     --max-num-batched-tokens 8192 --gpu-memory-utilization 0.85 \
@@ -70,8 +73,8 @@ for THR in $THRESHOLDS; do
   done
   curl -sf "http://localhost:$PORT/health" >/dev/null || { echo "SERVER KHONG LEN"; tail -30 "$LOG"; kill "$SPID"; exit 1; }
   $PY -u "$HERE/ab_dense_gemm.py" --url "http://localhost:$PORT/v1/completions" \
-    --model ab --label "thr${THR}" --out "$OUT/thr${THR}.json"
-  nvidia-smi --query-gpu=memory.used --format=csv,noheader | tee "$OUT/vram_thr${THR}.txt"
+    --model ab --label "$TAG" --out "$OUT/${TAG}.json" $EXTRA
+  nvidia-smi --query-gpu=memory.used --format=csv,noheader | tee "$OUT/vram_${TAG}.txt"
   kill "$SPID"; wait "$SPID" 2>/dev/null
   while ss -tln | grep -q ":$PORT "; do sleep 2; done
 done

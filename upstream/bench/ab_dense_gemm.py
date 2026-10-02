@@ -91,6 +91,26 @@ def bench_decode(url, model, conc, per_worker, max_tokens):
             "tok_s": toks / wall}
 
 
+def bench_needle(url, model, words_per_token, n_tokens=(3000, 9000), per_len=3):
+    """Functional check of the path the short samples never reach: a long
+    prompt (prefill rows >= threshold) with a fact buried in the middle.
+    Seeded, so both arms get byte-identical prompts and texts are comparable."""
+    rng = random.Random(777)
+    rows = []
+    for n in n_tokens:
+        for _ in range(per_len):
+            code = rng.randint(10000, 99999)
+            half = int(n * words_per_token / 2)
+            prompt = (rand_prompt(half, rng) + f". The secret code is {code}. "
+                      + rand_prompt(half, rng)
+                      + "." + chr(10) + "Question: what is the secret code?" + chr(10)
+                      + "Answer: The secret code is")
+            _, usage, text = post(url, model, prompt, 12)
+            rows.append({"prompt_tokens": usage["prompt_tokens"], "code": code,
+                         "text": text, "hit": str(code) in text})
+    return rows
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", default="http://localhost:8000/v1/completions")
@@ -103,7 +123,17 @@ def main():
     ap.add_argument("--conc", type=int, nargs="+", default=[1, 4, 16, 32])
     ap.add_argument("--per-worker", type=int, default=3)
     ap.add_argument("--max-tokens", type=int, default=256)
+    ap.add_argument("--needle-only", action="store_true")
     a = ap.parse_args()
+
+    if a.needle_only:
+        rows = bench_needle(a.url, a.model, a.words_per_token)
+        for r in rows:
+            print(f"[{a.label}] needle {r['prompt_tokens']} tok code={r['code']} "
+                  f"hit={r['hit']} text={r['text']!r}", flush=True)
+        with open(a.out, "w", encoding="utf-8") as f:
+            json.dump({"label": a.label, "needle": rows}, f, indent=1)
+        return
 
     rng = random.Random(1234)
     res = {"label": a.label, "model": a.model, "prefill": [], "decode": [], "samples": []}
