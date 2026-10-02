@@ -3,9 +3,22 @@
 File này được CLAUDE.md nạp tự động đầu mỗi phiên. Claude TỰ ĐỘNG cập nhật khi
 trạng thái đổi — không hỏi user. Giới hạn cứng ≤300 dòng; chi tiết dồn `STATUS.md`.
 
-Cập nhật: 2026-09-09.
+Cập nhật: 2026-10-02.
 
 ## Trạng thái hiện tại
+
+- **📤 PR UPSTREAM ĐẦU TIÊN — SẴN SÀNG, CHƯA NỘP (2026-10-02).** Kiểm sống 20
+  bản nháp `upstream/`: 7 cái (1,2,3,4,7,8,19) upstream đã tự sửa → bỏ. Bản
+  nháp 6 viết lại trên `main` của `vllm-gguf-plugin` (`e2b8ad5`): biến
+  `VLLM_GGUF_DENSE_GEMM_MIN_ROWS` (mặc định 0 = tắt), lô ≥ ngưỡng đi dequant +
+  GEMM dày. Khớp yêu cầu đang mở vllm#55578 (chưa ai nhận). Đo L4, vLLM 0.30.0,
+  Qwen3-8B Q4_K_M, một biến: **prefill 208-213 → 2337-2715 tok/s (×11-13)**,
+  decode không đổi (179,9 vs 180,0 ở 32 luồng), pytest GPU 73/73, kim trong
+  prompt dài 6/6 cả hai nhánh. **Chờ user đọc từng dòng bản vá + ra lệnh nộp**
+  (vLLM cấm PR thuần AI; commit cần `Signed-off-by` của user). Chi tiết:
+  `upstream/INDEX.md`, `upstream/bench/results/`.
+  Bẫy Colab mới: `UV_SYSTEM_PYTHON=true` làm `uv pip` bỏ qua venv; cài vllm
+  thẳng vào hệ thống thì lệch torchaudio → bắt buộc venv + `unset`.
 
 - **🏆 ĐỊNH DẠNG CÓ CẤU TRÚC (2026-09-06) — cải tiến có ý nghĩa thống kê ĐẦU
   TIÊN của chiến dịch gsm8k.** Hướng user chốt: bắt 9B tự sinh quỹ đạo

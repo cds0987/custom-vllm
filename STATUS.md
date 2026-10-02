@@ -3351,3 +3351,39 @@ chuyen sang cau hinh khac" (lan 1: doan 26,7% -> that ra 43%; lan 2: doan con
     doi CAU TRUC mapper (residual GDN)   36,0% -> 44,4%  p=0,007
 Ba lan thang deu la thay doi DU LIEU hoac CAU TRUC; khong lan nao la thuat
 toan huan luyen.
+
+## 2026-10-02 — PR upstream: dense GEMM cho lô lớn trong vllm-gguf-plugin
+
+Kiểm sống 20 bản nháp `upstream/` với plugin `main` (`e2b8ad5`) + vllm `main`:
+1, 2, 4 (adapter `weights_adapter/qwen3_5.py`, PR #98), 3 (`shard_weight_type`),
+7, 8 (registry + `IsHybrid`), 19 (PR #116) đã được upstream sửa. Còn sống: 6
+(trùng yêu cầu vllm#55578) và 13 (nuốt `ImportError` của `_C_gguf` không cảnh báo).
+
+Bản nháp 6 viết lại: `VLLM_GGUF_DENSE_GEMM_MIN_ROWS` (mặc định 0). Đo trên L4,
+vLLM 0.30.0, torch 2.13.0+cu132, plugin build từ nguồn (`_C_gguf` nạp thật),
+`unsloth/Qwen3-8B-GGUF:Q4_K_M`, `--max-num-seqs 64 --max-num-batched-tokens 8192
+--no-enable-prefix-caching`, một biến duy nhất là ngưỡng 0 vs 1024:
+
+| | ngưỡng 0 | ngưỡng 1024 |
+|---|---|---|
+| prefill ~2,1k token (tok/s) | 213 | 2709 |
+| prefill ~8,3k token | 210 | 2337 |
+| prefill ~12,2k token | 208 | 2715 |
+| decode 1 / 4 / 16 / 32 luồng | 41,7 / 111,2 / 173,3 / 179,9 | 42,5 / 111,4 / 172,3 / 180,0 |
+| VRAM sau khi chạy | 19.998 MiB | 20.034 MiB |
+
+`pytest tests/test_kernels.py -k dense_gemm`: 73 passed. Kim trong prompt dài
+(~3,1k và ~9,2k token): 6/6 cả hai nhánh; văn bản sau đáp án trùng 4/6 (hai
+nhánh dùng kernel khác nhau cho prefill nên không kỳ vọng trùng từng bit).
+4 mẫu greedy ngắn trùng 4/4 nhưng KHÔNG phải bằng chứng cho đường mới (dưới
+1024 hàng, cả hai nhánh đều đi kernel fused).
+
+Chưa đo: GPU khác, loại quant khác, MoE, tải trộn prefill+decode, đỉnh VRAM tức
+thời trong lúc gọi đường dense. Chưa nộp gì ra ngoài. Số thô:
+`upstream/bench/results/2026-10-02-l4-qwen3-8b-q4km.md`.
+
+Học phí vận hành: (1) Colab đặt `UV_SYSTEM_PYTHON=true` → `uv pip` cài vào python
+hệ thống dù venv đang activate; (2) cài vllm thẳng vào hệ thống làm torch mới
+đụng torchaudio cài sẵn (lệch bản CUDA) → vllm không import được. Phải venv
+riêng + `unset UV_SYSTEM_PYTHON`. Runtime hiện tại đã bị lần cài nhầm đó đổi
+torch hệ thống — pipeline KV-transfer cần runtime mới hoặc cài lại torch.

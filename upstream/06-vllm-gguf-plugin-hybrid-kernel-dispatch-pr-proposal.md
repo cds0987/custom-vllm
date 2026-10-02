@@ -128,4 +128,5 @@ kernels. vllm-project/vllm#55578 is the matching feature request and has no PR.
 ## AI assistance
 
 This change was written with AI assistance (Claude). I have reviewed every
-changed line and ran the tests and benchmarks above myself.
+changed line. The tests and benchmarks above were run in my own Colab L4
+environment.
