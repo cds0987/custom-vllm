@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # A/B do cho PR "dense GEMM cho lo lon" tren vllm-gguf-plugin MAIN + dung ban va.
-# Chay tren runtime MOI (python he thong, chua co patch nao cua custom-vllm),
+# Moi truong RIENG (/content/pr_env) -- khong dung env da patch cua custom-vllm,
 # de so do la cua upstream sach + MOT thay doi.
 #
 #   bash upstream/bench/run_ab_dense_gemm.sh            # setup + pytest + A/B
@@ -9,6 +9,7 @@
 # Idempotent: buoc nao xong roi thi bo qua. Ket qua: /content/pr_bench/*.json
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
+ENV=/content/pr_env
 SRC=/content/pr_plugin
 OUT=/content/pr_bench
 MODEL="${MODEL:-unsloth/Qwen3-8B-GGUF:Q4_K_M}"
@@ -18,14 +19,20 @@ PORT="${PORT:-8100}"
 mkdir -p "$OUT"
 
 echo "=== [1/4] moi truong"
-# Colab dat UV_SYSTEM_PYTHON=true -> `uv pip` LUON cai vao python he thong, bo qua
-# venv dang activate (da dinh: vllm vao /usr, con `python` cua venv thi trong).
-# Runtime Colab la do dung mot lan -> dung thang python he thong cho nhat quan.
+# Hai bay da dinh tren Colab (2026-10-02):
+#  1. Colab dat UV_SYSTEM_PYTHON=true -> `uv pip` cai vao python he thong, BO QUA
+#     venv dang activate. Phai unset.
+#  2. Cai thang vao he thong thi torch moi dung torchaudio cai san (lech ban CUDA)
+#     -> vllm khong import noi. => BAT BUOC venv rieng.
 command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
-export PATH="$HOME/.local/bin:$PATH" UV_SYSTEM_PYTHON=true
-PY=python3
+unset UV_SYSTEM_PYTHON
+export PATH="$HOME/.local/bin:$PATH"
+[ -x "$ENV/bin/python" ] || uv venv --python 3.12 "$ENV"
+export VIRTUAL_ENV="$ENV" PATH="$ENV/bin:$PATH"
+PY="$ENV/bin/python"
 $PY -c "import vllm" 2>/dev/null || uv pip install vllm --torch-backend=auto
 $PY -c "import pytest, requests" 2>/dev/null || uv pip install pytest requests
+[ "$(command -v vllm)" = "$ENV/bin/vllm" ] || { echo "vllm KHONG nam trong venv: $(command -v vllm)"; exit 1; }
 
 echo "=== [2/4] plugin main + ban va"
 if [ ! -d "$SRC/.git" ]; then
