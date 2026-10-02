@@ -56,7 +56,7 @@ $PY - <<'PYEOF' | tee "$OUT/env.txt"
 import torch, vllm, vllm_gguf_plugin.ops as ops
 print("vllm", vllm.__version__, "| torch", torch.__version__,
       "| gpu", torch.cuda.get_device_name(0),
-      "| cuda_ext_loaded", ops._CUDA_AVAILABLE, "| cuda_enabled", ops._CUDA_ENABLED,
+      "| cuda_ext_loaded", getattr(ops, "_CUDA_AVAILABLE", "n/a"), "| cuda_enabled", getattr(ops, "_CUDA_ENABLED", "n/a"),
       "| dense_upstream", getattr(ops, "cuda_dense_upstream_enabled", lambda: "n/a")())
 PYEOF
 
