@@ -9,9 +9,12 @@
 # Idempotent: buoc nao xong roi thi bo qua. Ket qua: /content/pr_bench/*.json
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-ENV=/content/pr_env
-SRC=/content/pr_plugin
-OUT=/content/pr_bench
+ENV="${ENV_DIR:-/content/pr_env}"
+SRC="${SRC_DIR:-/content/pr_plugin}"
+OUT="${OUT_DIR:-/content/pr_bench}"
+# Nhanh doi chung: PLUGIN_REF=pull/141/head APPLY_PATCH=0 (do mot PR khac cua upstream)
+PLUGIN_REF="${PLUGIN_REF:-}"
+APPLY_PATCH="${APPLY_PATCH:-1}"
 MODEL="${MODEL:-unsloth/Qwen3-8B-GGUF:Q4_K_M}"
 TOKENIZER="${TOKENIZER:-Qwen/Qwen3-8B}"
 THRESHOLDS="${THRESHOLDS:-0 1024}"
@@ -40,7 +43,11 @@ if [ ! -d "$SRC/.git" ]; then
   git clone -q https://github.com/vllm-project/vllm-gguf-plugin.git "$SRC"
 fi
 cd "$SRC"
-if ! grep -q VLLM_GGUF_DENSE_GEMM_MIN_ROWS vllm_gguf_plugin/quantization/linear.py; then
+if [ -n "$PLUGIN_REF" ] && [ "$(git rev-parse --abbrev-ref HEAD)" != ab_ref ]; then
+  git fetch -q origin "$PLUGIN_REF:ab_ref" && git checkout -q ab_ref || { echo "KHONG LAY DUOC $PLUGIN_REF"; exit 1; }
+  git submodule update --init --depth 1 --recursive || { echo "SUBMODULE HONG"; exit 1; }
+fi
+if [ "$APPLY_PATCH" = 1 ] && ! grep -q VLLM_GGUF_DENSE_GEMM_MIN_ROWS vllm_gguf_plugin/quantization/linear.py; then
   git apply "$HERE/../patches/06-dense-gemm-large-batch.patch" || { echo "BAN VA KHONG AP DUOC"; exit 1; }
 fi
 git log --oneline -1 | tee "$OUT/plugin_commit.txt"
@@ -49,11 +56,12 @@ $PY - <<'PYEOF' | tee "$OUT/env.txt"
 import torch, vllm, vllm_gguf_plugin.ops as ops
 print("vllm", vllm.__version__, "| torch", torch.__version__,
       "| gpu", torch.cuda.get_device_name(0),
-      "| cuda_ext_loaded", ops._CUDA_AVAILABLE, "| cuda_enabled", ops._CUDA_ENABLED)
+      "| cuda_ext_loaded", ops._CUDA_AVAILABLE, "| cuda_enabled", ops._CUDA_ENABLED,
+      "| dense_upstream", getattr(ops, "cuda_dense_upstream_enabled", lambda: "n/a")())
 PYEOF
 
 echo "=== [3/4] pytest (GPU)"
-[ -f "$OUT/pytest.txt" ] && grep -q passed "$OUT/pytest.txt" || $PY -m pytest tests/test_kernels.py -k "dense_gemm" -q 2>&1 | tail -15 | tee "$OUT/pytest.txt"
+[ "$APPLY_PATCH" != 1 ] || { [ -f "$OUT/pytest.txt" ] && grep -q passed "$OUT/pytest.txt"; } || $PY -m pytest tests/test_kernels.py -k "dense_gemm" -q 2>&1 | tail -15 | tee "$OUT/pytest.txt"
 
 echo "=== [4/4] A/B"
 for THR in $THRESHOLDS; do
