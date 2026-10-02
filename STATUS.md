@@ -3387,3 +3387,29 @@ hệ thống dù venv đang activate; (2) cài vllm thẳng vào hệ thống l�
 đụng torchaudio cài sẵn (lệch bản CUDA) → vllm không import được. Phải venv
 riêng + `unset UV_SYSTEM_PYTHON`. Runtime hiện tại đã bị lần cài nhầm đó đổi
 torch hệ thống — pipeline KV-transfer cần runtime mới hoặc cài lại torch.
+
+### Bổ sung cùng ngày — đo PR #141 của upstream: quyết định KHÔNG nộp
+
+Kiểm trùng bắt buộc ngay trước khi nộp (đọc diff, không chỉ tiêu đề) cho thấy
+vllm-gguf-plugin PR #141 (mở 29/09, +6866/−235, chưa review) viết lại
+`_fused_mul_mat_gguf` và thay kernel b2899 bằng kernel llama.cpp ghim ở `002a12a`.
+Đo cùng runtime, cùng script, cùng model:
+
+| | main | main + bản vá ta | #141 | #141 + BLAS≥1024 (thí nghiệm) |
+|---|---|---|---|---|
+| prefill ~2,1k / ~8,3k / ~12,2k | 213 / 210 / 208 | 2709 / 2337 / 2715 | 2440 / 2095 / 1998 | 2526 / 2537 / 2286 |
+| decode 1 / 4 / 16 / 32 luồng | 41,7 / 111,2 / 173,3 / 179,9 | 42,5 / 111,4 / 172,3 / 180,0 | 47,6 / 123,1 / 516,0 / 918,6 | 47,6 / 125,5 / 515,0 / 918,8 |
+
+Kết luận: #141 một mình đã xoá ~90% khoảng cách prefill mà bản vá ta nhắm, và còn
+tăng decode ×5,1 ở 32 luồng — thứ bản vá ta không chạm tới. Phần còn lại của ý
+tưởng (ưu tiên đường `DENSE_BLAS` có sẵn trong #141 cho lô ≥1024 hàng) chỉ thêm
++4/+21/+14% prefill, decode không đổi. Hai bản vá xung đột văn bản. → KHÔNG nộp PR
+riêng. Nháp bình luận gửi số đo cho #141: `upstream/06b-comment-on-pr141-draft.md`
+(chưa gửi, chờ user).
+
+**Hệ quả cho sản phẩm của ta**: đường GGUF thuần có thể nhanh lên rất nhiều khi
+#141 vào main (decode 919 tok/s với Qwen3-8B Q4_K_M trên L4). Kết luận "GGUF thua
+Marlin khi phục vụ" đo trên kernel cũ — cần đo lại sau khi #141 merge.
+
+Sai sót quy trình: ở lượt kiểm trùng đầu, Claude ghi #141 là "liên quan, không
+trùng" chỉ dựa vào tiêu đề. Kiểm trùng phải đọc diff vào đúng file mình sửa.

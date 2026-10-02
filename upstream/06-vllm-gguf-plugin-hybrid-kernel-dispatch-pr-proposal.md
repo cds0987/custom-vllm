@@ -8,11 +8,12 @@ Plugin GGUF nhân ma trận nén bằng kernel "fused" (đọc thẳng trọng s
 lần. Bản vá thêm MỘT biến môi trường, mặc định tắt: phép nhân nào có số hàng
 từ ngưỡng trở lên thì đi đường giải nén, còn lại giữ nguyên.
 
-**Trạng thái (2026-10-02):** viết lại trên `main` của plugin (`e2b8ad5`), đã chạy
-test GPU (73/73) và đo A/B trên L4 với vLLM 0.30.0. CHƯA nộp — chờ user đọc từng
-dòng bản vá và ra lệnh. Bản vá: `upstream/patches/06-dense-gemm-large-batch.patch`.
-Số thô: `upstream/bench/results/2026-10-02-l4-qwen3-8b-q4km.md`. Commit nộp phải
-có `Signed-off-by` của user.
+**Trạng thái (2026-10-02, chốt): KHÔNG NỘP.** Bản vá đúng và đo được (prefill
+×11-13 trên `main`), nhưng kiểm trùng trước khi nộp phát hiện PR #141 của upstream
+viết lại đúng hàm này và thay kernel chậm: tự nó đã đưa prefill lên ~2.000-2.400
+tok/s và decode ×5. Trên nền #141, ý tưởng của ta chỉ còn thêm +4/+21/+14% prefill.
+Hướng còn lại: bình luận số đo lên PR #141 (nháp: `06b-comment-on-pr141-draft.md`).
+Bảng 4 nhánh: `bench/results/2026-10-02-l4-qwen3-8b-q4km.md`.
 
 **Target repo:** vllm-project/vllm-gguf-plugin
 **Closes:** vllm-project/vllm#55578 (feature request "Add --gguf-dequant-on-load

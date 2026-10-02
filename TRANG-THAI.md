@@ -7,18 +7,20 @@ Cập nhật: 2026-10-02.
 
 ## Trạng thái hiện tại
 
-- **📤 PR UPSTREAM ĐẦU TIÊN — SẴN SÀNG, CHƯA NỘP (2026-10-02).** Kiểm sống 20
-  bản nháp `upstream/`: 7 cái (1,2,3,4,7,8,19) upstream đã tự sửa → bỏ. Bản
-  nháp 6 viết lại trên `main` của `vllm-gguf-plugin` (`e2b8ad5`): biến
-  `VLLM_GGUF_DENSE_GEMM_MIN_ROWS` (mặc định 0 = tắt), lô ≥ ngưỡng đi dequant +
-  GEMM dày. Khớp yêu cầu đang mở vllm#55578 (chưa ai nhận). Đo L4, vLLM 0.30.0,
-  Qwen3-8B Q4_K_M, một biến: **prefill 208-213 → 2337-2715 tok/s (×11-13)**,
-  decode không đổi (179,9 vs 180,0 ở 32 luồng), pytest GPU 73/73, kim trong
-  prompt dài 6/6 cả hai nhánh. **Chờ user đọc từng dòng bản vá + ra lệnh nộp**
-  (vLLM cấm PR thuần AI; commit cần `Signed-off-by` của user). Chi tiết:
-  `upstream/INDEX.md`, `upstream/bench/results/`.
-  Bẫy Colab mới: `UV_SYSTEM_PYTHON=true` làm `uv pip` bỏ qua venv; cài vllm
-  thẳng vào hệ thống thì lệch torchaudio → bắt buộc venv + `unset`.
+- **📤 PR UPSTREAM dense-GEMM: ĐO XONG, KHÔNG NỘP (2026-10-02).** Kiểm sống 20
+  bản nháp `upstream/`: 7 cái (1,2,3,4,7,8,19) upstream đã tự sửa. Bản nháp 6
+  viết lại trên `main` của `vllm-gguf-plugin` (`VLLM_GGUF_DENSE_GEMM_MIN_ROWS`),
+  pytest GPU 73/73, đo L4 / vLLM 0.30.0 / Qwen3-8B Q4_K_M: prefill 208-213 →
+  2337-2715 tok/s. **Nhưng kiểm trùng ngay trước khi nộp lộ ra PR #141 của
+  upstream** (kernel llama.cpp mới, viết lại đúng hàm đó): tự nó đạt prefill
+  1998-2440 và **decode 32 luồng 180 → 919 tok/s (×5)**. Trên nền #141, đường
+  dequant+cuBLAS cho lô lớn chỉ còn thêm +4/+21/+14% prefill. → không nộp PR
+  cạnh tranh; nháp bình luận số đo cho #141 ở `upstream/06b-...md`, **chờ user
+  duyệt mới gửi**. Bài học: kiểm trùng phải ĐỌC diff của PR đang mở, không chỉ
+  đọc tiêu đề (Claude đã xếp #141 vào "liên quan, không trùng" mà chưa đọc).
+  **Hệ quả sản phẩm**: kết luận "GGUF thua Marlin" đo trên kernel cũ — phải đo
+  lại khi #141 vào main.
+  Bẫy Colab: `UV_SYSTEM_PYTHON=true` làm `uv pip` bỏ qua venv → `unset` + venv.
 
 - **🏆 ĐỊNH DẠNG CÓ CẤU TRÚC (2026-09-06) — cải tiến có ý nghĩa thống kê ĐẦU
   TIÊN của chiến dịch gsm8k.** Hướng user chốt: bắt 9B tự sinh quỹ đạo
