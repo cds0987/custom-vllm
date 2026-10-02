@@ -19,6 +19,30 @@ this environment had no network access during the 2026-08-11 writing
 session; each new draft's own "Duplicate check" section says so explicitly
 and should be re-verified live before filing.
 
+## Live re-check 2026-10-02 (supersedes the "Ready to send?" column below)
+
+Checked against vllm-gguf-plugin `main` (`e2b8ad5`) and vllm `main` by reading
+the source, plus `gh` issue/PR search. Upstream moved a lot in two months.
+
+| Draft | Status today | Evidence |
+|---|---|---|
+| 1, 2, 4 | **Fixed upstream — drop** | `weights_adapter/qwen3_5.py` maps `ssm_a` → `A_log`, applies `log(-w)`, norm `-1`, conv1d unsqueeze, V-head tiling (PR #98, merged 2026-08-18) |
+| 3 | **Fixed upstream — drop** | `shard_weight_type` per shard in `quantization/linear.py` |
+| 7, 8 | **Fixed upstream — drop** | `Qwen3_5ForCausalLM` in `registry.py`; `IsHybrid` on `Qwen3_5ForCausalLMBase` |
+| 19 | **Fixed upstream — drop** | PR #116 "Limit `huggingface_hub` version", merged 2026-08-20 |
+| 6 | **Alive — PR rewritten on main, not filed** | matches open request vllm#55578; patch in `patches/06-dense-gemm-large-batch.patch`; blocked on re-measuring on main |
+| 13 | **Alive — small PR candidate** | `ops.py` still swallows the `_C_gguf` `ImportError` with no log line |
+| 5 | Unknown | not re-run on main |
+| 9 | Unclear | `embed_tokens` still built without `quant_config`, but the plugin now has `quantization/vocal_embeds.py` |
+| 17 | Alive, question only | `use_cascade_attention()` still returns `False` with a TODO |
+| 10, 14, 16, 18, 20 | No duplicate found by search; source not re-read | — |
+| 11, 12, 15 | Not checked | — |
+
+Risk for our own production flags (not a draft): vllm#55766, open, v0.28.0 —
+NaN logits after a prefix-cache hit with `--mamba-cache-mode align` on a
+Qwen GDN hybrid. We run 0.27.1 with both flags and have not seen it; re-test
+before upgrading.
+
 ## Table
 
 | # | File | Target repo | Title | Severity | Local fix? | Ready to send? |

@@ -1,0 +1,179 @@
+diff --git a/README.md b/README.md
+index 327561e..d11f104 100644
+--- a/README.md
++++ b/README.md
+@@ -73,6 +73,26 @@ vllm serve unsloth/Qwen3.5-4B-MTP-GGUF:Q4_K_M \
+ For a GGUF without a `nextn` block, omit `--speculative-config`; the backbone
+ loads normally without MTP.
+ 
++## Performance tuning
++
++Quantized matmuls go through fused kernels that read the packed weight
++directly. That is the right choice for decode, where each step has few rows.
++A prefill chunk has thousands of rows and is compute bound, and there
++dequantizing the weight and running a dense GEMM can be several times faster.
++
++Set `VLLM_GGUF_DENSE_GEMM_MIN_ROWS` to route matmuls with at least that many
++input rows through the dense path and keep the fused kernels below it:
++
++```bash
++VLLM_GGUF_DENSE_GEMM_MIN_ROWS=1024 vllm serve Qwen/Qwen3-0.6B-GGUF:Q8_0   --tokenizer Qwen/Qwen3-0.6B
++```
++
++The row count of a matmul is the number of tokens in the engine step, so pick
++a value above `--max-num-seqs` and at or below `--max-num-batched-tokens`.
++The dense path materializes one dequantized weight at a time, so it needs
++transient GPU memory for the largest quantized layer. The default `0` keeps
++the fused kernels for every batch size.
++
+ ## Tested model coverage
+ 
+ The plugin uses vLLM's model implementations and a generic GGUF weight
+diff --git a/tests/test_kernels.py b/tests/test_kernels.py
+index 076c12f..7020c1d 100644
+--- a/tests/test_kernels.py
++++ b/tests/test_kernels.py
+@@ -9,6 +9,7 @@ from vllm.model_executor.layers.fused_moe.activation import (
+ from vllm.model_executor.layers.fused_moe.fused_moe import moe_align_block_size
+ 
+ import vllm_gguf_plugin.ops as ops
++import vllm_gguf_plugin.quantization.linear as gguf_linear
+ from vllm_gguf_plugin.quantization.fused_moe import _fused_moe_gguf
+ from vllm_gguf_plugin.quantization.vocal_embeds import apply_gguf_embedding
+ from vllm_gguf_plugin.triton.fused_moe import ggml_moe_a8_triton
+@@ -255,6 +256,74 @@ def test_mmq_triton_dispatch(
+         )
+ 
+ 
++@pytest.mark.parametrize("num_tokens", [1, 128, 2048])
++@pytest.mark.parametrize("hidden_size", HIDDEN_SIZES)
++@pytest.mark.parametrize("dtype", DTYPES)
++@pytest.mark.parametrize(
++    "quant_type",
++    [
++        GGMLQuantizationType.Q4_K,
++        GGMLQuantizationType.Q6_K,
++        GGMLQuantizationType.Q4_0,
++        GGMLQuantizationType.Q8_0,
++    ],
++)
++@torch.inference_mode()
++def test_dense_gemm_dispatch(
++    monkeypatch: pytest.MonkeyPatch,
++    num_tokens: int,
++    hidden_size: int,
++    dtype: torch.dtype,
++    quant_type: GGMLQuantizationType,
++):
++    """Batches at or above the threshold skip the fused kernels entirely,
++    smaller ones keep them, and both agree with the dense reference."""
++    seed_everything(0)
++    min_rows = 1024
++    monkeypatch.setattr(gguf_linear, "_DENSE_GEMM_MIN_ROWS", min_rows)
++
++    calls: list[str] = []
++
++    def spy(name: str):
++        original = getattr(ops, name)
++
++        def wrapped(*args, **kwargs):
++            calls.append(name)
++            return original(*args, **kwargs)
++
++        monkeypatch.setattr(ops, name, wrapped)
++
++    for name in ("ggml_dequantize", "ggml_mul_mat_vec_a8", "ggml_mul_mat_a8"):
++        spy(name)
++
++    tensors = get_gguf_sample_tensors(hidden_size, quant_type)
++    x = torch.rand((num_tokens, hidden_size), dtype=dtype, device="cuda")
++    for tensor in tensors:
++        calls.clear()
++        weight = torch.tensor(dequantize(tensor.data, quant_type), device="cuda").to(
++            dtype
++        )
++        ref_output = x @ weight.T
++
++        weight = torch.tensor(tensor.data, device="cuda")
++        output = gguf_linear._fused_mul_mat_gguf(x, weight, quant_type).to(dtype)
++
++        if num_tokens >= min_rows:
++            assert calls == ["ggml_dequantize"]
++        else:
++            assert "ggml_dequantize" not in calls
++
++        atols = {torch.half: 1, torch.bfloat16: 5, torch.float: 1.2}
++        rtols = {torch.half: 1e-1, torch.bfloat16: 1e4, torch.float: 2e1}
++        torch.testing.assert_close(
++            output, ref_output, atol=atols[dtype], rtol=rtols[dtype]
++        )
++
++
++def test_dense_gemm_dispatch_off_by_default():
++    assert gguf_linear._DENSE_GEMM_MIN_ROWS == 0
++
++
+ @pytest.mark.parametrize("batch_size", BATCH_SIZES)
+ @pytest.mark.parametrize("num_tokens", NUM_TOKENS)
+ @pytest.mark.parametrize("hidden_size", HIDDEN_SIZES)
+diff --git a/vllm_gguf_plugin/quantization/linear.py b/vllm_gguf_plugin/quantization/linear.py
+index dcd7933..06ef0d6 100644
+--- a/vllm_gguf_plugin/quantization/linear.py
++++ b/vllm_gguf_plugin/quantization/linear.py
+@@ -1,6 +1,8 @@
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ 
++import os
++
+ import gguf
+ import torch
+ from gguf import GGMLQuantizationType as WeightType
+@@ -31,6 +33,23 @@ from .utils import (
+     UNQUANTIZED_TYPES,
+ )
+ 
++# Row count at or above which a quantized GEMM is run as "dequantize, then a
++# dense matmul" instead of through the fused mmq kernel. The fused kernels win
++# when the batch is small (decode), where the step is bound by reading the
++# packed weight; a prefill chunk has thousands of rows and is compute bound,
++# where the dense GEMM is several times faster. 0 (the default) keeps the
++# fused kernels for every batch size.
++_DENSE_GEMM_MIN_ROWS = max(0, int(os.environ.get("VLLM_GGUF_DENSE_GEMM_MIN_ROWS", "0")))
++
++
++def _dequantize_mul_mat_gguf(
++    x: torch.Tensor, weight: torch.Tensor, weight_type: int
++) -> torch.Tensor:
++    block_size, type_size = gguf.GGML_QUANT_SIZES[weight_type]
++    shape = (weight.shape[0], weight.shape[1] // type_size * block_size)
++    weight = ops.ggml_dequantize(weight, weight_type, *shape, x.dtype)
++    return x @ weight.T
++
+ 
+ def _fused_mul_mat_gguf(
+     x: torch.Tensor, weight: torch.Tensor, weight_type: int
+@@ -43,15 +62,18 @@ def _fused_mul_mat_gguf(
+         return torch.empty(x.shape[0], weight.shape[0], dtype=x.dtype, device=x.device)
+     if weight_type in UNQUANTIZED_TYPES:
+         return x @ weight.T
+-    if x.shape[0] <= mmvq_safe and weight_type in MMVQ_QUANT_TYPES:
++    if (
++        _DENSE_GEMM_MIN_ROWS > 0
++        and x.shape[0] >= _DENSE_GEMM_MIN_ROWS
++        and weight_type in DEQUANT_TYPES
++    ):
++        y = _dequantize_mul_mat_gguf(x, weight, weight_type)
++    elif x.shape[0] <= mmvq_safe and weight_type in MMVQ_QUANT_TYPES:
+         y = ops.ggml_mul_mat_vec_a8(weight, x, weight_type, weight.shape[0])
+     elif weight_type in MMQ_QUANT_TYPES:
+         y = ops.ggml_mul_mat_a8(weight, x, weight_type, weight.shape[0])
+     elif weight_type in DEQUANT_TYPES:
+-        block_size, type_size = gguf.GGML_QUANT_SIZES[weight_type]
+-        shape = (weight.shape[0], weight.shape[1] // type_size * block_size)
+-        weight = ops.ggml_dequantize(weight, weight_type, *shape, x.dtype)
+-        y = x @ weight.T
++        y = _dequantize_mul_mat_gguf(x, weight, weight_type)
+     else:
+         weight_type = WeightType(weight_type)
+         raise NotImplementedError(f"Unsupported GGUF quantization type: {weight_type}")

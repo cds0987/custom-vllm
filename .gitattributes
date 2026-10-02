@@ -1,0 +1,2 @@
+# Ban va phai giu LF, neu khong `git apply` hong tren Windows
+*.patch -text
