@@ -1,14 +1,9 @@
-# Bản nháp bình luận cho vllm-gguf-plugin PR #141 — ĐÃ GỬI 2026-10-03 (bản thật: 06b-comment-on-pr141-posted.md)
-
-Thay cho việc nộp PR riêng (xem `06-...md` và `bench/results/`). Nội dung dưới
-đây là tiếng Anh, viết cho tác giả và maintainer của PR #141.
-
----
+<!-- DA GUI 2026-10-03: https://github.com/vllm-project/vllm-gguf-plugin/pull/141#issuecomment-5967421875 -->
 
 Independent data point for this PR, in case it helps review. NVIDIA L4 (sm89),
 vLLM 0.30.0, torch 2.13.0+cu132, `unsloth/Qwen3-8B-GGUF:Q4_K_M`,
 `--max-num-seqs 64 --max-num-batched-tokens 8192 --no-enable-prefix-caching`.
-`main` is `e2b8ad5`, this PR is `aa09d65`, both built from source.
+`main` is `e2b8ad5`, this PR at `aa09d65` (the head has moved since), both built from source.
 
 | | main | this PR |
 |---|---|---|

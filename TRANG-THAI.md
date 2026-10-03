@@ -15,7 +15,7 @@ Cập nhật: 2026-10-02.
   upstream** (kernel llama.cpp mới, viết lại đúng hàm đó): tự nó đạt prefill
   1998-2440 và **decode 32 luồng 180 → 919 tok/s (×5)**. Trên nền #141, đường
   dequant+cuBLAS cho lô lớn chỉ còn thêm +4/+21/+14% prefill. → không nộp PR
-  cạnh tranh; nháp bình luận số đo cho #141 ở `upstream/06b-...md`, **chờ user
+  cạnh tranh; bình luận số đo ĐÃ GỬI lên #141 (2026-10-03, issuecomment-5967421875) — **trước đó chờ user
   duyệt mới gửi**. Bài học: kiểm trùng phải ĐỌC diff của PR đang mở, không chỉ
   đọc tiêu đề (Claude đã xếp #141 vào "liên quan, không trùng" mà chưa đọc).
   **Hệ quả sản phẩm**: kết luận "GGUF thua Marlin" đo trên kernel cũ — phải đo

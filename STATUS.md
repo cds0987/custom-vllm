@@ -3413,3 +3413,5 @@ Marlin khi phục vụ" đo trên kernel cũ — cần đo lại sau khi #141 me
 
 Sai sót quy trình: ở lượt kiểm trùng đầu, Claude ghi #141 là "liên quan, không
 trùng" chỉ dựa vào tiêu đề. Kiểm trùng phải đọc diff vào đúng file mình sửa.
+
+Đã gửi bình luận số đo lên PR #141 ngày 2026-10-03 (user duyệt): https://github.com/vllm-project/vllm-gguf-plugin/pull/141#issuecomment-5967421875
