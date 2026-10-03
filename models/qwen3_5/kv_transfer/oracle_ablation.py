@@ -16,6 +16,12 @@ duoc -> ca attn lan GDN mapped deu co van de, hoac loi nam o cho khac (vi du
 chinh 9B/LoRA-9B khong doc duoc chuoi nhieu-thuc-the du cache dung).
 
     python oracle_ablation.py --n 30
+
+THEO NHOM LOP ATTENTION (them 2026-10-03, sau oracle v5: attn that +19 diem):
+    --attn-groups "0,1;2,3;4,5;6,7" --conds mapped,attn_g01,attn_g23,attn_g45,attn_g67
+Moi bien the attn_gXY: attn THAT chi o cac lop attention (chi so trong 8 lop
+attention cua 9B) X,Y; con lai van qua mapper, GDN qua mapper. Doc: nhom nao
+ma thay that vao keo diem len nhieu nhat = noi mapper attention lam mat diem.
 """
 import argparse
 import json
@@ -42,6 +48,11 @@ def main():
     ap.add_argument("--hf-repo", default="gunnybd01/qwen35-kv-mapper-4b-27b")
     ap.add_argument("--hf-name", default="",
                     help="ten file tren HF (trong evalbig/). Rong = khong day.")
+    ap.add_argument("--attn-groups", default="",
+                    help='nhom lop attention, vd "0,1;2,3;4,5;6,7" -> bien the '
+                         "attn_g01, attn_g23... (attn THAT chi o nhom do)")
+    ap.add_argument("--conds", default="self,mapped,attn_that,gdn_that",
+                    help="cac bien the se chay, phan cach bang dau phay")
     args = ap.parse_args()
 
     sys.path.insert(0, str(pathlib.Path(__file__).parent))
@@ -134,6 +145,7 @@ def main():
         return new
 
     def build_hybrid(real_past, src_4b, real_attn, real_gdn):
+        # real_attn: True/False (moi lop) HOAC tap chi so lop attention lay THAT
         """Nhu build_student_past nhung chon TUNG NUA lay tu 9B THAT hay mapper.
         deep_clone_cache dam bao khong con tensor nao dung chung storage voi
         real_past hay cac bien the khac cung mau."""
@@ -143,7 +155,7 @@ def main():
         ks, kt = sorted(attn_s), sorted(attn_t)
         amap = e5.depth_map(len(ks), len(kt))
         for j, it in enumerate(kt):
-            if real_attn:
+            if real_attn is True or (not isinstance(real_attn, bool) and j in real_attn):
                 continue  # da la tensor rieng (deep_clone_cache), giu nguyen
             src = attn_s[ks[amap[j]]]
             mk, mv = mapper.map_attn(j, src.keys, src.values)
@@ -183,7 +195,15 @@ def main():
     ebmod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(ebmod)
 
-    BIEN = ("self", "mapped", "attn_that", "gdn_that")
+    GROUPS = {}
+    for g in filter(None, args.attn_groups.split(";")):
+        idx = frozenset(int(x) for x in g.split(","))
+        assert all(0 <= x < len(a_t) for x in idx), f"chi so lop attention ngoai 0..{len(a_t)-1}: {g}"
+        GROUPS["attn_g" + "".join(str(x) for x in sorted(idx))] = idx
+    BIEN = tuple(c.strip() for c in args.conds.split(",") if c.strip())
+    for c in BIEN:
+        assert c in ("self", "mapped", "attn_that", "gdn_that") or c in GROUPS,             f"bien the khong biet: {c} (nhom co: {sorted(GROUPS)})"
+    print(f"bien the: {BIEN} | nhom: { {k: sorted(v) for k, v in GROUPS.items()} }", flush=True)
     results = {k: {} for k in BIEN}
     texts = {k: {} for k in BIEN}
 
@@ -210,12 +230,12 @@ def main():
             for k in BIEN:
                 results[k].update(old.get("results", {}).get(k, {}))
                 texts[k].update(old.get("texts", {}).get(k, {}))
-            print(f"NOI LAI: da co {len(results['self'])} mau", flush=True)
+            print(f"NOI LAI: da co {len(results[BIEN[0]])} mau", flush=True)
         except Exception as ex:
             print(f"khong doc duoc ket qua cu: {type(ex).__name__}", flush=True)
 
     def _ghi():
-        out = {"results": results, "texts": texts, "n": len(results["self"]),
+        out = {"results": results, "texts": texts, "n": len(results[BIEN[0]]),
                "ckpt": args.mapper, "items": args.items}
         pathlib.Path(args.out).write_text(json.dumps(out, ensure_ascii=False))
         if args.hf_name:
@@ -229,7 +249,7 @@ def main():
                 print(f"HF-UP FAIL: {type(ex).__name__}: {ex}", flush=True)
 
     _tai_lai()
-    xong = set(results["self"]) & set(results["gdn_that"])
+    xong = set.intersection(*(set(results[k]) for k in BIEN))
     gsm = [it for it in gsm if it["id"] not in xong]
     print(f"con {len(gsm)} mau phai chay", flush=True)
 
@@ -242,34 +262,28 @@ def main():
         src_4b = e5.load_cache(
             pathlib.Path(f"/content/_oracle_4b_{it['id'].replace('/', '_')}.pt"))
 
-        # A: self (9B that toan bo). PHAI deep_clone_cache — decode mutate
-        # tensor TAI CHO (.copy_() cua GDN), clone_cache_struct thuong CHI tao
-        # container moi con tensor van chung storage voi real_past -> se lam
-        # hong du lieu real_past truoc khi B/C/D con dung.
-        txt = greedy(deep_clone_cache(real_past), warm.clone())
-        results["self"][it["id"]] = ebmod.score(it, txt); texts["self"][it["id"]] = txt[:200]
-
-        # B: mapped (duong ong hien tai)
-        p = build_hybrid(real_past, src_4b, real_attn=False, real_gdn=False)
-        txt = greedy(p, warm.clone())
-        results["mapped"][it["id"]] = ebmod.score(it, txt); texts["mapped"][it["id"]] = txt[:200]
-        del p
-
-        # C: attn THAT, GDN qua mapper
-        p = build_hybrid(real_past, src_4b, real_attn=True, real_gdn=False)
-        txt = greedy(p, warm.clone())
-        results["attn_that"][it["id"]] = ebmod.score(it, txt); texts["attn_that"][it["id"]] = txt[:200]
-        del p
-
-        # D: attn qua mapper, GDN THAT
-        p = build_hybrid(real_past, src_4b, real_attn=False, real_gdn=True)
-        txt = greedy(p, warm.clone())
-        results["gdn_that"][it["id"]] = ebmod.score(it, txt); texts["gdn_that"][it["id"]] = txt[:200]
-        del p, real_past
+        # self PHAI deep_clone_cache — decode mutate tensor TAI CHO (.copy_()
+        # cua GDN), clone_cache_struct thuong CHI tao container moi con tensor
+        # van chung storage voi real_past -> lam hong real_past cho bien the sau.
+        for k in BIEN:
+            if k == "self":
+                p = deep_clone_cache(real_past)
+            elif k == "mapped":
+                p = build_hybrid(real_past, src_4b, real_attn=False, real_gdn=False)
+            elif k == "attn_that":
+                p = build_hybrid(real_past, src_4b, real_attn=True, real_gdn=False)
+            elif k == "gdn_that":
+                p = build_hybrid(real_past, src_4b, real_attn=False, real_gdn=True)
+            else:
+                p = build_hybrid(real_past, src_4b, real_attn=GROUPS[k], real_gdn=False)
+            txt = greedy(p, warm.clone())
+            results[k][it["id"]] = ebmod.score(it, txt); texts[k][it["id"]] = txt[:200]
+            del p
+        del real_past
         torch.cuda.empty_cache()
 
         if (i + 1) % 5 == 0:
-            n_ = len(results["self"])
+            n_ = len(results[BIEN[0]])
             tl = {k: sum(results[k].values()) for k in BIEN}
             print(f"  {i+1}/{len(gsm)} xong (tong {n_}) | " +
                   " ".join(f"{k}={100*v/max(n_,1):.0f}%" for k, v in tl.items()),
@@ -297,7 +311,7 @@ def main():
     # _ghi() da ghi file + day HF o tren (dung len(results) chu KHONG dung
     # len(gsm) -- sau khi loc mau da xong thi gsm chi con phan CON LAI, ghi
     # nham se de "n" sai va de len ket qua tot).
-    print(f"\nda ghi {args.out} (n={len(results['self'])})")
+    print(f"\nda ghi {args.out} (n={len(results[BIEN[0]])})")
     print("ORACLE_ABLATION_EXIT")
 
 
