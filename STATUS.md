@@ -3415,3 +3415,22 @@ Sai sót quy trình: ở lượt kiểm trùng đầu, Claude ghi #141 là "liê
 trùng" chỉ dựa vào tiêu đề. Kiểm trùng phải đọc diff vào đúng file mình sửa.
 
 Đã gửi bình luận số đo lên PR #141 ngày 2026-10-03 (user duyệt): https://github.com/vllm-project/vllm-gguf-plugin/pull/141#issuecomment-5967421875
+
+## 2026-10-03 — Oracle ablation trên `sft_struct_v5:last` (đọc từ HF sau recycle)
+
+Cùng 100 bài gsm8k niêm phong như lần đo v3 (`evalbig/oracle_v5_100.json`):
+
+| điều kiện | v3 | v5 |
+|---|---|---|
+| self (9B tự prefill) | 93 | 91 |
+| mapped (cả hai nửa cache do mapper) | 22 | 50 |
+| attn THẬT + GDN mapper | 43 | 69 |
+| attn mapper + GDN THẬT | 3 | 4 |
+
+McNemar chính xác trên v5: mapped vs attn-thật lệch 1-20, p=2,1×10⁻⁵; self vs
+attn-thật lệch 24-2, p=1,0×10⁻⁵. → Thay attention thật vào vẫn thêm +19 điểm:
+**nút thắt lớn nhất vẫn là ánh xạ attention**; phần GDN (mapper + residual) cộng
+attention thật đã đạt 69/91 = 76% trần. GDN thật cạnh attn mapped sụp lần thứ 3
+(nhất quán hai nửa cache). `mapped` 50/100 khớp số niêm phong 250 của v5 (44,4%)
+trong sai số. self 91 vs 93 trên cùng bài = độ dao động giải mã ~2 bài.
+

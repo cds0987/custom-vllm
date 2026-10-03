@@ -63,6 +63,11 @@ Cập nhật: 2026-10-02.
   của α), 531 dương/237 âm, đỉnh ở LỚP GIỮA (8-12: 0,023-0,030) gấp ~5 lần
   lớp đầu/cuối** → mô hình thật sự dùng đường thẳng, và cần nó nhất ở giữa.
 
+  **ORACLE ĐO LẠI TRÊN v5 (cùng 100 bài với v3, `evalbig/oracle_v5_100.json`)**:
+  self 91 | mapped **50** | attn THẬT + GDN-mapper **69** | attn-mapper + GDN THẬT
+  **4**. Thay attention thật vào: +19 điểm (lệch 20-1, p=2×10⁻⁵) → **nút thắt
+  lớn nhất VẪN là ánh xạ ATTENTION**. GDN thật cạnh attn mapped sụp lần 3 (4%).
+  self 91 vs 93 lần trước trên cùng bài = nhiễu giải mã ~2 bài.
   **v5 VƯỢT trần oracle 43,0%** — trần đó ràng buộc *hệ v3*, không ràng buộc
   hệ đã đổi cấu trúc mapper. Lần 3 xác nhận: **trần đo trên một cấu hình
   KHÔNG chuyển sang cấu hình khác**.
