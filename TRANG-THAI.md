@@ -68,6 +68,12 @@ Cập nhật: 2026-10-02.
   **4**. Thay attention thật vào: +19 điểm (lệch 20-1, p=2×10⁻⁵) → **nút thắt
   lớn nhất VẪN là ánh xạ ATTENTION**. GDN thật cạnh attn mapped sụp lần 3 (4%).
   self 91 vs 93 lần trước trên cùng bài = nhiễu giải mã ~2 bài.
+  **ORACLE THEO CẶP LỚP ATTENTION (2026-10-03, `oracle_v5_groups.json`)**: thay
+  attn thật vào TỪNG cặp lớp {0,1}/{2,3}/{4,5}/{6,7}: 49/59/48/50 vs mapped 52 —
+  KHÔNG cặp nào có ý nghĩa (tốt nhất {2,3} lệch 13-6, p=0,17); tổng các cặp ≈ −2
+  ≪ +19 khi thay cả 8 lớp (8 lớp thắng TỪNG cặp, p≤0,03). → lỗi attention KHÔNG
+  khu trú, phần lợi chỉ hiện khi NHIỀU lớp đúng cùng lúc (nhất quán giữa các lớp,
+  giống luật hai nửa cache). Đọc tay: lỗi vẫn là gán số/đảo quan hệ.
   **v5 VƯỢT trần oracle 43,0%** — trần đó ràng buộc *hệ v3*, không ràng buộc
   hệ đã đổi cấu trúc mapper. Lần 3 xác nhận: **trần đo trên một cấu hình
   KHÔNG chuyển sang cấu hình khác**.
@@ -281,11 +287,7 @@ Cập nhật: 2026-10-02.
   23,6%→16,8%→16,1%→8,4% qua từng thành phần LoRA-4B/mapper/LoRA-9B. Báo
   cáo HTML: https://claude.ai/code/artifact/b20fe8d6-0e21-44d1-afa8-b1622d62385a
 
-- **`joint49z` (2026-09-01, checkpoint tham chiếu thời điểm đó, nay đã bị
-  `joint49bb`→`joint49cc`→`eba_grpo_v2c`→`gsm_grpo_v1c` thay thế nhiều lớp)**:
-  pseudo-gold CoT thật từ chính 9B (user đề xuất) — niêm phong 1.650 mẫu:
-  `suite_swe` 3,3%→52,8%, `musr`→75,0%, ctx-BỎ sạch cả hai. Chi tiết đầy
-  đủ (bug musr ctx-BỎ ban đầu, bbh vượt trần self): `STATUS.md`.
+- `joint49z` (2026-09-01): checkpoint tham chiếu cũ, chi tiết ở `STATUS.md`.
 
 ## Hàng đợi (đã duyệt 2026-08-14)
 1. ✅ Spec decoding + ✅ util sweep (mặc định 0.97, đỉnh 12 phiên) — đóng bằng số đo.

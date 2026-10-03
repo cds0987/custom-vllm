@@ -3434,3 +3434,36 @@ attention thật đã đạt 69/91 = 76% trần. GDN thật cạnh attn mapped s
 (nhất quán hai nửa cache). `mapped` 50/100 khớp số niêm phong 250 của v5 (44,4%)
 trong sai số. self 91 vs 93 trên cùng bài = độ dao động giải mã ~2 bài.
 
+## 2026-10-03 — Oracle theo CẶP LỚP attention trên `sft_struct_v5:last`
+
+Câu hỏi: +19 điểm khi thay attention thật (oracle v5) nằm ở lớp nào? Cùng 100 bài,
+cùng checkpoint; mỗi biến thể thay attention THẬT của 9B vào đúng một cặp trong 8
+lớp attention, còn lại (attention khác + toàn bộ GDN) vẫn qua mapper
+(`oracle_ablation.py --attn-groups "0,1;2,3;4,5;6,7"`, `evalbig/oracle_v5_groups.json`).
+
+| biến thể | đúng/100 | lệch so với mapped (nhóm-only : mapped-only) | p (McNemar chính xác) |
+|---|---|---|---|
+| mapped (đối chứng cùng lần chạy) | 52 | — | — |
+| attn thật lớp {0,1} | 49 | 7 : 10 | 0,63 |
+| attn thật lớp {2,3} | 59 | 13 : 6 | 0,17 |
+| attn thật lớp {4,5} | 48 | 8 : 12 | 0,50 |
+| attn thật lớp {6,7} | 50 | 7 : 9 | 0,80 |
+| *attn thật cả 8 lớp (lần đo trước)* | *69* | | 8 lớp thắng từng cặp: p = 1,1e-5 / 0,031 / 1,9e-5 / 6,6e-5 |
+
+Đối chứng tái lập: `mapped` lần này 52 vs lần trước 50 trên cùng bài (lệch 2-0) —
+dao động giải mã ~2 bài.
+
+**Đọc**: không cặp nào một mình cứu được có ý nghĩa; cộng phần lợi của 4 cặp ≈ −2
+điểm, trong khi thay cả 8 lớp được +19. Lợi ích của attention thật là **không cộng
+tính** — chỉ hiện khi nhiều lớp cùng đúng. Cùng hình dạng với luật "hai nửa cache
+phải nhất quán", lần này ở bên trong nửa attention. Hệ quả: sửa mapper attention
+từng lớp (hoặc tìm "lớp hỏng") không phải hướng đúng; cần cải thiện đồng thời.
+
+Giới hạn thiết kế: "thêm một cặp thật" tự nó tạo trộn lẫn thật/mapped (bất nhất),
+có thể che phần lợi. Phép bổ sung: "bỏ một cặp" (thật ở 6 lớp, mapped ở 1 cặp) cho
+biết cặp nào khi bị mapper thay thì mất nhiều nhất trong bối cảnh nhất quán hơn.
+
+Đọc tay 12 mẫu lệch: chấm điểm đúng; lỗi vẫn là gán số/đảo quan hệ ("Toulouse =
+4×Charleston" thay vì 2×; "50 giờ × 35 tuần" đảo hai số; "S = G + 30" đảo quan hệ;
+"Mike chơi 40 phút" lấy nhầm số). Khi cả 8 lớp attention thật, các lỗi này biến mất.
+
