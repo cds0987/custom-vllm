@@ -3469,3 +3469,37 @@ biết cặp nào khi bị mapper thay thì mất nhiều nhất trong bối c�
 
 
 Phản hồi trên PR #141 (2026-10-03, @Maxwell-Lyu, tác giả): cảm ơn số đo; trên V100 với Q4_K lớp FFN của 27B, MMQ 18,4 ms vs dequant+cuBLAS 8,1 ms ở B=1.024 (146 vs 54 ms ở B=8.192). Commit mới `e62877c` đã tự chọn route theo số hàng: `kDenseMmqMaxBatch = 128` (trên 128 hàng → dequantize+cuBLAS) và ngưỡng MoE grouped-dense 8.192 (num_tokens × topk). Tức là ý tưởng ngưỡng của ta đã nằm trong PR đó, với ngưỡng thấp hơn (128 so với 1.024 của ta); tác giả nói ngưỡng còn phụ thuộc kiến trúc GPU và đang tinh chỉnh.
+
+## 2026-10-04 — 4→27B giai đoạn 0: đo khả thi
+
+Code (đã commit): residual/scale GDN chạy khi số head lệch (`res_idx[t] =
+floor(t·Hs/Ht)`, 32→48 giữ đúng nhóm head key; 4 test mới); `--tgt-cpu-offload`
+cho `sft_struct`/`eval_big`/`oracle_ablation`; `--gdn-terms` khi không warm-start;
+`model.device` của model offload báo `cuda` (generate() lỗi lệch thiết bị);
+`eval_big self --engine hf` lưu + đẩy HF mỗi 40 bài, lưu văn bản, nối lại theo
+`--hf-prefix`.
+
+**Bộ nhớ train 4→27 (L4, 27B + 4B nf4, offload embed/lm_head 27B, B=1, sanity 10 bước):**
+
+| gold-cap (token) | kết quả |
+|---|---|
+| 64 | chạy: đỉnh 20,59 GiB, 5,99 s/bước |
+| 128 | OOM |
+| 192 | OOM |
+| 320 (công thức v5) | OOM, cả B=1 lẫn B=2 |
+
+OOM ở forward 27B có grad qua gold (`sft_struct.py:440`). Hai model tĩnh ~16,2 GiB.
+
+**27B tự làm 250 bài gsm8k niêm phong** (transformers nf4 + offload, batch 8):
+lần 1 với ngân sách sinh 320 token = 196/250 = 78,4% (81 phút). Đọc tay: 53/54 bài
+sai bị CẮT CỤT trước đáp số (27B viết lời giải ~1.000+ ký tự). Chấm lại 54 bài đó
+với 1.024 token: cứu 49 (48 phút) → **245/250 = 98,0%**. 5 bài còn sai: 1 sai thật
+(gsm8k/85), 4 đang cân nhắc hai cách hiểu đề (lãi đơn/kép...) — bản lưu chỉ giữ
+1.200 ký tự nên không chắc có bị cắt lần nữa. 196 bài đúng giữ nguyên (sinh dài hơn
+không đổi phần đầu; khác lô có thể lệch số học nhỏ — chấp nhận).
+
+**Bài học**: ngân sách 320 token của `eval_big` (N_NEW gsm8k) được chỉnh cho 9B/định
+dạng có cấu trúc; với model viết dài nó đo ĐỘ DÀI chứ không đo năng lực. Số cũ
+"27B self 80%, 4B self 81,5% > 27B" nhiều khả năng dính cùng lỗi — chưa kiểm lại.
+Nút cổ chai tốc độ 27B qua transformers là CPU (lm_head offload, 100-445% CPU, GPU ~0%).
+

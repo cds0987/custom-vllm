@@ -7,6 +7,14 @@ Cập nhật: 2026-10-02.
 
 ## Trạng thái hiện tại
 
+- **🔁 4→27B QUAY LẠI (user duyệt 2026-10-04) — GIAI ĐOẠN 0 XONG.** Residual
+  GDN giờ chạy khi số head lệch (4B 32 → 27B 48 head GDN; ánh xạ giữ nhóm key),
+  thêm `--tgt-cpu-offload`/`--gdn-terms`. Đo trên L4: train 4→27 B=1 chỉ vừa
+  với gold **64 token** (đỉnh 20,6 GiB, 6,0 s/bước); gold 128/192/320 OOM.
+  **27B tự làm gsm8k niêm phong: 245/250 = 98,0%** — lần chấm đầu ra 78,4%
+  vì ngân sách sinh 320 token CẮT CỤT 53/54 bài sai (27B viết dài) → số cũ
+  "27B 80%, 4B 81,5% còn hơn 27B" nhiều khả năng cùng lỗi. Chấm 27B phải ≥1024 token.
+
 - **📤 PR UPSTREAM dense-GEMM: ĐO XONG, KHÔNG NỘP (2026-10-02).** Kiểm sống 20
   bản nháp `upstream/`: 7 cái (1,2,3,4,7,8,19) upstream đã tự sửa. Bản nháp 6
   viết lại trên `main` của `vllm-gguf-plugin` (`VLLM_GGUF_DENSE_GEMM_MIN_ROWS`),
@@ -138,14 +146,8 @@ Cập nhật: 2026-10-02.
   Chốt: **dừng hẳn nếu >20% miếng OOM trong 20 bước đầu**. Sửa kèm:
   `--gsm-limit 0` (thiếu → pool bị cắt 2157→1200), `log_softmax(dtype=fp32)`.
 
-- **EBA + GRPO (2026-09-04, chi tiết `STATUS.md`) — bài học về PROXY.**
-  GRPO trên dữ liệu tổng hợp Entity-Binding-Arithmetic cải thiện **thật và
-  mạnh** (C 0,310 → 0,650, **p<0,0001**) — engine RL không hỏng. **NHƯNG
-  KHÔNG chuyển giao sang gsm8k thật** (niêm phong 4,0%). RL trực tiếp trên
-  gsm8k (`gsm_grpo_v1c`, K=3) đạt 10,0%/10,0% — cao nhất **lúc đó**, nay bị
-  `sft_struct_v3` 22,0% vượt (p=0,0005). Học phí: bug `continue` nhảy qua cả
-  val/checkpoint khi reward đồng nhất (vá `5a02e1e`); rate-limit HF 60
-  commit/giờ → `save_ckpt()` gộp 1 commit/checkpoint.
+- **EBA + GRPO (2026-09-04)**: GRPO thắng thật trên dữ liệu tổng hợp (p<0,0001)
+  nhưng KHÔNG chuyển giao sang gsm8k thật — bài học PROXY. Chi tiết `STATUS.md`.
 
 - **🎯 PHẠM VI (user chốt 2026-09-01): CHỈ `suite_swe` + `gsm8k`.**
   `joint49bb` niêm phong: `suite_swe` **77,2%** (self 99,2%, ctx-BỎ 0,0% sạch,
