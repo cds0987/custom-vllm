@@ -3467,3 +3467,5 @@ biết cặp nào khi bị mapper thay thì mất nhiều nhất trong bối c�
 4×Charleston" thay vì 2×; "50 giờ × 35 tuần" đảo hai số; "S = G + 30" đảo quan hệ;
 "Mike chơi 40 phút" lấy nhầm số). Khi cả 8 lớp attention thật, các lỗi này biến mất.
 
+
+Phản hồi trên PR #141 (2026-10-03, @Maxwell-Lyu, tác giả): cảm ơn số đo; trên V100 với Q4_K lớp FFN của 27B, MMQ 18,4 ms vs dequant+cuBLAS 8,1 ms ở B=1.024 (146 vs 54 ms ở B=8.192). Commit mới `e62877c` đã tự chọn route theo số hàng: `kDenseMmqMaxBatch = 128` (trên 128 hàng → dequantize+cuBLAS) và ngưỡng MoE grouped-dense 8.192 (num_tokens × topk). Tức là ý tưởng ngưỡng của ta đã nằm trong PR đó, với ngưỡng thấp hơn (128 so với 1.024 của ta); tác giả nói ngưỡng còn phụ thuộc kiến trúc GPU và đang tinh chỉnh.
