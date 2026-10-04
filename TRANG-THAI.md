@@ -203,8 +203,6 @@ Cập nhật: 2026-10-02.
   (`python register.py --flat`; folder không có register.py = vô hình).
   **`run.sh` = 1 lệnh kiểu vLLM**; notebook A = ĐÚNG 1 CELL, cần gì thêm lệnh.
   Đã kiểm sống trên Colab: fresh 370s / ấm 140s, smoke đúng.
-- **Vận hành**: chỉ notebook A (server `colab-mcp`); B/C chờ lệnh đích danh;
-  không subagent trừ khi user cho phép.
 - **Config production** (chi tiết STATUS.md): 9B mml 65536/mnbt 1088/util
   0.97 (12 phiên, 358,1 tasks/hr warm); 27B mml 8192/mnbt 512/util 0.97
   (decode 15,8 tok/s). Spec decoding ngram OFF mặc định trên L4 (đo −36%/
