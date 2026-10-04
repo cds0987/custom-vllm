@@ -51,6 +51,8 @@ def main():
     ap.add_argument("--attn-groups", default="",
                     help='nhom lop attention, vd "0,1;2,3;4,5;6,7" -> bien the '
                          "attn_g01, attn_g23... (attn THAT chi o nhom do)")
+    ap.add_argument("--tgt-cpu-offload", action="store_true",
+                    help="nap tgt-model qua e5.load_4bit_cpu_offload_io (embed_tokens + lm_head xuong CPU, tiet kiem ~4,85 GiB) -- BAT BUOC cho 27B tren L4, nhu e6v3_ce.")
     ap.add_argument("--conds", default="self,mapped,attn_that,gdn_that",
                     help="cac bien the se chay, phan cach bang dau phay")
     args = ap.parse_args()
@@ -101,7 +103,8 @@ def main():
     torch.cuda.empty_cache()
 
     # ---- 9B: nap + LoRA-9B (khong merge, giong duong ong that) ----
-    tok_t, model_t = e5.load_4bit(args.tgt_model)
+    tok_t, model_t = (e5.load_4bit_cpu_offload_io if args.tgt_cpu_offload
+                      else e5.load_4bit)(args.tgt_model)
     if args.lora_t:
         model_t = PeftModel.from_pretrained(model_t, args.lora_t)
         model_t.eval()

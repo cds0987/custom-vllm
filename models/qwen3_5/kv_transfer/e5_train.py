@@ -343,16 +343,28 @@ class Mapper:
         # nen day la so sanh mot-bien sach. Theo TUNG HEAD (Ht so, ~768 tham so
         # tong) chu khong mot vo huong: cac head khong nhat thiet can luong
         # residual nhu nhau.
+        #
+        # SO HEAD LECH (4B 32 -> 27B 48, them 2026-10-04): truoc day TU TAT, tuc
+        # mang cong thuc sang 27B la MAT cai tien manh nhat ma khong bao loi.
+        # GDN nhom head value theo head key (4B 16x2, 27B 16x3), va
+        # transformers xep head value t thuoc nhom key t // (Hv/Hk). Anh xa ti
+        # le  nguon(t) = floor(t*Hs/Ht)  dua MOI head dich ve mot head nguon
+        # CUNG NHOM key (32->48: 3g,3g+1,3g+2 -> 2g,2g,2g+1) ma khong can biet
+        # Hk, va bang dung arange khi Hs == Ht. Duong thang la MOT head nguon
+        # (khong tron) -> giu nguyen phuong sai rieng cua head, dung tinh than
+        # y = x + f(x). Khong them tham so nao ngoai gamma.
+        self.res_idx = None
+        if gdn_heads_s != gdn_heads_t:
+            self.res_idx = torch.tensor(
+                [t * gdn_heads_s // gdn_heads_t for t in range(gdn_heads_t)],
+                device=device, dtype=torch.long)
         self.gdn_res = None
-        if gdn_res and gdn_heads_s == gdn_heads_t:
+        if gdn_res:
             self.gdn_res = []
             for _ in range(n_gdn_tgt):
                 g = torch.zeros(gdn_heads_t, 1, 1, device=device
                                 ).requires_grad_(True)
                 self.gdn_res.append(g); self.params.append(g)
-        elif gdn_res:
-            print(f"gdn_res BO QUA: so head nguon {gdn_heads_s} != dich "
-                  f"{gdn_heads_t}, khong cong thang S duoc", flush=True)
         # ---- TANG NEN THU HAI CUA GDN: thang do theo TUNG HEAD ---------------
         # rms duoc tinh THEO TUNG HEAD -- (B, Hs, 1, 1) -- nhung luc khoi phuc
         # ban cu dung rms.mean(dim=(1,2,3)) = MOT so vo huong cho ca mau, nen
@@ -365,10 +377,7 @@ class Mapper:
         # Thang do cua head dich lay theo DUNG cach noi dung duoc tron (alpha),
         # khong phai lay thang cua head nguon cung chi so.
         self.gdn_scale = None
-        if gdn_scale and gdn_heads_s != gdn_heads_t:
-            print(f"gdn_scale BO QUA: so head nguon {gdn_heads_s} != dich "
-                  f"{gdn_heads_t}", flush=True)
-        elif gdn_scale:
+        if gdn_scale:
             self.gdn_scale = []
             for _ in range(n_gdn_tgt):
                 w = torch.zeros(gdn_heads_t, 1, 1, device=device
@@ -452,13 +461,17 @@ class Mapper:
             # rms_t = alpha @ rms cho "nhat quan voi cach tron noi dung" --
             # nhung alpha khoi tao UNIFORM 1/Hs nen alpha@rms == rms.mean
             # DUNG BANG sc => w khong co gradient, VINH VIEN khong hoc duoc.
-            sc = sc + self.gdn_scale[j] * (rms - sc)        # w=0 -> y het cu
+            # So head lech: thang do cua head dich t = thang do head nguon
+            # res_idx[t] (cung anh xa voi duong residual).
+            rms_t = rms if self.res_idx is None else rms[:, self.res_idx]
+            sc = sc + self.gdn_scale[j] * (rms_t - sc)      # w=0 -> y het cu
         out = mapped * sc
         if self.gdn_res is not None:
             # y = f(x) + gamma*x. gamma=0 luc khoi tao -> y het ban cu.
             # Cong S GOC (chua chuan hoa) de duong thang giu nguyen ca THANG DO,
             # thu ma nhanh f() da chia mat.
-            out = out + self.gdn_res[j] * S
+            S_t = S if self.res_idx is None else S[:, self.res_idx]
+            out = out + self.gdn_res[j] * S_t
         return out.to(torch.bfloat16)
 
     def state_dict(self):

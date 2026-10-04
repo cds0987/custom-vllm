@@ -67,6 +67,8 @@ def main():
                          "@1K ctx moi lop). Doi CHUT toc do lay CHO de tang "
                          "batch -- B=2 OOM khi tat co nay.")
     ap.add_argument("--max-ctx", type=int, default=1024)
+    ap.add_argument("--tgt-cpu-offload", action="store_true",
+                    help="nap tgt-model qua e5.load_4bit_cpu_offload_io (embed_tokens + lm_head xuong CPU, tiet kiem ~4,85 GiB) -- BAT BUOC cho 27B tren L4, nhu e6v3_ce.")
     ap.add_argument("--n-eval", type=int, default=48)
     ap.add_argument("--eval-every", type=int, default=150)
     ap.add_argument("--gold-cap", type=int, default=320)
@@ -129,7 +131,8 @@ def main():
 
     # ---- 9B + LoRA-9B -------------------------------------------------------
     t0 = time.time()
-    tok_t, model_t = e5.load_4bit(args.tgt_model)
+    load_t = e5.load_4bit_cpu_offload_io if args.tgt_cpu_offload else e5.load_4bit
+    tok_t, model_t = load_t(args.tgt_model)
     theta_t = e5.e1.get_rope_theta(model_t.config.get_text_config())
     model_t = get_peft_model(model_t, LoraConfig(
         r=16, lora_alpha=32, lora_dropout=0.0, bias="none",

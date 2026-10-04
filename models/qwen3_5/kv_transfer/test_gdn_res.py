@@ -120,13 +120,65 @@ def test_7_luu_roi_nap_lai_giu_dung_gamma():
         f.unlink(missing_ok=True)
 
 
-def test_8_so_head_lech_thi_TAT_chu_khong_no():
-    """4B->27B co the khac so head GDN; khong cong thang S duoc -> phai tat
-    an toan, khong duoc nem loi giua luc train."""
-    kw = dict(KW); kw["gdn_heads_s"], kw["gdn_heads_t"] = 4, 6
-    m = e5.Mapper(**kw, gdn_res=True)
-    assert m.gdn_res is None
-    m.map_gdn(0, _S(h=4))     # van chay duoc
+KW27 = dict(KW); KW27["gdn_heads_s"], KW27["gdn_heads_t"] = 4, 6   # thu nho 32 -> 48
+
+
+def test_8_so_head_lech_VAN_BAT_va_noop_luc_khoi_tao():
+    """4B->27B: 32 -> 48 head GDN. Truoc 2026-10-04 residual TU TAT o day ->
+    mang cong thuc sang 27B la mat cai tien manh nhat ma khong ai biet.
+    Gio phai BAT, dung hinh dang, va luc khoi tao van y het ban khong co."""
+    a = e5.Mapper(**KW27)
+    b = e5.Mapper(**KW27, gdn_res=True, gdn_scale=True)
+    assert b.gdn_res is not None and b.gdn_scale is not None
+    assert b.gdn_res[0].shape == (6, 1, 1)
+    S = _S(h=4)
+    for j in range(3):
+        o = b.map_gdn(j, S)
+        assert o.shape == (2, 6, 128, 128)
+        assert torch.equal(a.map_gdn(j, S), o)
+
+
+def test_8b_anh_xa_head_giu_dung_nhom_key():
+    """GDN nhom head value theo head key: 4B 16 nhom x2, 27B 16 nhom x3.
+    Head dich 3g,3g+1,3g+2 phai lay tu head nguon CUNG nhom g (2g hoac 2g+1)."""
+    m = e5.Mapper(**dict(KW, gdn_heads_s=32, gdn_heads_t=48), gdn_res=True)
+    idx = m.res_idx.tolist()
+    assert len(idx) == 48
+    for t, s_ in enumerate(idx):
+        assert s_ // 2 == t // 3, f"head dich {t} (nhom {t//3}) lay nham nguon {s_} (nhom {s_//2})"
+    assert sorted(set(idx)) == list(range(32)), "moi head nguon phai duoc dung it nhat mot lan"
+    assert e5.Mapper(**KW, gdn_res=True).res_idx is None, "so head bang nhau -> khong dung chi so"
+
+
+def test_8c_so_head_lech_gamma_cong_dung_head_nguon_cung_nhom():
+    m = e5.Mapper(**KW27, gdn_res=True)
+    S = _S(h=4)
+    goc = m.map_gdn(0, S).float()
+    with torch.no_grad():
+        m.gdn_res[0][5].fill_(1.0)          # chi head dich 5 -> nguon 5*4//6 = 3
+    moi = m.map_gdn(0, S).float()
+    cho = (goc[:, 5] + S[:, 3]).to(torch.bfloat16).float()
+    assert torch.allclose(moi[:, 5], cho, atol=2e-2, rtol=1e-2)  # 2 lan lam tron bf16
+    assert torch.allclose(moi[:, :5], goc[:, :5], atol=1e-3)
+    m.map_gdn(1, S).float().sum().backward()
+    assert torch.count_nonzero(m.gdn_res[1].grad) > 0, "gamma phai co gradient"
+
+
+def test_8d_so_head_lech_gdn_scale_co_gradient_va_luu_nap():
+    m = e5.Mapper(**KW27, gdn_res=True, gdn_scale=True)
+    m.map_gdn(0, _S(h=4)).float().sum().backward()
+    assert torch.count_nonzero(m.gdn_scale[0].grad) > 0
+    with torch.no_grad():
+        for g in m.gdn_res: g.fill_(0.3)
+    f = _H / "_tmp_test_gdn_res27.pt"
+    try:
+        torch.save(m.state_dict(), f)
+        m2 = e5.Mapper(**KW27, gdn_res=True, gdn_scale=True)
+        m2.load(str(f))
+        S = _S(h=4)
+        assert torch.equal(m.map_gdn(2, S), m2.map_gdn(2, S))
+    finally:
+        f.unlink(missing_ok=True)
 
 
 def test_9_MOI_script_dung_Mapper_deu_doc_gdn_res_tu_meta():

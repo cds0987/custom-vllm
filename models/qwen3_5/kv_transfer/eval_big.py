@@ -248,7 +248,8 @@ def run_self_hf(args, items):
     import torch
     from peft import PeftModel
     e5 = _load("e5_train")
-    tok, model = e5.load_4bit(args.tgt_model)
+    tok, model = (e5.load_4bit_cpu_offload_io if args.tgt_cpu_offload
+                  else e5.load_4bit)(args.tgt_model)
     if args.lora:
         model = PeftModel.from_pretrained(model, args.lora).merge_and_unload()
     model.eval()
@@ -545,7 +546,8 @@ def run_mapped(args):
     print("PHA A XONG", flush=True)
 
     # PHA 2: 9B mot minh -> map + decode
-    tok_t, model_t = e5.load_4bit(args.tgt_model)
+    tok_t, model_t = (e5.load_4bit_cpu_offload_io if args.tgt_cpu_offload
+                      else e5.load_4bit)(args.tgt_model)
     if args.lora_t:
         # LoRA phia DOC. Phai gan TRUOC probe/template de moi forward trong
         # luot eval di qua DUNG cai model da duoc train cung mapper. KHONG
@@ -857,6 +859,8 @@ def main():
                          "nay khi checkpoint CO lorat_ = do mapper voi nguoi "
                          "doc CHUA thich nghi -> so do sai han thu vua train.")
     ap.add_argument("--max-len", type=int, default=6144)
+    ap.add_argument("--tgt-cpu-offload", action="store_true",
+                    help="nap tgt-model qua e5.load_4bit_cpu_offload_io (embed_tokens + lm_head xuong CPU, tiet kiem ~4,85 GiB) -- BAT BUOC cho 27B tren L4, nhu e6v3_ce.")
     ap.add_argument("--slice", default="")
     ap.add_argument("--decode-batch", type=int, default=1,
                     help="Gom lo o buoc decode. 1 = nhu cu. Nut co chai la batch=1 (moi token doc ~5GB trong so 4-bit tu HBM), khong phai attention (chiem 0,03% phep tinh).")
