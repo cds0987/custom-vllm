@@ -81,6 +81,10 @@ def main():
     ap.add_argument("--hf-repo", default="gunnybd01/qwen35-kv-mapper-4b-27b")
     ap.add_argument("--hf-prefix", default="sft_struct_v1")
     ap.add_argument("--sanity", type=int, default=0)
+    ap.add_argument("--gdn-terms", type=int, default=0,
+                    help="so hang song tuyen GDN khi KHONG co checkpoint "
+                         "warm-start (vd 4->27B tu dau). 0 = doc _meta, mac "
+                         "dinh 1. v5 (4->9) dung 4.")
     ap.add_argument("--gdn-res", type=int, default=0,
                     help="Duong residual cho nua GDN: S' = f(S) + gamma*S, "
                          "gamma theo tung head, KHOI TAO 0 (no-op) -> nap "
@@ -184,7 +188,7 @@ def main():
     mapper = e5.Mapper(len(a_t), len(g_t), Hs, Ht, attn_dim, theta_s, theta_t,
                        attn_rank=_meta.get("attn_rank", 0),
                        gdn_per_head=_meta.get("gdn_per_head", False),
-                       gdn_terms=_meta.get("gdn_terms", 1),
+                       gdn_terms=_meta.get("gdn_terms", args.gdn_terms or 1),
                        # doc tu _meta HOAC bat moi bang co dong lenh
                        gdn_res=bool(_meta.get("gdn_res", False))
                        or bool(args.gdn_res),
@@ -404,6 +408,11 @@ def main():
     if args.start_step and e0:
         print(f"NOI LAI: bo qua eval buoc 0 (lich su co parse="
               f"{e0['parse']*100:.1f}%)", flush=True)
+    elif args.sanity:
+        # chay thu chi de do VRAM + s/buoc; eval 48 mau x 320 token voi 27B
+        # ton hang chuc phut ma khong phuc vu muc dich do.
+        e0 = {"parse": 0.0, "think": 0.0, "has_ans": 0.0}
+        print("SANITY: bo qua eval buoc 0", flush=True)
     else:
         e0 = evaluate(out / "samples_step0.json")
         print(f"TRUOC train: parse={e0['parse']*100:.1f}% "
