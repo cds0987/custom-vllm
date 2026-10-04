@@ -163,6 +163,15 @@ def load_4bit_cpu_offload_io(name):
         p.requires_grad_(False)
     _mod_to_cpu_with_hooks(model.model.embed_tokens)
     _mod_to_cpu_with_hooks(model.lm_head)
+    # BUG DA DINH (2026-10-04, eval 27B self): `model.device` = thiet bi cua
+    # tham so DAU TIEN = embed_tokens -> sau khi day xuong CPU no tra "cpu", va
+    # generate() tao vai tensor (position_ids...) theo self.device -> RoPE nhan
+    # bmm cuda x cpu -> "Expected all tensors to be on the same device". Duong
+    # forward thu cong (sft_struct) khong dinh vi khong hoi model.device.
+    # Ghi de `device` CHI cho instance nay (lop con dong), khong dung toi lop goc.
+    _cls = model.__class__
+    model.__class__ = type(_cls.__name__, (_cls,),
+                           {"device": property(lambda self: torch.device("cuda"))})
     return tok, model
 
 
