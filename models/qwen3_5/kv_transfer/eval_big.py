@@ -236,6 +236,7 @@ def check_overlap(items, others, extra=None, max_drop=0.05):
 # ----------------------------------------------------------------- self ----
 
 def run_self_hf(args, items):
+    _stag = self_tag(args) + (f"_{args.hf_prefix}" if args.hf_prefix and args.hf_prefix != "evalbig" else "")
     """Duong transformers cho ban CO LoRA.
 
     vLLM khong nap duoc checkpoint da merge: model 4B luu ra mang tien to
@@ -270,7 +271,20 @@ def run_self_hf(args, items):
         new = o[:, enc["input_ids"].shape[1]:]
         return [tok.decode(r, skip_special_tokens=True) for r in new]
 
-    fn0 = OUT_DIR / f"evalbig_self_{self_tag(args)}.json"
+    # Ten file gan --hf-prefix (neu khac mac dinh): ID bai trung dang
+    # "gsm8k/N" giua cac bo de -> noi lai bang file CUNG TEN cua bo khac se
+    # lang le bo qua mau (bay da dinh o joint49cc).
+    fn0 = OUT_DIR / f"evalbig_self_{_stag}.json"
+    if not fn0.exists() and os.environ.get("HF_TOKEN") and args.hf_prefix != "evalbig":
+        for _n in (fn0.name, fn0.name.replace(".json", "_texts.json")):
+            try:
+                from huggingface_hub import hf_hub_download
+                _p = hf_hub_download(args.hf_repo, f"evalbig/{_n}",
+                                     token=os.environ["HF_TOKEN"])
+                (OUT_DIR / _n).write_bytes(pathlib.Path(_p).read_bytes())
+                print(f"NOI LAI tu HF: {_n}", flush=True)
+            except Exception as e:
+                print(f"HF chua co {_n} ({type(e).__name__})", flush=True)
     done0 = set()
     if fn0.exists():
         done0 = set(json.loads(fn0.read_text()))
@@ -293,6 +307,23 @@ def run_self_hf(args, items):
         if bad:
             raise SystemExit("GOM LO SAI KET QUA")
     out = json.loads(fn0.read_text()) if fn0.exists() else {}
+    texts_self = {}
+    fnt = OUT_DIR / f"evalbig_self_{_stag}_texts.json"
+    if fnt.exists():
+        texts_self.update(json.loads(fnt.read_text()))
+
+    def _ghi_self(o):
+        json.dump(o, open(fn0, "w"))
+        json.dump(texts_self, open(fnt, "w"), ensure_ascii=False)
+        if os.environ.get("HF_TOKEN"):
+            try:
+                from huggingface_hub import HfApi
+                api = HfApi(token=os.environ["HF_TOKEN"])
+                for f in (fn0, fnt):
+                    api.upload_file(path_or_fileobj=str(f), repo_id=args.hf_repo,
+                                    path_in_repo=f"evalbig/{f.name}")
+            except Exception as e:
+                print("HF-UP FAIL", type(e).__name__, flush=True)
     t0 = time.time()
     for bench, grp in by.items():
         hit = 0
@@ -300,12 +331,21 @@ def run_self_hf(args, items):
             sub = grp[k:k+B]
             for it, txt in zip(sub, gen(sub)):
                 h = score(it, txt); out[it["id"]] = h; hit += h
+                texts_self[it["id"]] = txt[:1200]
             torch.cuda.empty_cache()
+            # GHI + UP GIUA CHUNG (them 2026-10-04, 27B self): truoc day chi ghi
+            # sau CA BO -> 250 mau 27B (lm_head tren CPU) dai hon mot vong
+            # recycle Colab = mat trang, va log khong co dong tien do nao.
+            if (k // B + 1) % 5 == 0:
+                _ghi_self(out)
+                print(f"  self {bench}: {k+len(sub)}/{len(grp)} | dung {hit} | "
+                      f"{(time.time()-t0)/60:.1f} phut", flush=True)
         print(f"self {bench}: {hit}/{len(grp)} = {100*hit/len(grp):.1f}%",
               flush=True)
+        _ghi_self(out)   # kem van ban dau ra (doc tay, quy tac 15)
         # GHI + UP SAU MOI BO: Colab dang recycle ~1 gio/lan, luot nao chi ghi
         # o cuoi la mat trang. Ghi tung bo -> mat nhieu nhat mot bo.
-        fn = OUT_DIR / f"evalbig_self_{self_tag(args)}.json"
+        fn = OUT_DIR / f"evalbig_self_{_stag}.json"
         json.dump(out, open(fn, "w"))
         if os.environ.get("HF_TOKEN"):
             try:
@@ -315,7 +355,7 @@ def run_self_hf(args, items):
                     path_in_repo=f"evalbig/{fn.name}")
             except Exception:
                 pass
-    fn = OUT_DIR / f"evalbig_self_{self_tag(args)}.json"
+    fn = OUT_DIR / f"evalbig_self_{_stag}.json"
     json.dump(out, open(fn, "w"))
     print(f"self xong {(time.time()-t0)/60:.1f} phut -> {fn.name}")
     if os.environ.get("HF_TOKEN"):
